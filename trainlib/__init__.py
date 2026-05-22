@@ -2,7 +2,8 @@
 
 __version__ = "0.1.0"
 
+from trainlib.recipes.align import align
 from trainlib.recipes.finetune import finetune
 from trainlib.recipes.pretrain import pretrain
 
-__all__ = ["__version__", "finetune", "pretrain"]
+__all__ = ["__version__", "align", "finetune", "pretrain"]

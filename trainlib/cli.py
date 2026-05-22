@@ -5,6 +5,7 @@ import sys
 
 import trainlib
 from trainlib.config import load_config, validate_config
+from trainlib.recipes import recipe_registry
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -34,6 +35,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Validate and print config without training",
     )
 
+    list_parser = subparsers.add_parser("list", help="List registered components")
+    list_parser.add_argument(
+        "type", nargs="?", default=None,
+        help="Component type: recipes, formats, metrics, rewards",
+    )
+
     return parser
 
 
@@ -47,6 +54,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train":
         return _handle_train(args)
+
+    if args.command == "list":
+        return _handle_list(args)
 
     return 0
 
@@ -71,9 +81,36 @@ def _handle_train(args: argparse.Namespace) -> int:
         print(config.model_dump_json(indent=2))
         return 0
 
-    print(f"Training with recipe={config.recipe}, method={config.method}")
-    print(f"Model: {config.model.name}")
-    print("Training loop not yet implemented — use --dry-run to validate config.")
+    recipe_fn = recipe_registry.get(config.recipe)
+    recipe_fn(config=config)
+    return 0
+
+
+def _handle_list(args: argparse.Namespace) -> int:
+    from trainlib.data import format_registry
+    from trainlib.eval.metrics import metric_registry
+    from trainlib.recipes.align.rewards import reward_registry
+
+    registries = {
+        "recipes": recipe_registry,
+        "formats": format_registry,
+        "metrics": metric_registry,
+        "rewards": reward_registry,
+    }
+
+    if args.type is None:
+        for name, registry in registries.items():
+            items = registry.list()
+            print(f"{name.capitalize()}: {', '.join(items)}")
+        return 0
+
+    if args.type not in registries:
+        print(f"Unknown type: '{args.type}'. Available: {', '.join(registries)}", file=sys.stderr)
+        return 1
+
+    registry = registries[args.type]
+    for item in registry.list():
+        print(f"  {item}")
     return 0
 
 

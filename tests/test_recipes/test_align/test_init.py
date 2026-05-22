@@ -1,4 +1,15 @@
-from trainlib.recipes.align import align, register_reward, reward_registry, dpo_loss, grpo_loss
+from trainlib.recipes.align import (
+    align,
+    register_reward,
+    reward_registry,
+    dpo_loss,
+    grpo_loss,
+    orpo_loss,
+    simpo_loss,
+    ppo_clip_loss,
+    ppo_value_loss,
+    reinforce_loss,
+)
 import trainlib
 
 
@@ -17,6 +28,21 @@ class TestAlignPublicAPI:
 
     def test_grpo_loss_importable(self):
         assert callable(grpo_loss)
+
+    def test_orpo_loss_importable(self):
+        assert callable(orpo_loss)
+
+    def test_simpo_loss_importable(self):
+        assert callable(simpo_loss)
+
+    def test_ppo_clip_loss_importable(self):
+        assert callable(ppo_clip_loss)
+
+    def test_ppo_value_loss_importable(self):
+        assert callable(ppo_value_loss)
+
+    def test_reinforce_loss_importable(self):
+        assert callable(reinforce_loss)
 
     def test_align_in_recipe_registry(self):
         from trainlib.recipes import recipe_registry

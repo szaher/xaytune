@@ -1,0 +1,105 @@
+import pytest
+from unittest.mock import MagicMock, patch, PropertyMock
+from trainlib.trainer.loop import Trainer
+from trainlib.trainer.callbacks import CallbackManager, TrainState
+from trainlib.config.schema import TrainerConfig
+
+
+class TestTrainer:
+    def _make_trainer(self, **kwargs):
+        config = TrainerConfig(**kwargs)
+        return Trainer(config=config)
+
+    def test_init_defaults(self):
+        trainer = self._make_trainer()
+        assert trainer.config.batch_size == 4
+        assert trainer.config.learning_rate == 2e-4
+        assert trainer.config.num_epochs == 3
+        assert trainer.callback_manager is not None
+
+    def test_custom_callback_manager(self):
+        cm = CallbackManager()
+        trainer = Trainer(config=TrainerConfig(), callback_manager=cm)
+        assert trainer.callback_manager is cm
+
+    def test_compute_total_steps(self):
+        trainer = self._make_trainer(num_epochs=3)
+        total = trainer.compute_total_steps(dataset_size=100, batch_size=4)
+        # 100 / 4 = 25 steps per epoch, 25 * 3 = 75 total
+        assert total == 75
+
+    def test_compute_total_steps_with_accumulation(self):
+        trainer = self._make_trainer(num_epochs=2, gradient_accumulation=4)
+        total = trainer.compute_total_steps(dataset_size=80, batch_size=4)
+        # 80 / 4 = 20 micro-steps per epoch, 20 / 4 = 5 optimizer steps, 5 * 2 = 10
+        assert total == 10
+
+    def test_compute_total_steps_with_max_steps(self):
+        trainer = self._make_trainer(num_epochs=100, max_steps=50)
+        total = trainer.compute_total_steps(dataset_size=1000, batch_size=4)
+        assert total == 50
+
+    def test_train_fires_callbacks(self):
+        trainer = self._make_trainer(num_epochs=1, max_steps=2)
+        events = []
+
+        @trainer.callback_manager.on("train_start")
+        def on_start(state):
+            events.append("train_start")
+
+        @trainer.callback_manager.on("step_start")
+        def on_step_start(state):
+            events.append(f"step_start:{state.global_step}")
+
+        @trainer.callback_manager.on("step_end")
+        def on_step_end(state):
+            events.append(f"step_end:{state.global_step}")
+
+        @trainer.callback_manager.on("train_end")
+        def on_end(state):
+            events.append("train_end")
+
+        mock_model = MagicMock()
+        mock_model.return_value = MagicMock()
+        mock_model.return_value.loss = MagicMock()
+        mock_model.return_value.loss.item.return_value = 0.5
+        mock_model.return_value.loss.backward = MagicMock()
+
+        mock_optimizer = MagicMock()
+
+        mock_dataloader = [
+            {"input_ids": MagicMock(), "attention_mask": MagicMock(), "labels": MagicMock()},
+            {"input_ids": MagicMock(), "attention_mask": MagicMock(), "labels": MagicMock()},
+            {"input_ids": MagicMock(), "attention_mask": MagicMock(), "labels": MagicMock()},
+        ]
+
+        trainer.train(model=mock_model, train_dataloader=mock_dataloader, optimizer=mock_optimizer)
+
+        assert "train_start" in events
+        assert "train_end" in events
+        assert "step_start:0" in events
+
+    def test_early_stopping_via_callback(self):
+        trainer = self._make_trainer(num_epochs=100, max_steps=-1)
+
+        @trainer.callback_manager.on("step_end")
+        def stop_early(state):
+            if state.global_step >= 1:
+                state.stop_training()
+
+        mock_model = MagicMock()
+        mock_model.return_value = MagicMock()
+        mock_model.return_value.loss = MagicMock()
+        mock_model.return_value.loss.item.return_value = 0.5
+        mock_model.return_value.loss.backward = MagicMock()
+
+        mock_optimizer = MagicMock()
+
+        mock_dataloader = [
+            {"input_ids": MagicMock(), "attention_mask": MagicMock(), "labels": MagicMock()}
+            for _ in range(100)
+        ]
+
+        state = trainer.train(model=mock_model, train_dataloader=mock_dataloader, optimizer=mock_optimizer)
+        assert state.should_stop is True
+        assert state.global_step <= 2

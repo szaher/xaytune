@@ -53,7 +53,7 @@ class TestDPOLoss:
     def test_custom_beta(self):
         policy_chosen_logps = torch.tensor([-1.0])
         policy_rejected_logps = torch.tensor([-2.0])
-        ref_chosen_logps = torch.tensor([-1.5])
+        ref_chosen_logps = torch.tensor([-1.2])
         ref_rejected_logps = torch.tensor([-2.5])
 
         loss_low_beta = dpo_loss(

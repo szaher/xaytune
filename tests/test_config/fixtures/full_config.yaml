@@ -1,0 +1,18 @@
+recipe: finetune
+method: lora
+
+model:
+  name: my-model
+  quantization: 4bit
+
+data:
+  path: data.jsonl
+  format: alpaca
+  eval_split: 0.05
+
+lora:
+  rank: 32
+
+trainer:
+  batch_size: 8
+  num_epochs: 3

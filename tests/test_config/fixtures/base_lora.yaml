@@ -1,0 +1,15 @@
+recipe: finetune
+method: lora
+
+model:
+  quantization: 4bit
+
+lora:
+  rank: 16
+  alpha: 32
+
+trainer:
+  strategy: ddp
+  mixed_precision: bf16
+  learning_rate: 2e-4
+  num_epochs: 3

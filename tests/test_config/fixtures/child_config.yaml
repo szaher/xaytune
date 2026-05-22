@@ -1,0 +1,11 @@
+base: base_lora.yaml
+
+model:
+  name: meta-llama/Llama-3.1-8B
+
+data:
+  path: data/train.jsonl
+  format: alpaca
+
+trainer:
+  num_epochs: 5

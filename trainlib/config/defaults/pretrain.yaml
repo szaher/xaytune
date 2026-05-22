@@ -1,0 +1,22 @@
+recipe: pretrain
+method: full
+
+data:
+  packing: true
+  streaming: true
+  max_seq_length: 4096
+
+trainer:
+  strategy: fsdp
+  mixed_precision: bf16
+  batch_size: 2
+  gradient_accumulation: 16
+  learning_rate: 3e-4
+  max_steps: 100000
+  warmup_steps: 2000
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+
+eval:
+  every_n_steps: 1000
+  metrics: [loss, perplexity]

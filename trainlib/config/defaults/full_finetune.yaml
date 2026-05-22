@@ -1,0 +1,15 @@
+recipe: finetune
+method: full
+
+trainer:
+  strategy: fsdp
+  mixed_precision: bf16
+  batch_size: 2
+  gradient_accumulation: 8
+  learning_rate: 5e-5
+  num_epochs: 3
+  weight_decay: 0.01
+
+eval:
+  every_n_steps: 500
+  metrics: [loss, perplexity]

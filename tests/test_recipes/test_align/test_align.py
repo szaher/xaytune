@@ -8,7 +8,7 @@ from trainlib.trainer.callbacks import TrainState
 
 
 class TestAlign:
-    @patch("trainlib.recipes.align.align.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_align_with_config(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState(global_step=100)
@@ -27,7 +27,7 @@ class TestAlign:
         mock_components.trainer.train.assert_called_once()
         assert state.global_step == 100
 
-    @patch("trainlib.recipes.align.align.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_align_with_kwargs(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState(global_step=50)
@@ -46,7 +46,7 @@ class TestAlign:
         assert config.recipe == "align"
         assert state.global_step == 50
 
-    @patch("trainlib.recipes.align.align.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_align_default_method_is_dpo(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -57,7 +57,7 @@ class TestAlign:
         config = mock_setup.call_args[0][0]
         assert config.method == "dpo"
 
-    @patch("trainlib.recipes.align.align.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_align_default_format_is_preference(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -68,7 +68,7 @@ class TestAlign:
         config = mock_setup.call_args[0][0]
         assert config.data.format == "preference"
 
-    @patch("trainlib.recipes.align.align.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_align_accepts_trainer_kwargs(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -85,7 +85,7 @@ class TestAlign:
         assert config.trainer.num_epochs == 2
         assert config.trainer.learning_rate == 5e-6
 
-    @patch("trainlib.recipes.align.align.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_align_returns_train_state(self, mock_setup):
         expected_state = TrainState(global_step=200, metrics={"loss": 0.4})
         mock_components = MagicMock()

@@ -8,7 +8,7 @@ from trainlib.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.recipes.base import setup_training
+from trainlib.recipes import base as _base
 from trainlib.trainer.callbacks import TrainState
 
 
@@ -47,7 +47,7 @@ def finetune(
             ),
         )
 
-    components = setup_training(config)
+    components = _base.setup_training(config)
 
     state = components.trainer.train(
         model=components.model,

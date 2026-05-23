@@ -6,7 +6,7 @@ from trainlib.trainer.callbacks import TrainState
 
 
 class TestPretrain:
-    @patch("trainlib.recipes.pretrain.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_pretrain_with_config(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState(global_step=1000)
@@ -24,7 +24,7 @@ class TestPretrain:
         mock_setup.assert_called_once()
         assert state.global_step == 1000
 
-    @patch("trainlib.recipes.pretrain.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_pretrain_with_kwargs(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState(global_step=500)
@@ -41,7 +41,7 @@ class TestPretrain:
         assert config.recipe == "pretrain"
         assert state.global_step == 500
 
-    @patch("trainlib.recipes.pretrain.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_pretrain_default_format_is_text(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -52,7 +52,7 @@ class TestPretrain:
         config = mock_setup.call_args[0][0]
         assert config.data.format == "text"
 
-    @patch("trainlib.recipes.pretrain.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_pretrain_method_is_always_full(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -63,7 +63,7 @@ class TestPretrain:
         config = mock_setup.call_args[0][0]
         assert config.method == "full"
 
-    @patch("trainlib.recipes.pretrain.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_pretrain_accepts_trainer_kwargs(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -82,7 +82,7 @@ class TestPretrain:
         assert config.trainer.learning_rate == 3e-4
         assert config.trainer.max_steps == 10000
 
-    @patch("trainlib.recipes.pretrain.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_pretrain_returns_train_state(self, mock_setup):
         expected_state = TrainState(global_step=200, metrics={"loss": 2.1})
         mock_components = MagicMock()

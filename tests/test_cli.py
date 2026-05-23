@@ -221,11 +221,16 @@ class TestExportCommand:
         assert args.repo == "user/repo"
 
     def test_export_merge_calls_merge(self):
+        import importlib
+        import sys
         from unittest.mock import patch
 
         from trainlib.cli import main
 
-        with patch("trainlib.export.merge.merge") as mock_merge:
+        # Force-load the module (export.__init__ shadows the name with the function)
+        importlib.import_module("trainlib.export.merge")
+        merge_mod = sys.modules["trainlib.export.merge"]
+        with patch.object(merge_mod, "merge") as mock_merge:
             result = main(["export", "merge", "--checkpoint", "ckpt/", "--output", "out/"])
 
         assert result == 0

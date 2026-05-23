@@ -6,7 +6,7 @@ from trainlib.trainer.callbacks import TrainState
 
 
 class TestFinetune:
-    @patch("trainlib.recipes.finetune.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_finetune_with_config(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState(global_step=100)
@@ -25,7 +25,7 @@ class TestFinetune:
         mock_components.trainer.train.assert_called_once()
         assert state.global_step == 100
 
-    @patch("trainlib.recipes.finetune.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_finetune_with_kwargs(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState(global_step=50)
@@ -44,7 +44,7 @@ class TestFinetune:
         assert config.method == "lora"
         assert state.global_step == 50
 
-    @patch("trainlib.recipes.finetune.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_finetune_default_method_is_full(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -55,7 +55,7 @@ class TestFinetune:
         config = mock_setup.call_args[0][0]
         assert config.method == "full"
 
-    @patch("trainlib.recipes.finetune.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_finetune_passes_model_and_dataloader_to_trainer(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()
@@ -67,7 +67,7 @@ class TestFinetune:
         assert train_call.kwargs["model"] is mock_components.model
         assert train_call.kwargs["train_dataloader"] is mock_components.train_dataloader
 
-    @patch("trainlib.recipes.finetune.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_finetune_returns_train_state(self, mock_setup):
         expected_state = TrainState(global_step=75, metrics={"loss": 0.3})
         mock_components = MagicMock()
@@ -80,7 +80,7 @@ class TestFinetune:
         assert result.global_step == 75
         assert result.metrics["loss"] == 0.3
 
-    @patch("trainlib.recipes.finetune.setup_training")
+    @patch("trainlib.recipes.base.setup_training")
     def test_finetune_accepts_trainer_kwargs(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()

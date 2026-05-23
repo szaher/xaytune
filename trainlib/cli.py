@@ -48,6 +48,22 @@ def _build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--dataset", default=None, help="Path to evaluation dataset")
     eval_parser.add_argument("--num-fewshot", type=int, default=None, help="Number of few-shot examples")
 
+    export_parser = subparsers.add_parser("export", help="Export and convert models")
+    export_subparsers = export_parser.add_subparsers(dest="export_command", help="Export commands")
+
+    merge_parser = export_subparsers.add_parser("merge", help="Merge LoRA adapters into base model")
+    merge_parser.add_argument("--checkpoint", required=True, help="Path to LoRA checkpoint")
+    merge_parser.add_argument("--output", required=True, help="Output directory for merged model")
+
+    gguf_parser = export_subparsers.add_parser("gguf", help="Convert model to GGUF format")
+    gguf_parser.add_argument("--model", required=True, help="Path to model directory")
+    gguf_parser.add_argument("--output", required=True, help="Output GGUF file path")
+    gguf_parser.add_argument("--quant", default="Q4_K_M", help="Quantization type (default: Q4_K_M)")
+
+    push_parser = export_subparsers.add_parser("push", help="Push model to Hugging Face Hub")
+    push_parser.add_argument("--model", required=True, help="Path to model directory")
+    push_parser.add_argument("--repo", required=True, help="HF Hub repo (e.g., username/model-name)")
+
     return parser
 
 
@@ -67,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "eval":
         return _handle_eval(args)
+
+    if args.command == "export":
+        return _handle_export(args)
 
     return 0
 
@@ -164,6 +183,59 @@ def _handle_eval(args: argparse.Namespace) -> int:
 
     print("Error: Provide --benchmarks or --dataset", file=sys.stderr)
     return 1
+
+
+def _handle_export(args: argparse.Namespace) -> int:
+    if args.export_command is None:
+        print("Error: Specify an export command: merge, gguf, push", file=sys.stderr)
+        return 1
+
+    if args.export_command == "merge":
+        return _export_merge(args)
+
+    if args.export_command == "gguf":
+        return _export_gguf(args)
+
+    if args.export_command == "push":
+        return _export_push(args)
+
+    return 1
+
+
+def _export_merge(args: argparse.Namespace) -> int:
+    from trainlib.export.merge import merge
+
+    try:
+        merge(args.checkpoint, save_to=args.output)
+        print(f"Merged model saved to {args.output}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _export_gguf(args: argparse.Namespace) -> int:
+    from trainlib.export.gguf import to_gguf
+
+    try:
+        to_gguf(args.model, output=args.output, quantization=args.quant)
+        print(f"GGUF model saved to {args.output}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _export_push(args: argparse.Namespace) -> int:
+    from trainlib.export.hub import push_to_hub
+
+    try:
+        push_to_hub(args.model, repo=args.repo)
+        print(f"Model pushed to {args.repo}")
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

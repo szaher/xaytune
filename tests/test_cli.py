@@ -165,3 +165,71 @@ class TestEvalCommand:
 
         captured = capsys.readouterr()
         assert "mmlu" in captured.out
+
+
+class TestExportCommand:
+    def test_export_merge_parser(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["export", "merge", "--checkpoint", "ckpt/", "--output", "out/"])
+        assert args.command == "export"
+        assert args.export_command == "merge"
+        assert args.checkpoint == "ckpt/"
+        assert args.output == "out/"
+
+    def test_export_gguf_parser(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["export", "gguf", "--model", "model/", "--output", "out.gguf"])
+        assert args.command == "export"
+        assert args.export_command == "gguf"
+        assert args.model == "model/"
+
+    def test_export_gguf_default_quant(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["export", "gguf", "--model", "m/", "--output", "o.gguf"])
+        assert args.quant == "Q4_K_M"
+
+    def test_export_push_parser(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["export", "push", "--model", "model/", "--repo", "user/repo"])
+        assert args.command == "export"
+        assert args.export_command == "push"
+        assert args.repo == "user/repo"
+
+    def test_export_merge_calls_merge(self):
+        from unittest.mock import patch
+        from trainlib.cli import main
+
+        with patch("trainlib.export.merge.merge") as mock_merge:
+            result = main(["export", "merge", "--checkpoint", "ckpt/", "--output", "out/"])
+
+        assert result == 0
+        mock_merge.assert_called_once_with("ckpt/", save_to="out/")
+
+    def test_export_gguf_calls_to_gguf(self):
+        from unittest.mock import patch
+        from trainlib.cli import main
+
+        with patch("trainlib.export.gguf.to_gguf") as mock_gguf:
+            result = main(["export", "gguf", "--model", "m/", "--output", "o.gguf", "--quant", "Q8_0"])
+
+        assert result == 0
+        mock_gguf.assert_called_once_with("m/", output="o.gguf", quantization="Q8_0")
+
+    def test_export_push_calls_push_to_hub(self):
+        from unittest.mock import patch
+        from trainlib.cli import main
+
+        with patch("trainlib.export.hub.push_to_hub") as mock_push:
+            result = main(["export", "push", "--model", "m/", "--repo", "user/repo"])
+
+        assert result == 0
+        mock_push.assert_called_once_with("m/", repo="user/repo")
+
+    def test_export_no_subcommand_shows_help(self, capsys):
+        from trainlib.cli import main
+        result = main(["export"])
+        assert result == 1

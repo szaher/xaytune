@@ -1,5 +1,5 @@
-import pytest
 import torch
+
 from trainlib.recipes.align.simpo import simpo_loss
 
 

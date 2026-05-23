@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 VALID_EVENTS = {
-    "train_start", "train_end",
-    "epoch_start", "epoch_end",
-    "step_start", "step_end",
-    "eval_start", "eval_end",
-    "checkpoint_saved", "error",
+    "train_start",
+    "train_end",
+    "epoch_start",
+    "epoch_end",
+    "step_start",
+    "step_end",
+    "eval_start",
+    "eval_end",
+    "checkpoint_saved",
+    "error",
 }
 
 
@@ -35,6 +41,7 @@ class CallbackManager:
         def decorator(fn: Callable) -> Callable:
             self._callbacks[event].append(fn)
             return fn
+
         return decorator
 
     def fire(self, event: str, state: TrainState) -> None:

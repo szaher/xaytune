@@ -1,6 +1,6 @@
-import pytest
 import torch
-from trainlib.recipes.align.grpo import grpo_loss, compute_group_advantages
+
+from trainlib.recipes.align.grpo import compute_group_advantages, grpo_loss
 
 
 class TestComputeGroupAdvantages:

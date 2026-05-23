@@ -1,4 +1,5 @@
 import pytest
+
 from trainlib.utils.registry import Registry
 
 
@@ -41,6 +42,7 @@ class TestRegistry:
             pass
 
         with pytest.raises(ValueError, match="already registered in test"):
+
             @self.registry.register("dup")
             def second():
                 pass

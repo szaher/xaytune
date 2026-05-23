@@ -1,4 +1,3 @@
-import pytest
 from trainlib.trainer.callbacks import CallbackManager, TrainState
 
 
@@ -73,14 +72,20 @@ class TestCallbackManager:
     def test_all_event_types(self):
         manager = CallbackManager()
         events = [
-            "train_start", "train_end",
-            "epoch_start", "epoch_end",
-            "step_start", "step_end",
-            "eval_start", "eval_end",
-            "checkpoint_saved", "error",
+            "train_start",
+            "train_end",
+            "epoch_start",
+            "epoch_end",
+            "step_start",
+            "step_end",
+            "eval_start",
+            "eval_end",
+            "checkpoint_saved",
+            "error",
         ]
         fired = []
         for event in events:
+
             @manager.on(event)
             def cb(state, e=event):
                 fired.append(e)

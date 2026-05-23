@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from torch.nn.parallel import DistributedDataParallel
 from torch.distributed.fsdp import FullyShardedDataParallel
+from torch.nn.parallel import DistributedDataParallel
 
 
 @dataclass
@@ -50,7 +50,4 @@ def wrap_model_distributed(
     if strategy == "deepspeed":
         return model  # DeepSpeed init handled separately
 
-    raise ValueError(
-        f"Unknown strategy: '{strategy}'. "
-        f"Valid options: none, ddp, fsdp, deepspeed."
-    )
+    raise ValueError(f"Unknown strategy: '{strategy}'. Valid options: none, ddp, fsdp, deepspeed.")

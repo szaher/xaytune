@@ -1,11 +1,12 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import MagicMock, patch
-from trainlib.trainer.checkpointing import save_checkpoint, load_checkpoint, find_latest_checkpoint
+
 from trainlib.trainer.callbacks import TrainState
+from trainlib.trainer.checkpointing import find_latest_checkpoint, load_checkpoint, save_checkpoint
 
 
 class TestSaveCheckpoint:
@@ -14,7 +15,7 @@ class TestSaveCheckpoint:
             output_dir = Path(tmpdir) / "checkpoints" / "step-100"
             state = TrainState(global_step=100, epoch=2)
 
-            with patch("trainlib.trainer.checkpointing.torch") as mock_torch:
+            with patch("trainlib.trainer.checkpointing.torch"):
                 save_checkpoint(
                     output_dir=str(output_dir),
                     model=MagicMock(),
@@ -29,7 +30,7 @@ class TestSaveCheckpoint:
             output_dir = Path(tmpdir) / "step-100"
             state = TrainState(global_step=100, epoch=2, metrics={"loss": 0.5})
 
-            with patch("trainlib.trainer.checkpointing.torch") as mock_torch:
+            with patch("trainlib.trainer.checkpointing.torch"):
                 save_checkpoint(
                     output_dir=str(output_dir),
                     model=MagicMock(),

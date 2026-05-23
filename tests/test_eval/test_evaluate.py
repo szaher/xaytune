@@ -1,7 +1,6 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from trainlib.eval.evaluate import evaluate
-from trainlib.eval.metrics import metric_registry
 
 
 class TestEvaluate:

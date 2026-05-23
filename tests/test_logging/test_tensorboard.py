@@ -1,12 +1,12 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from trainlib.logging.tensorboard import TensorBoardBackend
 
 
 class TestTensorBoardBackend:
     @patch("trainlib.logging.tensorboard.SummaryWriter")
     def test_creates_writer(self, mock_writer_cls):
-        backend = TensorBoardBackend(log_dir="runs/test")
+        TensorBoardBackend(log_dir="runs/test")
         mock_writer_cls.assert_called_once_with(log_dir="runs/test")
 
     @patch("trainlib.logging.tensorboard.SummaryWriter")
@@ -45,10 +45,11 @@ class TestTensorBoardBackend:
     @patch("trainlib.logging.tensorboard.SummaryWriter")
     def test_is_logging_backend(self, mock_writer_cls):
         from trainlib.logging.base import LoggingBackend
+
         backend = TensorBoardBackend(log_dir="runs/test")
         assert isinstance(backend, LoggingBackend)
 
     @patch("trainlib.logging.tensorboard.SummaryWriter")
     def test_default_log_dir(self, mock_writer_cls):
-        backend = TensorBoardBackend()
+        TensorBoardBackend()
         mock_writer_cls.assert_called_once_with(log_dir="runs")

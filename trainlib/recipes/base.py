@@ -6,8 +6,8 @@ from torch.utils.data import DataLoader
 
 from trainlib.config.schema import TrainConfig
 from trainlib.data import load_dataset
-from trainlib.models import load_model, apply_lora
-from trainlib.trainer import Trainer, CallbackManager
+from trainlib.models import apply_lora, load_model
+from trainlib.trainer import CallbackManager, Trainer
 
 
 class TrainingComponents(NamedTuple):
@@ -51,18 +51,18 @@ def setup_training(
     )
 
     if config.data.eval_split > 0:
-        train_data, eval_data = dataset
+        train_data, eval_data = dataset  # type: ignore[misc]
     else:
-        train_data = dataset
+        train_data = dataset  # type: ignore[assignment]
         eval_data = None
 
-    train_dataloader = DataLoader(
+    train_dataloader: Any = DataLoader(
         train_data,
         batch_size=config.trainer.batch_size,
         shuffle=True,
     )
 
-    eval_dataloader = None
+    eval_dataloader: Any = None
     if eval_data is not None:
         eval_dataloader = DataLoader(
             eval_data,

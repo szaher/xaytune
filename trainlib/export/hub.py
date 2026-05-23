@@ -14,6 +14,7 @@ def push_to_hub(
 
     if isinstance(model_or_path, str):
         from trainlib.models import load_model
+
         model_result = load_model(model_or_path)
         model = model_result.model
         tokenizer = model_result.tokenizer

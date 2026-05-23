@@ -1,6 +1,6 @@
 from pathlib import Path
+
 import yaml
-import pytest
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "configs" / "examples"
 
@@ -48,8 +48,12 @@ class TestExampleConfigs:
 
     def test_all_alignment_examples_have_method(self):
         alignment_configs = [
-            "dpo_align.yaml", "grpo_align.yaml", "orpo_align.yaml",
-            "simpo_align.yaml", "ppo_align.yaml", "reinforce_align.yaml",
+            "dpo_align.yaml",
+            "grpo_align.yaml",
+            "orpo_align.yaml",
+            "simpo_align.yaml",
+            "ppo_align.yaml",
+            "reinforce_align.yaml",
         ]
         for name in alignment_configs:
             data = yaml.safe_load((EXAMPLES_DIR / name).read_text())

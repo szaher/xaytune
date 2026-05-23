@@ -1,7 +1,9 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
+from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig
 from trainlib.recipes.align.align import align
-from trainlib.config.schema import TrainConfig, ModelConfig, DataConfig, TrainerConfig
 from trainlib.trainer.callbacks import TrainState
 
 

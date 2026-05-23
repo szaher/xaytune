@@ -1,5 +1,6 @@
 import pytest
-from trainlib.recipes.align.rewards import reward_registry, register_reward
+
+from trainlib.recipes.align.rewards import register_reward, reward_registry
 
 
 class TestRewardRegistry:

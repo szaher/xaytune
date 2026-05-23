@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -23,7 +23,7 @@ class LoraConfig(BaseModel):
     rank: int = 16
     alpha: int = 32
     dropout: float = 0.05
-    target_modules: Union[str, list[str]] = "auto"
+    target_modules: str | list[str] = "auto"
 
 
 class DataConfig(BaseModel):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from importlib import reload
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -69,6 +68,7 @@ class TestBenchmarkEvaluate:
         with patch.dict(sys.modules, {"lm_eval": None}):
             with pytest.raises(ImportError, match="lm-eval"):
                 from trainlib.eval import benchmarks
+
                 benchmarks.benchmark_evaluate(model="x", benchmarks=["mmlu"])
 
     def test_returns_dict_of_benchmark_results(self):
@@ -131,6 +131,7 @@ class TestBenchmarkImport:
         sys.modules["lm_eval"] = mock_lm_eval
         try:
             from trainlib.eval import benchmark_evaluate
+
             assert callable(benchmark_evaluate)
         finally:
             sys.modules.pop("lm_eval", None)

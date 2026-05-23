@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from trainlib.logging import setup_logging, LoggingManager, LoggingBackend
-from trainlib.logging.console import ConsoleBackend
+
 from trainlib.config.schema import LoggingConfig
+from trainlib.logging import LoggingBackend, LoggingManager, setup_logging
+from trainlib.logging.console import ConsoleBackend
 from trainlib.trainer.callbacks import CallbackManager, TrainState
 
 
@@ -33,7 +35,7 @@ class TestSetupLogging:
         mock_tb_cls.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["console", "tensorboard"])
         cb = CallbackManager()
-        manager = setup_logging(config, cb, output_dir="output/test")
+        setup_logging(config, cb, output_dir="output/test")
         mock_tb_cls.assert_called_once_with(log_dir="output/test/runs")
 
     @patch("trainlib.logging._create_wandb_backend")
@@ -41,7 +43,7 @@ class TestSetupLogging:
         mock_create_wandb.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["wandb"], project="my-proj", run_name="run-1")
         cb = CallbackManager()
-        manager = setup_logging(config, cb)
+        setup_logging(config, cb)
         mock_create_wandb.assert_called_once_with(project="my-proj", run_name="run-1")
 
     @patch("trainlib.logging._create_mlflow_backend")
@@ -49,13 +51,13 @@ class TestSetupLogging:
         mock_create_mlflow.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["mlflow"], run_name="run-1")
         cb = CallbackManager()
-        manager = setup_logging(config, cb)
+        setup_logging(config, cb)
         mock_create_mlflow.assert_called_once_with(run_name="run-1")
 
     def test_registers_callbacks(self):
         config = LoggingConfig(backends=["console"], log_every_n_steps=1)
         cb = CallbackManager()
-        manager = setup_logging(config, cb)
+        setup_logging(config, cb)
 
         state = TrainState(global_step=1)
         state.metrics["loss"] = 0.5
@@ -77,12 +79,15 @@ class TestSetupLogging:
 class TestModuleExports:
     def test_logging_backend_importable(self):
         from trainlib.logging import LoggingBackend
+
         assert LoggingBackend is not None
 
     def test_logging_manager_importable(self):
         from trainlib.logging import LoggingManager
+
         assert LoggingManager is not None
 
     def test_setup_logging_importable(self):
         from trainlib.logging import setup_logging
+
         assert callable(setup_logging)

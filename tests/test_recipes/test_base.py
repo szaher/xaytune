@@ -1,7 +1,7 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from trainlib.recipes.base import setup_training, TrainingComponents
-from trainlib.config.schema import TrainConfig, ModelConfig, DataConfig, TrainerConfig, LoraConfig
+from unittest.mock import MagicMock, patch
+
+from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
+from trainlib.recipes.base import TrainingComponents, setup_training
 
 
 class TestTrainingComponents:
@@ -65,7 +65,9 @@ class TestSetupTraining:
     @patch("trainlib.recipes.base.load_model")
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.DataLoader")
-    def test_lora_setup_applies_peft(self, mock_dl_cls, mock_load_ds, mock_load_model, mock_apply_lora):
+    def test_lora_setup_applies_peft(
+        self, mock_dl_cls, mock_load_ds, mock_load_model, mock_apply_lora
+    ):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
         mock_model_result.tokenizer = MagicMock()
@@ -99,7 +101,7 @@ class TestSetupTraining:
         config = self._make_config(method="qlora")
         with patch("trainlib.recipes.base.apply_lora") as mock_apply_lora:
             mock_apply_lora.return_value = mock_model_result
-            components = setup_training(config)
+            setup_training(config)
 
         mock_load_model.assert_called_once_with(
             "test-model",

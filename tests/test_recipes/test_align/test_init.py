@@ -1,16 +1,16 @@
+import trainlib
 from trainlib.recipes.align import (
     align,
-    register_reward,
-    reward_registry,
     dpo_loss,
     grpo_loss,
     orpo_loss,
-    simpo_loss,
     ppo_clip_loss,
     ppo_value_loss,
+    register_reward,
     reinforce_loss,
+    reward_registry,
+    simpo_loss,
 )
-import trainlib
 
 
 class TestAlignPublicAPI:
@@ -46,6 +46,7 @@ class TestAlignPublicAPI:
 
     def test_align_in_recipe_registry(self):
         from trainlib.recipes import recipe_registry
+
         assert recipe_registry.has("align")
 
     def test_top_level_align(self):
@@ -53,4 +54,5 @@ class TestAlignPublicAPI:
 
     def test_top_level_align_is_recipe(self):
         from trainlib.recipes.align.align import align as align_fn
+
         assert trainlib.align is align_fn

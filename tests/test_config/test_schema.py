@@ -1,4 +1,5 @@
 import pytest
+
 from trainlib.config.schema import (
     DataConfig,
     EvalConfig,

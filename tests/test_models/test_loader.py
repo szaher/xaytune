@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from trainlib.models import load_model, register_model
 from trainlib.models.registry import model_registry
 
@@ -9,6 +9,7 @@ class TestModelRegistry:
         @register_model("test-model")
         class TestModel:
             pass
+
         assert model_registry.has("test-model")
         assert model_registry.get("test-model") is TestModel
 
@@ -51,6 +52,7 @@ class TestLoadModel:
 
     def test_load_model_result_has_config(self):
         from trainlib.models.loader import ModelResult
+
         result = ModelResult(model=MagicMock(), tokenizer=MagicMock(), name="test")
         assert result.name == "test"
 

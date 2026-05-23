@@ -13,40 +13,45 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="trainlib",
         description="trainlib — An opinionated LLM training and fine-tuning library",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"trainlib {trainlib.__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"trainlib {trainlib.__version__}")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     train_parser = subparsers.add_parser("train", help="Run a training recipe")
+    train_parser.add_argument("--config", required=True, help="Path to YAML config file")
     train_parser.add_argument(
-        "--config", required=True, help="Path to YAML config file"
-    )
-    train_parser.add_argument(
-        "--override", action="append", default=[],
+        "--override",
+        action="append",
+        default=[],
         help="Config overrides in dot notation (e.g., model.name=my-model)",
     )
+    train_parser.add_argument("--resume", action="store_true", help="Resume from last checkpoint")
     train_parser.add_argument(
-        "--resume", action="store_true", help="Resume from last checkpoint"
-    )
-    train_parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Validate and print config without training",
     )
 
     list_parser = subparsers.add_parser("list", help="List registered components")
     list_parser.add_argument(
-        "type", nargs="?", default=None,
+        "type",
+        nargs="?",
+        default=None,
         help="Component type: recipes, formats, metrics, rewards",
     )
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate a model")
     eval_parser.add_argument("--model", required=True, help="Model path or HF Hub name")
-    eval_parser.add_argument("--benchmarks", default=None, help="Comma-separated benchmarks (e.g., mmlu,gsm8k)")
-    eval_parser.add_argument("--metrics", default=None, help="Comma-separated metrics (e.g., loss,perplexity)")
+    eval_parser.add_argument(
+        "--benchmarks", default=None, help="Comma-separated benchmarks (e.g., mmlu,gsm8k)"
+    )
+    eval_parser.add_argument(
+        "--metrics", default=None, help="Comma-separated metrics (e.g., loss,perplexity)"
+    )
     eval_parser.add_argument("--dataset", default=None, help="Path to evaluation dataset")
-    eval_parser.add_argument("--num-fewshot", type=int, default=None, help="Number of few-shot examples")
+    eval_parser.add_argument(
+        "--num-fewshot", type=int, default=None, help="Number of few-shot examples"
+    )
 
     export_parser = subparsers.add_parser("export", help="Export and convert models")
     export_subparsers = export_parser.add_subparsers(dest="export_command", help="Export commands")
@@ -58,16 +63,22 @@ def _build_parser() -> argparse.ArgumentParser:
     gguf_parser = export_subparsers.add_parser("gguf", help="Convert model to GGUF format")
     gguf_parser.add_argument("--model", required=True, help="Path to model directory")
     gguf_parser.add_argument("--output", required=True, help="Output GGUF file path")
-    gguf_parser.add_argument("--quant", default="Q4_K_M", help="Quantization type (default: Q4_K_M)")
+    gguf_parser.add_argument(
+        "--quant", default="Q4_K_M", help="Quantization type (default: Q4_K_M)"
+    )
 
     push_parser = export_subparsers.add_parser("push", help="Push model to Hugging Face Hub")
     push_parser.add_argument("--model", required=True, help="Path to model directory")
-    push_parser.add_argument("--repo", required=True, help="HF Hub repo (e.g., username/model-name)")
+    push_parser.add_argument(
+        "--repo", required=True, help="HF Hub repo (e.g., username/model-name)"
+    )
 
     compare_parser = subparsers.add_parser("compare", help="Compare two models side-by-side")
     compare_parser.add_argument("models", nargs="+", help="Model paths to compare (exactly 2)")
     compare_parser.add_argument("--benchmarks", required=True, help="Comma-separated benchmarks")
-    compare_parser.add_argument("--num-fewshot", type=int, default=None, help="Number of few-shot examples")
+    compare_parser.add_argument(
+        "--num-fewshot", type=int, default=None, help="Number of few-shot examples"
+    )
 
     return parser
 
@@ -172,6 +183,7 @@ def _handle_eval(args: argparse.Namespace) -> int:
     if args.dataset:
         import json
         from pathlib import Path
+
         from trainlib.eval import evaluate
 
         dataset_path = Path(args.dataset)
@@ -257,10 +269,14 @@ def _handle_compare(args: argparse.Namespace) -> int:
     model_a, model_b = args.models
 
     results_a = benchmark_evaluate(
-        model=model_a, benchmarks=benchmarks, num_fewshot=args.num_fewshot,
+        model=model_a,
+        benchmarks=benchmarks,
+        num_fewshot=args.num_fewshot,
     )
     results_b = benchmark_evaluate(
-        model=model_b, benchmarks=benchmarks, num_fewshot=args.num_fewshot,
+        model=model_b,
+        benchmarks=benchmarks,
+        num_fewshot=args.num_fewshot,
     )
 
     all_tasks = sorted(set(results_a) | set(results_b))

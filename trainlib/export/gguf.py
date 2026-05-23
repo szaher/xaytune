@@ -19,10 +19,14 @@ def to_gguf(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
-        sys.executable, "-m", "llama_cpp.convert",
+        sys.executable,
+        "-m",
+        "llama_cpp.convert",
         str(model_dir),
-        "--outfile", str(output_path),
-        "--outtype", quantization,
+        "--outfile",
+        str(output_path),
+        "--outtype",
+        quantization,
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)

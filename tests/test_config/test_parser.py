@@ -1,10 +1,8 @@
-import os
 from pathlib import Path
 
 import pytest
-import yaml
 
-from trainlib.config.parser import load_config, merge_dicts, apply_overrides
+from trainlib.config.parser import apply_overrides, load_config, merge_dicts
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

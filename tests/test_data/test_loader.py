@@ -1,7 +1,9 @@
 import json
 import tempfile
 from pathlib import Path
+
 import pytest
+
 from trainlib.data import load_dataset, register_format
 from trainlib.data.registry import format_registry
 
@@ -11,6 +13,7 @@ class TestFormatRegistry:
         @register_format("test-custom-fmt")
         def parse(sample):
             return {"text": sample["content"]}
+
         assert format_registry.has("test-custom-fmt")
 
     def test_list_formats(self):
@@ -40,6 +43,7 @@ class TestLoadDataset:
         @register_format("my-test-fmt")
         def parse(sample):
             return {"text": f"Q: {sample['q']}\nA: {sample['a']}"}
+
         with tempfile.TemporaryDirectory() as tmpdir:
             data = [{"q": "Hello?", "a": "Hi!"}]
             path = Path(tmpdir) / "data.jsonl"

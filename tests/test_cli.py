@@ -1,8 +1,11 @@
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+from trainlib.cli import main
 
 FIXTURES = Path(__file__).parent / "test_config" / "fixtures"
 
@@ -17,7 +20,11 @@ class TestCLI:
 
     def test_no_args_shows_help(self):
         result = self._run()
-        assert result.returncode != 0 or "usage" in result.stdout.lower() or "usage" in result.stderr.lower()
+        assert (
+            result.returncode != 0
+            or "usage" in result.stdout.lower()
+            or "usage" in result.stderr.lower()
+        )
 
     def test_train_requires_config(self):
         result = self._run("train")
@@ -31,9 +38,11 @@ class TestCLI:
     def test_train_with_overrides(self):
         result = self._run(
             "train",
-            "--config", str(FIXTURES / "full_config.yaml"),
+            "--config",
+            str(FIXTURES / "full_config.yaml"),
             "--dry-run",
-            "--override", "model.name=overridden",
+            "--override",
+            "model.name=overridden",
         )
         assert result.returncode == 0
         assert "overridden" in result.stdout
@@ -45,10 +54,6 @@ class TestCLI:
     def test_version(self):
         result = self._run("--version")
         assert "0.1.0" in result.stdout
-
-
-from unittest.mock import patch, MagicMock
-from trainlib.cli import main
 
 
 class TestTrainCommand:
@@ -99,13 +104,14 @@ class TestListCommand:
 
     def test_list_unknown_type(self, capsys):
         result = main(["list", "unknown"])
-        captured = capsys.readouterr()
+        capsys.readouterr()
         assert result == 1
 
 
 class TestEvalCommand:
     def test_eval_parser_exists(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args(["eval", "--model", "test-model", "--benchmarks", "mmlu"])
         assert args.command == "eval"
@@ -114,17 +120,25 @@ class TestEvalCommand:
 
     def test_eval_with_metrics(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
-        args = parser.parse_args([
-            "eval", "--model", "test-model",
-            "--metrics", "loss,perplexity",
-            "--dataset", "data/eval.jsonl",
-        ])
+        args = parser.parse_args(
+            [
+                "eval",
+                "--model",
+                "test-model",
+                "--metrics",
+                "loss,perplexity",
+                "--dataset",
+                "data/eval.jsonl",
+            ]
+        )
         assert args.metrics == "loss,perplexity"
         assert args.dataset == "data/eval.jsonl"
 
     def test_eval_benchmarks_calls_benchmark_evaluate(self):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
+
         from trainlib.cli import main
 
         with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
@@ -140,6 +154,7 @@ class TestEvalCommand:
 
     def test_eval_num_fewshot(self):
         from unittest.mock import patch
+
         from trainlib.cli import main
 
         with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
@@ -151,12 +166,14 @@ class TestEvalCommand:
 
     def test_eval_requires_model(self):
         from trainlib.cli import main
+
         with pytest.raises(SystemExit) as exc_info:
             main(["eval"])
         assert exc_info.value.code != 0
 
     def test_eval_prints_results(self, capsys):
         from unittest.mock import patch
+
         from trainlib.cli import main
 
         with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
@@ -170,6 +187,7 @@ class TestEvalCommand:
 class TestExportCommand:
     def test_export_merge_parser(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args(["export", "merge", "--checkpoint", "ckpt/", "--output", "out/"])
         assert args.command == "export"
@@ -179,6 +197,7 @@ class TestExportCommand:
 
     def test_export_gguf_parser(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args(["export", "gguf", "--model", "model/", "--output", "out.gguf"])
         assert args.command == "export"
@@ -187,12 +206,14 @@ class TestExportCommand:
 
     def test_export_gguf_default_quant(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args(["export", "gguf", "--model", "m/", "--output", "o.gguf"])
         assert args.quant == "Q4_K_M"
 
     def test_export_push_parser(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args(["export", "push", "--model", "model/", "--repo", "user/repo"])
         assert args.command == "export"
@@ -201,6 +222,7 @@ class TestExportCommand:
 
     def test_export_merge_calls_merge(self):
         from unittest.mock import patch
+
         from trainlib.cli import main
 
         with patch("trainlib.export.merge.merge") as mock_merge:
@@ -211,16 +233,20 @@ class TestExportCommand:
 
     def test_export_gguf_calls_to_gguf(self):
         from unittest.mock import patch
+
         from trainlib.cli import main
 
         with patch("trainlib.export.gguf.to_gguf") as mock_gguf:
-            result = main(["export", "gguf", "--model", "m/", "--output", "o.gguf", "--quant", "Q8_0"])
+            result = main(
+                ["export", "gguf", "--model", "m/", "--output", "o.gguf", "--quant", "Q8_0"]
+            )
 
         assert result == 0
         mock_gguf.assert_called_once_with("m/", output="o.gguf", quantization="Q8_0")
 
     def test_export_push_calls_push_to_hub(self):
         from unittest.mock import patch
+
         from trainlib.cli import main
 
         with patch("trainlib.export.hub.push_to_hub") as mock_push:
@@ -231,6 +257,7 @@ class TestExportCommand:
 
     def test_export_no_subcommand_shows_help(self, capsys):
         from trainlib.cli import main
+
         result = main(["export"])
         assert result == 1
 
@@ -238,6 +265,7 @@ class TestExportCommand:
 class TestCompareCommand:
     def test_compare_parser(self):
         from trainlib.cli import _build_parser
+
         parser = _build_parser()
         args = parser.parse_args(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu,gsm8k"])
         assert args.command == "compare"
@@ -245,13 +273,16 @@ class TestCompareCommand:
         assert args.benchmarks == "mmlu,gsm8k"
 
     def test_compare_calls_benchmark_evaluate_twice(self):
-        from unittest.mock import patch, call
+        from unittest.mock import patch
+
         from trainlib.cli import main
 
         results_a = {"mmlu": {"acc,none": 0.65}}
         results_b = {"mmlu": {"acc,none": 0.70}}
 
-        with patch("trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]) as mock_bench:
+        with patch(
+            "trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]
+        ) as mock_bench:
             result = main(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu"])
 
         assert result == 0
@@ -259,12 +290,15 @@ class TestCompareCommand:
 
     def test_compare_prints_table(self, capsys):
         from unittest.mock import patch
+
         from trainlib.cli import main
 
         results_a = {"mmlu": {"acc,none": 0.65}}
         results_b = {"mmlu": {"acc,none": 0.70}}
 
-        with patch("trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]):
+        with patch(
+            "trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]
+        ):
             main(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu"])
 
         captured = capsys.readouterr()
@@ -274,5 +308,6 @@ class TestCompareCommand:
 
     def test_compare_requires_two_models(self):
         from trainlib.cli import main
+
         result = main(["compare", "model-a/", "--benchmarks", "mmlu"])
         assert result != 0

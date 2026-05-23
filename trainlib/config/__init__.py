@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from trainlib.config.parser import load_config, merge_dicts, apply_overrides
+from trainlib.config.parser import apply_overrides, load_config, merge_dicts
 from trainlib.config.schema import (
     DataConfig,
     EvalConfig,

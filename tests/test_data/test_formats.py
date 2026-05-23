@@ -1,5 +1,4 @@
-import pytest
-from trainlib.data.formats import format_alpaca, format_sharegpt, format_chat, format_text
+from trainlib.data.formats import format_alpaca, format_chat, format_sharegpt, format_text
 from trainlib.data.registry import format_registry
 
 

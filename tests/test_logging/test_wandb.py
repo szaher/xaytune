@@ -1,7 +1,7 @@
 import sys
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import patch, MagicMock
-from types import ModuleType
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ class TestWandbBackend:
     def test_init_calls_wandb_init(self, mock_wandb_module):
         from trainlib.logging.wandb import WandbBackend
 
-        backend = WandbBackend(project="my-project", run_name="run-1")
+        WandbBackend(project="my-project", run_name="run-1")
         mock_wandb_module.init.assert_called_once_with(project="my-project", name="run-1")
 
     def test_log_scalar(self, mock_wandb_module):
@@ -53,8 +53,8 @@ class TestWandbBackend:
         mock_wandb_module.finish.assert_called_once()
 
     def test_is_logging_backend(self, mock_wandb_module):
-        from trainlib.logging.wandb import WandbBackend
         from trainlib.logging.base import LoggingBackend
+        from trainlib.logging.wandb import WandbBackend
 
         backend = WandbBackend(project="test")
         assert isinstance(backend, LoggingBackend)
@@ -62,5 +62,5 @@ class TestWandbBackend:
     def test_default_project(self, mock_wandb_module):
         from trainlib.logging.wandb import WandbBackend
 
-        backend = WandbBackend()
+        WandbBackend()
         mock_wandb_module.init.assert_called_once_with(project="trainlib", name=None)

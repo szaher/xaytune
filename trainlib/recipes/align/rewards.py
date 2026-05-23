@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Callable
-
 from trainlib.utils.registry import Registry
 
 reward_registry = Registry("reward")

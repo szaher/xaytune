@@ -1,7 +1,7 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig
 from trainlib.recipes.pretrain import pretrain
-from trainlib.config.schema import TrainConfig, ModelConfig, DataConfig, TrainerConfig
 from trainlib.trainer.callbacks import TrainState
 
 

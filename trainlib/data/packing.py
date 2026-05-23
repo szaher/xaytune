@@ -21,9 +21,9 @@ def pack_sequences(
 
         if len(current_ids) + len(ids) > max_seq_length:
             if current_ids:
-                packed.append(_pad_and_finalize(
-                    current_ids, current_labels, max_seq_length, pad_token_id
-                ))
+                packed.append(
+                    _pad_and_finalize(current_ids, current_labels, max_seq_length, pad_token_id)
+                )
             current_ids = ids[:]
             current_labels = ids[:]
         else:
@@ -31,9 +31,7 @@ def pack_sequences(
             current_labels.extend(ids)
 
     if current_ids:
-        packed.append(_pad_and_finalize(
-            current_ids, current_labels, max_seq_length, pad_token_id
-        ))
+        packed.append(_pad_and_finalize(current_ids, current_labels, max_seq_length, pad_token_id))
 
     return packed
 

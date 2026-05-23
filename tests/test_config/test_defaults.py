@@ -1,9 +1,4 @@
-from pathlib import Path
-
-import pytest
-
-from trainlib.config import load_config, validate_config, get_defaults_dir
-from trainlib.config.schema import TrainConfig
+from trainlib.config import get_defaults_dir, load_config, validate_config
 
 
 class TestDefaults:
@@ -30,13 +25,12 @@ class TestDefaults:
 
 class TestConfigPublicAPI:
     def test_load_config_importable(self):
-        from trainlib.config import load_config
         assert callable(load_config)
 
     def test_validate_config_importable(self):
-        from trainlib.config import validate_config
         assert callable(validate_config)
 
     def test_schema_classes_importable(self):
-        from trainlib.config import TrainConfig, ModelConfig, DataConfig
+        from trainlib.config import TrainConfig
+
         assert TrainConfig is not None

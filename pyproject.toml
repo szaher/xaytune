@@ -51,6 +51,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.4",
+    "mypy>=1.10",
 ]
 
 [project.scripts]
@@ -63,6 +64,16 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+exclude = ["examples/**/*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["N812"]  # Allow lowercase imports as non-lowercase (e.g., torch.nn.functional as F)
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -78,4 +75,5 @@ class TestToGguf:
 class TestGgufImport:
     def test_importable_from_export(self):
         from trainlib.export import to_gguf as fn
+
         assert callable(fn)

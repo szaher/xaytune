@@ -1,8 +1,8 @@
-import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
-from trainlib.trainer.loop import Trainer
-from trainlib.trainer.callbacks import CallbackManager, TrainState
+from unittest.mock import MagicMock
+
 from trainlib.config.schema import TrainerConfig
+from trainlib.trainer.callbacks import CallbackManager
+from trainlib.trainer.loop import Trainer
 
 
 class TestTrainer:
@@ -100,6 +100,8 @@ class TestTrainer:
             for _ in range(100)
         ]
 
-        state = trainer.train(model=mock_model, train_dataloader=mock_dataloader, optimizer=mock_optimizer)
+        state = trainer.train(
+            model=mock_model, train_dataloader=mock_dataloader, optimizer=mock_optimizer
+        )
         assert state.should_stop is True
         assert state.global_step <= 2

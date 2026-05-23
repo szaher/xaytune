@@ -1,12 +1,12 @@
 import pytest
+
 from trainlib.config.schema import (
     DataConfig,
-    LoraConfig,
     ModelConfig,
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.config.validation import validate_config, ConfigValidationError
+from trainlib.config.validation import ConfigValidationError, validate_config
 
 
 class TestValidateConfig:

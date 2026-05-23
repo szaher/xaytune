@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Union
-
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, TaskType, get_peft_model
 
 from trainlib.models.loader import ModelResult
 
@@ -19,7 +17,7 @@ _AUTO_TARGET_MODULES: dict[str, list[str]] = {
 _DEFAULT_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 
-def get_target_modules(target_modules: Union[str, list[str]], model: object) -> list[str]:
+def get_target_modules(target_modules: str | list[str], model: object) -> list[str]:
     if isinstance(target_modules, list):
         return target_modules
     model_type = getattr(getattr(model, "config", None), "model_type", None)
@@ -34,7 +32,7 @@ def apply_lora(
     rank: int = 16,
     alpha: int = 32,
     dropout: float = 0.05,
-    target_modules: Union[str, list[str]] = "auto",
+    target_modules: str | list[str] = "auto",
 ) -> ModelResult:
     resolved_modules = get_target_modules(target_modules, model_result.model)
     lora_config = LoraConfig(

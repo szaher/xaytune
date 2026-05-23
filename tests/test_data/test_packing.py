@@ -1,4 +1,3 @@
-import pytest
 from trainlib.data.packing import pack_sequences
 
 

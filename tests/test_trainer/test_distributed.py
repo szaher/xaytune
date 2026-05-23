@@ -1,9 +1,11 @@
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from trainlib.trainer.distributed import (
-    wrap_model_distributed,
-    get_strategy,
     DistributedContext,
+    get_strategy,
+    wrap_model_distributed,
 )
 
 
@@ -50,7 +52,7 @@ class TestWrapModelDistributed:
         mock_model = MagicMock()
         mock_ddp_cls.return_value = MagicMock()
         ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
-        result = wrap_model_distributed(mock_model, strategy="ddp", ctx=ctx)
+        wrap_model_distributed(mock_model, strategy="ddp", ctx=ctx)
         mock_ddp_cls.assert_called_once()
 
     @patch("trainlib.trainer.distributed.FullyShardedDataParallel")
@@ -58,7 +60,7 @@ class TestWrapModelDistributed:
         mock_model = MagicMock()
         mock_fsdp_cls.return_value = MagicMock()
         ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
-        result = wrap_model_distributed(mock_model, strategy="fsdp", ctx=ctx)
+        wrap_model_distributed(mock_model, strategy="fsdp", ctx=ctx)
         mock_fsdp_cls.assert_called_once()
 
     def test_invalid_strategy_raises(self):

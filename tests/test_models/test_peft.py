@@ -1,7 +1,7 @@
-import pytest
-from unittest.mock import patch, MagicMock
-from trainlib.models.peft import apply_lora, get_target_modules
+from unittest.mock import MagicMock, patch
+
 from trainlib.models.loader import ModelResult
+from trainlib.models.peft import apply_lora, get_target_modules
 
 
 class TestGetTargetModules:

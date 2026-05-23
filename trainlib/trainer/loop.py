@@ -96,9 +96,7 @@ class Trainer:
 
         if (state.step + 1) % self.config.gradient_accumulation == 0 or state.step == 0:
             if self.config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), self.config.max_grad_norm
-                )
+                torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
             optimizer.step()
             optimizer.zero_grad()
 

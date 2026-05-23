@@ -1,4 +1,3 @@
-import pytest
 from trainlib.logging.console import ConsoleBackend
 
 
@@ -32,5 +31,6 @@ class TestConsoleBackend:
 
     def test_is_logging_backend(self):
         from trainlib.logging.base import LoggingBackend
+
         backend = ConsoleBackend()
         assert isinstance(backend, LoggingBackend)

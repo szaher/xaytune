@@ -1,5 +1,5 @@
 import pytest
-import torch
+
 from trainlib.eval.metrics import metric_registry, register_metric
 
 
@@ -48,6 +48,7 @@ class TestBuiltinMetrics:
         losses = [1.0, 2.0, 3.0]
         result = compute_ppl(losses)
         import math
+
         assert abs(result - math.exp(2.0)) < 0.01
 
     def test_perplexity_empty(self):

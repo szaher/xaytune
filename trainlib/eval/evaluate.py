@@ -18,6 +18,7 @@ def evaluate(
 
     if isinstance(model, str):
         from trainlib.models import load_model
+
         model_result = load_model(model)
         model = model_result.model
 

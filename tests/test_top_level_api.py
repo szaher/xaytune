@@ -25,16 +25,20 @@ class TestTopLevelAPI:
 
     def test_finetune_is_recipe(self):
         from trainlib.recipes.finetune import finetune
+
         assert trainlib.finetune is finetune
 
     def test_pretrain_is_recipe(self):
         from trainlib.recipes.pretrain import pretrain
+
         assert trainlib.pretrain is pretrain
 
     def test_align_is_recipe(self):
         from trainlib.recipes.align.align import align
+
         assert trainlib.align is align
 
     def test_evaluate_is_eval(self):
         from trainlib.eval.evaluate import evaluate
+
         assert trainlib.evaluate is evaluate

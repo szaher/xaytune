@@ -1,7 +1,9 @@
 import json
 import tempfile
 from pathlib import Path
+
 import pytest
+
 from trainlib.data.preferences import load_preference_dataset
 from trainlib.data.registry import format_registry
 
@@ -15,8 +17,16 @@ class TestPreferenceDataset:
     def test_load_basic(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             data = [
-                {"prompt": "Say something nice", "chosen": "You look great today!", "rejected": "Whatever."},
-                {"prompt": "Explain gravity", "chosen": "Gravity is a fundamental force...", "rejected": "Stuff falls down."},
+                {
+                    "prompt": "Say something nice",
+                    "chosen": "You look great today!",
+                    "rejected": "Whatever.",
+                },
+                {
+                    "prompt": "Explain gravity",
+                    "chosen": "Gravity is a fundamental force...",
+                    "rejected": "Stuff falls down.",
+                },
             ]
             path = Path(tmpdir) / "prefs.jsonl"
             self._write_jsonl(data, path)

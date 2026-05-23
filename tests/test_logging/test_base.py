@@ -1,4 +1,5 @@
 import pytest
+
 from trainlib.logging.base import LoggingBackend, LoggingManager
 from trainlib.trainer.callbacks import CallbackManager, TrainState
 

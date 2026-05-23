@@ -30,4 +30,4 @@ def benchmark_evaluate(
 
     raw = lm_eval.simple_evaluate(**kwargs)
 
-    return raw.get("results", {})
+    return raw.get("results", {})  # type: ignore[no-any-return]

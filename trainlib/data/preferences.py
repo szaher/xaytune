@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 from trainlib.data.registry import format_registry
 
@@ -22,7 +22,7 @@ def load_preference_dataset(
     path: str,
     *,
     eval_split: float = 0.0,
-) -> Union[list[dict], tuple[list[dict], list[dict]]]:
+) -> list[dict] | tuple[list[dict], list[dict]]:
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"Preference dataset not found: {path}")

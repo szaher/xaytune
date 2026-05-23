@@ -8,6 +8,7 @@ import torch
 from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
 from trainlib.models.loader import ModelResult
 from trainlib.recipes.base import TrainingComponents, setup_training
+from trainlib.trainer.callbacks import TrainState
 from trainlib.trainer.distributed import DistributedContext
 
 
@@ -47,6 +48,16 @@ class TestTrainingComponents:
         )
         assert tc.distributed_ctx is None
 
+    def test_resume_state_defaults_to_none(self):
+        tc = TrainingComponents(
+            model=MagicMock(),
+            tokenizer=MagicMock(),
+            train_dataloader=MagicMock(),
+            eval_dataloader=None,
+            trainer=MagicMock(),
+        )
+        assert tc.resume_state is None
+
     def test_fields(self):
         fields = TrainingComponents._fields
         assert "model" in fields
@@ -55,6 +66,7 @@ class TestTrainingComponents:
         assert "eval_dataloader" in fields
         assert "trainer" in fields
         assert "distributed_ctx" in fields
+        assert "resume_state" in fields
 
 
 class TestSetupTraining:
@@ -208,6 +220,7 @@ def _mock_dataset() -> list[dict[str, torch.Tensor]]:
 
 
 def _make_config(**trainer_kwargs: Any) -> TrainConfig:
+    trainer_kwargs.setdefault("save_last", False)
     return TrainConfig(
         recipe="finetune",
         model=ModelConfig(name="test-model"),
@@ -410,3 +423,77 @@ class TestSetupTrainingDistributed:
         assert call_kwargs["fsdp_config"] is config.fsdp
         assert call_kwargs["deepspeed_config"] is config.deepspeed_config
         assert call_kwargs["mixed_precision"] == config.trainer.mixed_precision
+
+
+class TestSetupTrainingCheckpointCallbacks:
+    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_checkpoint_callbacks_registered(
+        self, mock_load_ds, mock_load_model, mock_register
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config(checkpoint_every_n_steps=100, save_last=True)
+        setup_training(config)
+
+        mock_register.assert_called_once()
+        call_kwargs = mock_register.call_args.kwargs
+        assert call_kwargs["checkpoint_every_n_steps"] == 100
+        assert call_kwargs["save_last"] is True
+        assert call_kwargs["output_dir"] == config.output.dir
+        assert call_kwargs["is_main_process"] is True
+
+    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_checkpoint_callbacks_use_default_config(
+        self, mock_load_ds, mock_load_model, mock_register
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = TrainConfig(
+            recipe="finetune",
+            model=ModelConfig(name="test-model"),
+            data=DataConfig(path="fake.jsonl", format="alpaca"),
+        )
+        setup_training(config)
+
+        call_kwargs = mock_register.call_args.kwargs
+        assert call_kwargs["checkpoint_every_n_steps"] == 500  # default
+        assert call_kwargs["save_last"] is True  # default
+
+
+class TestSetupTrainingResume:
+    @patch("trainlib.recipes.base.load_checkpoint")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_resume_loads_model_weights(
+        self, mock_load_ds, mock_load_model, mock_load_ckpt
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+        mock_load_ckpt.return_value = TrainState(global_step=50, epoch=1, step=10)
+
+        config = _make_config()
+        components = setup_training(config, resume_from="/ckpt/checkpoint-50")
+
+        mock_load_ckpt.assert_called_once()
+        assert components.resume_state is not None
+        assert components.resume_state.global_step == 50
+        assert components.resume_state.epoch == 1
+
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_no_resume_state_when_not_requested(
+        self, mock_load_ds, mock_load_model
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        assert components.resume_state is None

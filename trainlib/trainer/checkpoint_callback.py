@@ -18,6 +18,12 @@ def register_checkpoint_callbacks(
 ) -> None:
     last_saved_step: dict[str, int] = {"step": -1}
 
+    def _get_optimizer() -> Any:
+        return getattr(trainer, "_optimizer", None)
+
+    def _get_scaler() -> Any:
+        return getattr(trainer, "_scaler", None)
+
     @callback_manager.on("step_end")
     def _periodic_checkpoint(state: TrainState) -> None:
         if not is_main_process:
@@ -29,9 +35,9 @@ def register_checkpoint_callbacks(
             save_checkpoint(
                 output_dir=ckpt_dir,
                 model=model,
-                optimizer=trainer._optimizer,
+                optimizer=_get_optimizer(),
                 state=state,
-                scaler=trainer._scaler,
+                scaler=_get_scaler(),
             )
             last_saved_step["step"] = state.global_step
             callback_manager.fire("checkpoint_saved", state)
@@ -48,9 +54,9 @@ def register_checkpoint_callbacks(
         save_checkpoint(
             output_dir=ckpt_dir,
             model=model,
-            optimizer=trainer._optimizer,
+            optimizer=_get_optimizer(),
             state=state,
-            scaler=trainer._scaler,
+            scaler=_get_scaler(),
         )
         last_saved_step["step"] = state.global_step
         callback_manager.fire("checkpoint_saved", state)

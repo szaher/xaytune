@@ -8,6 +8,8 @@ from trainlib.config.schema import TrainConfig
 from trainlib.data import load_dataset
 from trainlib.models import apply_lora, load_model
 from trainlib.trainer import CallbackManager, Trainer
+from trainlib.trainer.checkpoint_callback import register_checkpoint_callbacks
+from trainlib.trainer.checkpointing import load_checkpoint
 from trainlib.trainer.distributed import (
     cleanup_distributed,
     get_strategy,
@@ -23,11 +25,13 @@ class TrainingComponents(NamedTuple):
     eval_dataloader: DataLoader | None
     trainer: Trainer
     distributed_ctx: Any = None
+    resume_state: Any = None
 
 
 def setup_training(
     config: TrainConfig,
     callback_manager: CallbackManager | None = None,
+    resume_from: str | None = None,
 ) -> TrainingComponents:
     # Initialize distributed context
     ctx = init_distributed()
@@ -137,6 +141,31 @@ def setup_training(
         callback_manager=cb_manager,
     )
 
+    # Register checkpoint callbacks
+    register_checkpoint_callbacks(
+        callback_manager=cb_manager,
+        trainer=trainer,
+        model=model,
+        output_dir=config.output.dir,
+        checkpoint_every_n_steps=config.trainer.checkpoint_every_n_steps,
+        save_last=config.trainer.save_last,
+        is_main_process=ctx.is_main_process,
+    )
+
+    # Resume from checkpoint if requested
+    resume_state = None
+    if resume_from is not None:
+
+        class _NoopOptimizer:
+            def load_state_dict(self, state: Any) -> None:
+                pass
+
+        resume_state = load_checkpoint(
+            checkpoint_dir=resume_from,
+            model=model,
+            optimizer=_NoopOptimizer(),
+        )
+
     return TrainingComponents(
         model=model,
         tokenizer=model_result.tokenizer,
@@ -144,4 +173,5 @@ def setup_training(
         eval_dataloader=eval_dataloader,
         trainer=trainer,
         distributed_ctx=ctx,
+        resume_state=resume_state,
     )

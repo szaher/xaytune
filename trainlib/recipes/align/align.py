@@ -22,6 +22,7 @@ def align(
     num_epochs: int = 1,
     learning_rate: float = 5e-6,
     batch_size: int = 4,
+    resume_from: str | None = None,
     **kwargs: Any,
 ) -> TrainState:
     if config is None:
@@ -47,11 +48,13 @@ def align(
             ),
         )
 
-    components = _base.setup_training(config)
+    components = _base.setup_training(config, resume_from=resume_from)
 
     state = components.trainer.train(
         model=components.model,
         train_dataloader=components.train_dataloader,
+        resume_state=components.resume_state,
+        resume_checkpoint_dir=resume_from,
     )
 
     return state

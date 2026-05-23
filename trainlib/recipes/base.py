@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from trainlib.config.schema import TrainConfig
 from trainlib.data import load_dataset
 from trainlib.data.packing import pack_sequences
+from trainlib.data.tokenizer import collate_tokenized, tokenize_dataset
 from trainlib.data.validation import validate_dataset_sample
 from trainlib.models import apply_lora, load_model
 from trainlib.trainer import CallbackManager, Trainer
@@ -96,6 +97,7 @@ def setup_training(
         source=config.data.source,
         streaming=config.data.streaming,
         eval_split=config.data.eval_split,
+        tokenizer=model_result.tokenizer,
     )
 
     if config.data.eval_split > 0:
@@ -103,6 +105,13 @@ def setup_training(
     else:
         train_data = dataset  # type: ignore[assignment]
         eval_data = None
+
+    max_seq = config.data.max_seq_length
+    if isinstance(train_data, list) and train_data and "text" in train_data[0]:
+        train_data = tokenize_dataset(train_data, model_result.tokenizer, max_seq)
+    if (eval_data is not None and isinstance(eval_data, list)
+            and eval_data and "text" in eval_data[0]):
+        eval_data = tokenize_dataset(eval_data, model_result.tokenizer, max_seq)
 
     if (
         config.data.packing
@@ -126,6 +135,12 @@ def setup_training(
                 pad_token_id=pad_id,
             )
 
+    # Create collate function for tokenized data
+    pad_id = getattr(model_result.tokenizer, "pad_token_id", 0) or 0
+
+    def collate_fn(batch: list, pid: int = pad_id) -> dict:
+        return collate_tokenized(batch, pad_token_id=pid)
+
     # Create DataLoaders with DistributedSampler when needed
     sampler: Any = None
     shuffle = True
@@ -145,6 +160,7 @@ def setup_training(
         batch_size=config.trainer.batch_size,
         shuffle=shuffle,
         sampler=sampler,
+        collate_fn=collate_fn,
     )
 
     eval_sampler: Any = None
@@ -165,6 +181,7 @@ def setup_training(
             batch_size=config.trainer.batch_size,
             shuffle=False,
             sampler=eval_sampler,
+            collate_fn=collate_fn,
         )
 
     # Validate a sample batch before training

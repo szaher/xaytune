@@ -24,9 +24,9 @@ class TestValidateBatch:
         issues = validate_batch({"labels": torch.tensor([1])})
         assert any("input_ids" in i for i in issues)
 
-    def test_text_field_accepted(self):
+    def test_text_only_batch_rejected(self):
         issues = validate_batch({"text": "hello"})
-        assert issues == []
+        assert any("input_ids" in i for i in issues)
 
     def test_non_dict_batch(self):
         issues = validate_batch("not a dict")

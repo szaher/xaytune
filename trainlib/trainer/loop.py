@@ -156,6 +156,13 @@ class Trainer:
         self.callback_manager.fire("train_end", state)
         return state
 
+    def _move_batch_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
+        device = torch.device(self._device_type)
+        return {
+            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
+
     def _training_step(
         self,
         model: Any,
@@ -163,6 +170,9 @@ class Trainer:
         optimizer: Any,
         state: TrainState,
     ) -> float:
+        if isinstance(batch, dict):
+            batch = self._move_batch_to_device(batch)
+
         # Forward pass with optional autocast
         if self._amp_dtype is not None:
             with torch.amp.autocast(self._device_type, dtype=self._amp_dtype):

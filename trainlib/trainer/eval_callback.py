@@ -35,9 +35,17 @@ def register_eval_callbacks(
             model.eval()
 
         losses: list[float] = []
+        try:
+            device = next(iter(model.parameters())).device
+        except (StopIteration, AttributeError, TypeError):
+            device = torch.device("cpu")
         with torch.no_grad():
             for batch in eval_dataloader:
                 if isinstance(batch, dict):
+                    batch = {
+                        k: v.to(device) if isinstance(v, torch.Tensor) else v
+                        for k, v in batch.items()
+                    }
                     outputs = model(**batch)
                 else:
                     outputs = model(batch)

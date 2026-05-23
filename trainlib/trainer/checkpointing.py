@@ -16,6 +16,7 @@ def save_checkpoint(
     optimizer: Any,
     state: TrainState,
     scheduler: Any | None = None,
+    scaler: Any | None = None,
 ) -> None:
     ckpt_path = Path(output_dir)
     ckpt_path.mkdir(parents=True, exist_ok=True)
@@ -29,9 +30,13 @@ def save_checkpoint(
     if scheduler is not None and hasattr(scheduler, "state_dict"):
         torch.save(scheduler.state_dict(), ckpt_path / "scheduler.pt")
 
+    if scaler is not None and hasattr(scaler, "state_dict"):
+        torch.save(scaler.state_dict(), ckpt_path / "scaler.pt")
+
     metadata = {
         "global_step": state.global_step,
         "epoch": state.epoch,
+        "step": state.step,
         "metrics": state.metrics,
     }
     (ckpt_path / "metadata.json").write_text(json.dumps(metadata, indent=2))
@@ -43,6 +48,7 @@ def load_checkpoint(
     model: Any,
     optimizer: Any,
     scheduler: Any | None = None,
+    scaler: Any | None = None,
 ) -> TrainState:
     ckpt_path = Path(checkpoint_dir)
     if not ckpt_path.exists():
@@ -66,12 +72,19 @@ def load_checkpoint(
         if sched_state and hasattr(scheduler, "load_state_dict"):
             scheduler.load_state_dict(sched_state)
 
+    scaler_path = ckpt_path / "scaler.pt"
+    if scaler is not None and scaler_path.exists():
+        scaler_state = torch.load(scaler_path, weights_only=True)
+        if scaler_state and hasattr(scaler, "load_state_dict"):
+            scaler.load_state_dict(scaler_state)
+
     metadata_path = ckpt_path / "metadata.json"
     metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
 
     return TrainState(
         global_step=metadata.get("global_step", 0),
         epoch=metadata.get("epoch", 0),
+        step=metadata.get("step", 0),
         metrics=metadata.get("metrics", {}),
     )
 

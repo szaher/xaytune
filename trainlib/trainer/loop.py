@@ -113,9 +113,9 @@ class Trainer:
 
                 loss = self._training_step(model, batch, optimizer, state)
                 state.metrics["loss"] = loss
+                state.global_step += 1
 
                 self.callback_manager.fire("step_end", state)
-                state.global_step += 1
 
                 if self.config.max_steps > 0 and state.global_step >= self.config.max_steps:
                     state.stop_training()

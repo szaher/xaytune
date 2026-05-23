@@ -1,0 +1,25 @@
+# SimPO alignment example (Simple Preference Optimization)
+# Usage: trainlib train --config configs/examples/simpo_align.yaml
+recipe: align
+method: simpo
+
+model:
+  name: output/sft-model
+
+data:
+  path: data/preferences.jsonl
+  format: preference
+  eval_split: 0.05
+
+trainer:
+  batch_size: 4
+  gradient_accumulation: 4
+  learning_rate: 5e-6
+  num_epochs: 1
+
+logging:
+  backends: [console, tensorboard]
+  project: simpo-align
+
+output:
+  dir: output/simpo-aligned

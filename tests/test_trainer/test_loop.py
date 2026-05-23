@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import torch
+
 from trainlib.config.schema import TrainerConfig
 from trainlib.trainer.callbacks import CallbackManager
 from trainlib.trainer.loop import Trainer
@@ -105,3 +107,62 @@ class TestTrainer:
         )
         assert state.should_stop is True
         assert state.global_step <= 2
+
+
+class TestMixedPrecision:
+    def _make_model_and_dataloader(self):
+        """Helper to create mock model and dataloader."""
+        model = MagicMock()
+        model.parameters.return_value = iter([torch.randn(10, requires_grad=True)])
+        mock_output = MagicMock()
+        mock_output.loss = torch.tensor(0.5, requires_grad=True)
+        model.return_value = mock_output
+        model.__call__ = MagicMock(return_value=mock_output)
+
+        dataloader = [
+            {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([1, 2, 3])},
+        ]
+        return model, dataloader
+
+    def test_fp32_no_autocast(self):
+        """fp32 should not use autocast at all -- current behavior preserved."""
+        config = TrainerConfig(mixed_precision="fp32", num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader()
+        state = trainer.train(model=model, train_dataloader=dl)
+        assert state.global_step == 1
+        assert trainer._amp_dtype is None
+        assert trainer._scaler is None
+
+    def test_bf16_sets_autocast_dtype(self):
+        """bf16 should use autocast with bfloat16, no scaler."""
+        config = TrainerConfig(mixed_precision="bf16", num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader()
+        state = trainer.train(model=model, train_dataloader=dl)
+        assert state.global_step == 1
+        assert trainer._amp_dtype == torch.bfloat16
+        assert trainer._scaler is None
+
+    def test_fp16_on_cpu_no_scaler(self):
+        """fp16 on CPU should set autocast dtype but no scaler."""
+        config = TrainerConfig(mixed_precision="fp16", num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader()
+        state = trainer.train(model=model, train_dataloader=dl)
+        assert state.global_step == 1
+        assert trainer._amp_dtype == torch.float16
+        assert trainer._scaler is None
+
+    def test_training_completes_with_all_precision_modes(self):
+        """All three precision modes should complete training successfully."""
+        for mode in ("fp16", "bf16", "fp32"):
+            config = TrainerConfig(mixed_precision=mode, num_epochs=1, max_steps=2)
+            trainer = Trainer(config=config)
+            model, dl = self._make_model_and_dataloader()
+            # Add a second batch so max_steps=2 is reachable
+            dl.append(
+                {"input_ids": torch.tensor([4, 5, 6]), "labels": torch.tensor([4, 5, 6])}
+            )
+            state = trainer.train(model=model, train_dataloader=dl)
+            assert state.global_step == 2, f"Failed for {mode}"

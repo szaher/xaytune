@@ -45,6 +45,26 @@ class Trainer:
                 weight_decay=self.config.weight_decay,
             )
 
+        # Determine device type for autocast
+        self._device_type = "cpu"
+        try:
+            first_param = next(iter(model.parameters()))
+            if first_param.is_cuda:
+                self._device_type = "cuda"
+        except (StopIteration, TypeError):
+            pass
+
+        # Set up mixed precision
+        self._amp_dtype: torch.dtype | None = None
+        self._scaler: torch.amp.GradScaler | None = None
+        if self.config.mixed_precision == "fp16":
+            self._amp_dtype = torch.float16
+            if self._device_type == "cuda":
+                self._scaler = torch.amp.GradScaler()
+        elif self.config.mixed_precision == "bf16":
+            self._amp_dtype = torch.bfloat16
+        # fp32 → no autocast, no scaler
+
         state = TrainState(
             num_epochs=self.config.num_epochs,
             max_steps=self.config.max_steps,
@@ -86,18 +106,35 @@ class Trainer:
         optimizer: Any,
         state: TrainState,
     ) -> float:
-        outputs = model(**batch) if isinstance(batch, dict) else model(batch)
-        loss = outputs.loss if hasattr(outputs, "loss") else outputs
+        # Forward pass with optional autocast
+        if self._amp_dtype is not None:
+            with torch.amp.autocast(self._device_type, dtype=self._amp_dtype):
+                outputs = model(**batch) if isinstance(batch, dict) else model(batch)
+                loss = outputs.loss if hasattr(outputs, "loss") else outputs
+        else:
+            outputs = model(**batch) if isinstance(batch, dict) else model(batch)
+            loss = outputs.loss if hasattr(outputs, "loss") else outputs
 
         if self.config.gradient_accumulation > 1:
             loss = loss / self.config.gradient_accumulation
 
-        loss.backward()
+        # Backward with optional scaler
+        if self._scaler is not None:
+            self._scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         if (state.step + 1) % self.config.gradient_accumulation == 0 or state.step == 0:
-            if self.config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
-            optimizer.step()
+            if self._scaler is not None:
+                if self.config.max_grad_norm > 0:
+                    self._scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
+                self._scaler.step(optimizer)
+                self._scaler.update()
+            else:
+                if self.config.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
+                optimizer.step()
             optimizer.zero_grad()
 
         return loss.item() if hasattr(loss, "item") else float(loss)

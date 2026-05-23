@@ -45,19 +45,25 @@ eval = ["lm-eval>=0.4"]
 wandb = ["wandb>=0.16"]
 mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]
+studio = ["gradio>=5.0", "plotly>=5.0"]
 all = [
     "trainlib[deepspeed]",
     "trainlib[eval]",
     "trainlib[wandb]",
     "trainlib[mlflow]",
     "trainlib[tensorboard]",
+    "trainlib[studio]",
+]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
 ]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
-    "mkdocs-material>=9.5",
+    "trainlib[docs]",
 ]
 
 [project.scripts]

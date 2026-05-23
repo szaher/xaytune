@@ -22,4 +22,5 @@ checkpoints/
 wandb/
 runs/
 *.gguf
+site/
 .DS_Store

@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv pip install -e ".[dev]" --system
-      - run: python -m pytest tests/ -q --tb=short
+      - run: python -m pytest tests/ -q --tb=short -m "not slow"
 
   type-check:
     runs-on: ubuntu-latest

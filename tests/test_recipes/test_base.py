@@ -641,6 +641,65 @@ class TestMergeOnComplete:
         mr.model.merge_and_unload.assert_not_called()
 
 
+@patch("trainlib.recipes.base.validate_dataset_sample")
+class TestDataPacking:
+    @patch("trainlib.recipes.base.pack_sequences")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_packing_called_when_enabled(
+        self, mock_load_ds, mock_load_model, mock_pack, mock_validate
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = [
+            {"input_ids": [1, 2, 3], "labels": [1, 2, 3]},
+            {"input_ids": [4, 5], "labels": [4, 5]},
+        ]
+        mock_pack.return_value = [
+            {"input_ids": [1, 2, 3, 4, 5, 0], "labels": [1, 2, 3, 4, 5, -100]},
+        ]
+
+        config = _make_config()
+        config.data.packing = True
+        config.data.max_seq_length = 2048
+        setup_training(config)
+
+        mock_pack.assert_called_once()
+        call_kwargs = mock_pack.call_args.kwargs
+        assert call_kwargs["max_seq_length"] == 2048
+
+    @patch("trainlib.recipes.base.pack_sequences")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_packing_skipped_when_disabled(
+        self, mock_load_ds, mock_load_model, mock_pack, mock_validate
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = [
+            {"input_ids": [1, 2, 3], "labels": [1, 2, 3]},
+        ]
+
+        config = _make_config()
+        config.data.packing = False
+        setup_training(config)
+
+        mock_pack.assert_not_called()
+
+    @patch("trainlib.recipes.base.pack_sequences")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_packing_skipped_for_tensor_data(
+        self, mock_load_ds, mock_load_model, mock_pack, mock_validate
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config()
+        config.data.packing = True
+        setup_training(config)
+
+        mock_pack.assert_not_called()
+
+
 class TestAsyncCheckpointWiring:
     @patch("trainlib.recipes.base.register_checkpoint_callbacks")
     @patch("trainlib.recipes.base.load_model")

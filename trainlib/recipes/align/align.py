@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from trainlib.config.schema import (
@@ -9,6 +10,10 @@ from trainlib.config.schema import (
     TrainerConfig,
 )
 from trainlib.recipes import base as _base
+from trainlib.recipes.align.loss_dispatch import (
+    create_alignment_loss_fn,
+    is_alignment_method,
+)
 from trainlib.trainer.callbacks import TrainState
 
 
@@ -27,7 +32,9 @@ def align(
 ) -> TrainState:
     if config is None:
         if model is None or dataset is None:
-            raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")
+            raise ValueError(
+                "Either 'config' or both 'model' and 'dataset' are required."
+            )
 
         trainer_fields = {}
         trainer_param_names = {f for f in TrainerConfig.model_fields}
@@ -50,9 +57,22 @@ def align(
 
     components = _base.setup_training(config, resume_from=resume_from)
 
+    loss_fn = None
+    if is_alignment_method(config.method):
+        ref_model = copy.deepcopy(components.model)
+        ref_model.eval()
+        for param in ref_model.parameters():
+            param.requires_grad = False
+
+        loss_fn = create_alignment_loss_fn(
+            method=config.method,
+            ref_model=ref_model,
+        )
+
     state = components.trainer.train(
         model=components.model,
         train_dataloader=components.train_dataloader,
+        loss_fn=loss_fn,
         resume_state=components.resume_state,
         resume_checkpoint_dir=resume_from,
     )

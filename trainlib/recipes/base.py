@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 
 from trainlib.config.schema import TrainConfig
 from trainlib.data import load_dataset
+from trainlib.data.packing import pack_sequences
 from trainlib.data.validation import validate_dataset_sample
 from trainlib.models import apply_lora, load_model
 from trainlib.trainer import CallbackManager, Trainer
@@ -102,6 +103,28 @@ def setup_training(
     else:
         train_data = dataset  # type: ignore[assignment]
         eval_data = None
+
+    if (
+        config.data.packing
+        and config.data.max_seq_length > 0
+        and isinstance(train_data, list)
+        and train_data
+        and isinstance(train_data[0], dict)
+        and "input_ids" in train_data[0]
+        and isinstance(train_data[0]["input_ids"], list)
+    ):
+        pad_id = getattr(model_result.tokenizer, "pad_token_id", 0) or 0
+        train_data = pack_sequences(
+            train_data,
+            max_seq_length=config.data.max_seq_length,
+            pad_token_id=pad_id,
+        )
+        if eval_data is not None:
+            eval_data = pack_sequences(
+                eval_data,
+                max_seq_length=config.data.max_seq_length,
+                pad_token_id=pad_id,
+            )
 
     # Create DataLoaders with DistributedSampler when needed
     sampler: Any = None

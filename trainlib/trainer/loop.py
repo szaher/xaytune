@@ -43,6 +43,7 @@ class Trainer:
         train_dataloader: Any,
         optimizer: Any | None = None,
         scheduler: Any | None = None,
+        loss_fn: Any | None = None,
         resume_state: TrainState | None = None,
         resume_checkpoint_dir: str | None = None,
     ) -> TrainState:
@@ -53,6 +54,7 @@ class Trainer:
                 weight_decay=self.config.weight_decay,
             )
         self._optimizer = optimizer
+        self._loss_fn = loss_fn
 
         # Determine device type for autocast
         self._device_type = detect_device_type_from_model(model)
@@ -165,10 +167,16 @@ class Trainer:
         if self._amp_dtype is not None:
             with torch.amp.autocast(self._device_type, dtype=self._amp_dtype):
                 outputs = model(**batch) if isinstance(batch, dict) else model(batch)
-                loss = outputs.loss if hasattr(outputs, "loss") else outputs
+                if self._loss_fn is not None:
+                    loss = self._loss_fn(model, batch, outputs)
+                else:
+                    loss = outputs.loss if hasattr(outputs, "loss") else outputs
         else:
             outputs = model(**batch) if isinstance(batch, dict) else model(batch)
-            loss = outputs.loss if hasattr(outputs, "loss") else outputs
+            if self._loss_fn is not None:
+                loss = self._loss_fn(model, batch, outputs)
+            else:
+                loss = outputs.loss if hasattr(outputs, "loss") else outputs
 
         if self.config.gradient_accumulation > 1:
             loss = loss / self.config.gradient_accumulation

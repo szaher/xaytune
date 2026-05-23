@@ -335,3 +335,58 @@ class TestSchedulerIntegration:
             model=model, train_dataloader=dl, scheduler=mock_scheduler
         )
         assert mock_scheduler.step.call_count == 4
+
+
+class TestCustomLossFn:
+    def test_custom_loss_fn_overrides_default(self):
+        config = TrainerConfig(num_epochs=1, max_steps=2)
+        trainer = Trainer(config=config)
+
+        custom_loss = MagicMock(
+            return_value=torch.tensor(0.42, requires_grad=True)
+        )
+
+        mock_model = MagicMock()
+        mock_model.return_value = MagicMock()
+        mock_model.return_value.loss = torch.tensor(
+            999.0, requires_grad=True
+        )
+
+        mock_optimizer = MagicMock()
+        dl = [
+            {"input_ids": torch.tensor([[1, 2]])},
+            {"input_ids": torch.tensor([[3, 4]])},
+        ]
+
+        state = trainer.train(
+            model=mock_model,
+            train_dataloader=dl,
+            optimizer=mock_optimizer,
+            scheduler=MagicMock(),
+            loss_fn=custom_loss,
+        )
+
+        assert custom_loss.call_count == 2
+        assert abs(state.metrics["loss"] - 0.42) < 1e-5
+
+    def test_no_loss_fn_uses_model_loss(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+
+        mock_model = MagicMock()
+        mock_model.return_value = MagicMock()
+        mock_model.return_value.loss = torch.tensor(
+            1.23, requires_grad=True
+        )
+
+        mock_optimizer = MagicMock()
+        dl = [{"input_ids": torch.tensor([[1, 2]])}]
+
+        state = trainer.train(
+            model=mock_model,
+            train_dataloader=dl,
+            optimizer=mock_optimizer,
+            scheduler=MagicMock(),
+        )
+
+        assert abs(state.metrics["loss"] - 1.23) < 1e-5

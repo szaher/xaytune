@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -138,3 +139,113 @@ class TestWrapModelDistributed:
     def test_invalid_strategy_raises(self):
         with pytest.raises(ValueError, match="Unknown strategy"):
             wrap_model_distributed(MagicMock(), strategy="invalid", ctx=DistributedContext())
+
+
+class TestWrapModelFSDP:
+    @patch("torch.distributed.fsdp.FullyShardedDataParallel")
+    def test_fsdp_with_full_shard(self, mock_fsdp):
+        from trainlib.config.schema import FSDPConfig
+
+        mock_fsdp.return_value = MagicMock()
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        fsdp_config = FSDPConfig(sharding_strategy="full_shard")
+
+        wrap_model_distributed(model, strategy="fsdp", ctx=ctx, fsdp_config=fsdp_config)
+
+        mock_fsdp.assert_called_once()
+        call_kwargs = mock_fsdp.call_args[1]
+        assert "sharding_strategy" in call_kwargs
+
+    @patch("torch.distributed.fsdp.FullyShardedDataParallel")
+    def test_fsdp_with_cpu_offload(self, mock_fsdp):
+        from trainlib.config.schema import FSDPConfig
+
+        mock_fsdp.return_value = MagicMock()
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        fsdp_config = FSDPConfig(cpu_offload=True)
+
+        wrap_model_distributed(model, strategy="fsdp", ctx=ctx, fsdp_config=fsdp_config)
+
+        call_kwargs = mock_fsdp.call_args[1]
+        assert "cpu_offload" in call_kwargs
+
+    @patch("torch.distributed.fsdp.FullyShardedDataParallel")
+    def test_fsdp_with_shard_grad_op(self, mock_fsdp):
+        from trainlib.config.schema import FSDPConfig
+
+        mock_fsdp.return_value = MagicMock()
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        fsdp_config = FSDPConfig(sharding_strategy="shard_grad_op")
+
+        wrap_model_distributed(model, strategy="fsdp", ctx=ctx, fsdp_config=fsdp_config)
+        mock_fsdp.assert_called_once()
+
+    @patch("torch.distributed.fsdp.FullyShardedDataParallel")
+    def test_fsdp_with_mixed_precision(self, mock_fsdp):
+        from trainlib.config.schema import FSDPConfig
+
+        mock_fsdp.return_value = MagicMock()
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        fsdp_config = FSDPConfig(mixed_precision=True)
+
+        wrap_model_distributed(
+            model, strategy="fsdp", ctx=ctx, fsdp_config=fsdp_config, mixed_precision="bf16"
+        )
+
+        call_kwargs = mock_fsdp.call_args[1]
+        assert "mixed_precision" in call_kwargs
+
+    @patch("torch.distributed.fsdp.FullyShardedDataParallel")
+    def test_fsdp_without_config_uses_defaults(self, mock_fsdp):
+        mock_fsdp.return_value = MagicMock()
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+
+        wrap_model_distributed(model, strategy="fsdp", ctx=ctx)
+        mock_fsdp.assert_called_once_with(model)
+
+
+class TestWrapModelDeepSpeed:
+    def test_deepspeed_initializes_engine(self):
+        from trainlib.config.schema import DeepSpeedConfig
+
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        ds_config = DeepSpeedConfig(zero_stage=2)
+
+        mock_engine = MagicMock()
+        with patch.dict("sys.modules", {"deepspeed": MagicMock()}):
+            import sys
+
+            mock_ds = sys.modules["deepspeed"]
+            mock_ds.initialize.return_value = (mock_engine, None, None, None)
+
+            result = wrap_model_distributed(
+                model, strategy="deepspeed", ctx=ctx, deepspeed_config=ds_config
+            )
+
+        assert result == mock_engine
+
+    def test_deepspeed_without_config_returns_model(self):
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+
+        result = wrap_model_distributed(model, strategy="deepspeed", ctx=ctx)
+        assert result is model
+
+
+class TestWrapModelDDP:
+    @patch("torch.nn.parallel.DistributedDataParallel")
+    def test_ddp_uses_find_unused_parameters_false(self, mock_ddp):
+        mock_ddp.return_value = MagicMock()
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+
+        wrap_model_distributed(model, strategy="ddp", ctx=ctx)
+
+        call_kwargs = mock_ddp.call_args[1]
+        assert call_kwargs["find_unused_parameters"] is False

@@ -38,6 +38,13 @@ def validate_config(config: TrainConfig) -> None:
             "Suggestion: typical values are 1e-5 to 5e-4."
         )
 
+    if config.trainer.warmup_steps > 0 and config.trainer.warmup_ratio > 0.0:
+        errors.append(
+            "trainer.warmup_steps and trainer.warmup_ratio are mutually exclusive — "
+            "set one to 0. Suggestion: use warmup_steps for an exact count, "
+            "or warmup_ratio for a fraction of total steps."
+        )
+
     if config.recipe == "align" and config.method not in _ALIGN_METHODS:
         errors.append(
             f"Recipe 'align' requires an alignment method "

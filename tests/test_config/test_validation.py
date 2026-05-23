@@ -96,3 +96,28 @@ class TestValidateConfig:
         with pytest.raises(ConfigValidationError) as exc_info:
             validate_config(cfg)
         assert "suggestion" in str(exc_info.value).lower() or "set" in str(exc_info.value).lower()
+
+    def test_warmup_steps_and_ratio_both_set(self):
+        cfg = self._make_config(
+            trainer=TrainerConfig(warmup_steps=100, warmup_ratio=0.1),
+        )
+        with pytest.raises(ConfigValidationError, match="mutually exclusive"):
+            validate_config(cfg)
+
+    def test_warmup_steps_only_passes(self):
+        cfg = self._make_config(
+            trainer=TrainerConfig(warmup_steps=100, warmup_ratio=0.0),
+        )
+        validate_config(cfg)
+
+    def test_warmup_ratio_only_passes(self):
+        cfg = self._make_config(
+            trainer=TrainerConfig(warmup_steps=0, warmup_ratio=0.1),
+        )
+        validate_config(cfg)
+
+    def test_warmup_both_zero_passes(self):
+        cfg = self._make_config(
+            trainer=TrainerConfig(warmup_steps=0, warmup_ratio=0.0),
+        )
+        validate_config(cfg)

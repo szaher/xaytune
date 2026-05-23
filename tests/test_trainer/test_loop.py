@@ -75,7 +75,12 @@ class TestTrainer:
             {"input_ids": MagicMock(), "attention_mask": MagicMock(), "labels": MagicMock()},
         ]
 
-        trainer.train(model=mock_model, train_dataloader=mock_dataloader, optimizer=mock_optimizer)
+        trainer.train(
+            model=mock_model,
+            train_dataloader=mock_dataloader,
+            optimizer=mock_optimizer,
+            scheduler=MagicMock(),
+        )
 
         assert "train_start" in events
         assert "train_end" in events
@@ -103,7 +108,10 @@ class TestTrainer:
         ]
 
         state = trainer.train(
-            model=mock_model, train_dataloader=mock_dataloader, optimizer=mock_optimizer
+            model=mock_model,
+            train_dataloader=mock_dataloader,
+            optimizer=mock_optimizer,
+            scheduler=MagicMock(),
         )
         assert state.should_stop is True
         assert state.global_step <= 2
@@ -134,24 +142,24 @@ class TestMixedPrecision:
         assert trainer._amp_dtype is None
         assert trainer._scaler is None
 
-    def test_bf16_sets_autocast_dtype(self):
-        """bf16 should use autocast with bfloat16, no scaler."""
+    def test_bf16_on_cpu_disables_amp(self):
+        """bf16 on CPU should disable AMP (CPU doesn't support autocast)."""
         config = TrainerConfig(mixed_precision="bf16", num_epochs=1, max_steps=1)
         trainer = Trainer(config=config)
         model, dl = self._make_model_and_dataloader()
         state = trainer.train(model=model, train_dataloader=dl)
         assert state.global_step == 1
-        assert trainer._amp_dtype == torch.bfloat16
+        assert trainer._amp_dtype is None
         assert trainer._scaler is None
 
-    def test_fp16_on_cpu_no_scaler(self):
-        """fp16 on CPU should set autocast dtype but no scaler."""
+    def test_fp16_on_cpu_disables_amp(self):
+        """fp16 on CPU should disable AMP (CPU doesn't support autocast)."""
         config = TrainerConfig(mixed_precision="fp16", num_epochs=1, max_steps=1)
         trainer = Trainer(config=config)
         model, dl = self._make_model_and_dataloader()
         state = trainer.train(model=model, train_dataloader=dl)
         assert state.global_step == 1
-        assert trainer._amp_dtype == torch.float16
+        assert trainer._amp_dtype is None
         assert trainer._scaler is None
 
     def test_training_completes_with_all_precision_modes(self):
@@ -256,3 +264,74 @@ class TestResumeTraining:
         resume = TrainState(epoch=0, step=0, global_step=0)
         trainer.train(model=model, train_dataloader=dl, resume_state=resume)
         assert "train_start" in events
+
+
+class TestSchedulerIntegration:
+    def _make_model_and_dataloader(self, num_samples=4):
+        model = MagicMock()
+        model.parameters.return_value = [torch.randn(10, requires_grad=True)]
+        mock_output = MagicMock()
+        mock_output.loss = torch.tensor(0.5, requires_grad=True)
+        model.return_value = mock_output
+        model.__call__ = MagicMock(return_value=mock_output)
+        dataloader = [
+            {"input_ids": torch.tensor([i]), "labels": torch.tensor([i])}
+            for i in range(num_samples)
+        ]
+        return model, dataloader
+
+    def test_scheduler_created_from_config(self):
+        config = TrainerConfig(
+            num_epochs=1, max_steps=2, batch_size=1, scheduler="cosine"
+        )
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader()
+        trainer.train(model=model, train_dataloader=dl)
+        assert trainer._scheduler is not None
+
+    def test_scheduler_stepped_each_optimizer_step(self):
+        config = TrainerConfig(num_epochs=1, max_steps=3, batch_size=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(5)
+
+        mock_scheduler = MagicMock()
+        trainer.train(
+            model=model, train_dataloader=dl, scheduler=mock_scheduler
+        )
+        assert mock_scheduler.step.call_count == 3
+
+    def test_external_scheduler_used_when_provided(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1, batch_size=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader()
+
+        ext_scheduler = MagicMock()
+        trainer.train(
+            model=model, train_dataloader=dl, scheduler=ext_scheduler
+        )
+        assert trainer._scheduler is ext_scheduler
+
+    def test_scheduler_with_warmup_steps(self):
+        config = TrainerConfig(
+            num_epochs=1, max_steps=4, batch_size=1,
+            scheduler="cosine", warmup_steps=2,
+        )
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(6)
+        state = trainer.train(model=model, train_dataloader=dl)
+        assert state.global_step == 4
+        assert trainer._scheduler is not None
+
+    def test_scheduler_with_gradient_accumulation(self):
+        config = TrainerConfig(
+            num_epochs=1, max_steps=4, batch_size=1,
+            gradient_accumulation=1, scheduler="linear",
+        )
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(6)
+
+        mock_scheduler = MagicMock()
+        trainer.train(
+            model=model, train_dataloader=dl, scheduler=mock_scheduler
+        )
+        assert mock_scheduler.step.call_count == 4

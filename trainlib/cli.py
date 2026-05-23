@@ -293,7 +293,10 @@ def _handle_launch(args: argparse.Namespace) -> int:
     if nproc is None:
         import torch
 
-        nproc = torch.cuda.device_count() if torch.cuda.is_available() else 1
+        if torch.cuda.is_available():
+            nproc = torch.cuda.device_count()
+        else:
+            nproc = 1
 
     cmd = [
         sys.executable,

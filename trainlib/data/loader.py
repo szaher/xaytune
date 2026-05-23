@@ -22,13 +22,46 @@ def _split_dataset(data: list[dict], eval_split: float) -> tuple[list[dict], lis
     return data[:split_idx], data[split_idx:]
 
 
+def _load_huggingface(
+    path: str,
+    *,
+    format: str,
+    streaming: bool = False,
+    eval_split: float = 0.0,
+) -> Any:
+    import datasets
+
+    format_fn = format_registry.get(format)
+
+    if eval_split > 0 and not streaming:
+        ds = datasets.load_dataset(path, split="train")
+        split = ds.train_test_split(test_size=eval_split)
+        train = [format_fn(sample) for sample in split["train"]]
+        val = [format_fn(sample) for sample in split["test"]]
+        return train, val
+
+    if streaming:
+        ds = datasets.load_dataset(path, split="train", streaming=True)
+        return ds.map(format_fn)
+
+    ds = datasets.load_dataset(path, split="train")
+    return [format_fn(sample) for sample in ds]
+
+
 def load_dataset(
     path: str,
     *,
     format: str,
+    source: str = "local",
+    streaming: bool = False,
     eval_split: float = 0.0,
     **kwargs: Any,
 ) -> list[dict] | tuple[list[dict], list[dict]]:
+    if source == "huggingface":
+        return _load_huggingface(
+            path, format=format, streaming=streaming, eval_split=eval_split,
+        )
+
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"Dataset not found: {path}")

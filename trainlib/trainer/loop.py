@@ -6,6 +6,12 @@ import torch
 
 from trainlib.config.schema import TrainerConfig
 from trainlib.trainer.callbacks import CallbackManager, TrainState
+from trainlib.trainer.device import (
+    detect_device_type_from_model,
+    supports_amp,
+    supports_grad_scaler,
+)
+from trainlib.trainer.scheduler import create_scheduler, resolve_warmup_steps
 
 
 class Trainer:
@@ -49,26 +55,41 @@ class Trainer:
         self._optimizer = optimizer
 
         # Determine device type for autocast
-        self._device_type = "cpu"
-        try:
-            first_param = next(iter(model.parameters()))
-            if first_param.is_cuda:
-                self._device_type = "cuda"
-        except (StopIteration, TypeError):
-            pass
+        self._device_type = detect_device_type_from_model(model)
 
         # Set up mixed precision
         self._amp_dtype: torch.dtype | None = None
         self._scaler: torch.amp.GradScaler | None = None
         if self.config.mixed_precision == "fp16":
             self._amp_dtype = torch.float16
-            if self._device_type == "cuda":
-                self._scaler = torch.amp.GradScaler()
         elif self.config.mixed_precision == "bf16":
             self._amp_dtype = torch.bfloat16
-        # fp32 → no autocast, no scaler
 
-        # Resume optimizer/scaler state from checkpoint
+        if self._amp_dtype is not None and not supports_amp(self._device_type):
+            self._amp_dtype = None
+        if supports_grad_scaler(self._device_type, self._amp_dtype):
+            self._scaler = torch.amp.GradScaler()
+
+        # Create learning rate scheduler
+        if scheduler is None:
+            num_batches = len(train_dataloader)
+            steps_per_epoch = num_batches
+            if self.config.gradient_accumulation > 1:
+                steps_per_epoch = num_batches // self.config.gradient_accumulation
+            total_steps = steps_per_epoch * self.config.num_epochs
+            if self.config.max_steps > 0:
+                total_steps = min(total_steps, self.config.max_steps)
+            warmup = resolve_warmup_steps(
+                self.config.warmup_steps,
+                self.config.warmup_ratio,
+                total_steps,
+            )
+            scheduler = create_scheduler(
+                optimizer, self.config.scheduler, total_steps, warmup
+            )
+        self._scheduler = scheduler
+
+        # Resume optimizer/scaler/scheduler state from checkpoint
         if resume_checkpoint_dir:
             from pathlib import Path
 
@@ -78,6 +99,9 @@ class Trainer:
             scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"
             if self._scaler is not None and scaler_path.exists():
                 self._scaler.load_state_dict(torch.load(scaler_path, weights_only=True))
+            scheduler_path = Path(resume_checkpoint_dir) / "scheduler.pt"
+            if self._scheduler is not None and scheduler_path.exists():
+                self._scheduler.load_state_dict(torch.load(scheduler_path, weights_only=True))
 
         if resume_state is not None:
             state = TrainState(
@@ -167,5 +191,10 @@ class Trainer:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
                 optimizer.step()
             optimizer.zero_grad()
+            if self._scheduler is not None:
+                self._scheduler.step()
+                last_lr = self._scheduler.get_last_lr()
+                if last_lr:
+                    state.metrics["learning_rate"] = last_lr[0]
 
         return loss.item() if hasattr(loss, "item") else float(loss)

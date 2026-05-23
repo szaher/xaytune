@@ -47,11 +47,14 @@ class TrainerConfig(BaseModel):
     max_steps: int = -1
     warmup_steps: int = 0
     warmup_ratio: float = 0.0
+    scheduler: Literal["cosine", "linear", "constant", "constant_with_warmup"] = "cosine"
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
     seed: int = 42
     checkpoint_every_n_steps: int = 500
     save_last: bool = True
+    activation_checkpointing: bool = False
+    async_checkpoint: bool = False
 
     @field_validator("strategy")
     @classmethod
@@ -66,6 +69,9 @@ class EvalConfig(BaseModel):
     every_n_steps: int = 500
     metrics: list[str] = ["loss", "perplexity"]
     benchmarks: list[str] = []
+    early_stopping_patience: int = 0
+    early_stopping_metric: str = "eval_loss"
+    early_stopping_min_delta: float = 0.0
 
 
 class LoggingConfig(BaseModel):

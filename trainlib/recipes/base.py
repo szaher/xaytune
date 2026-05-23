@@ -10,12 +10,16 @@ from trainlib.models import apply_lora, load_model
 from trainlib.trainer import CallbackManager, Trainer
 from trainlib.trainer.checkpoint_callback import register_checkpoint_callbacks
 from trainlib.trainer.checkpointing import load_checkpoint
+from trainlib.trainer.device import seed_all
 from trainlib.trainer.distributed import (
     cleanup_distributed,
     get_strategy,
     init_distributed,
     wrap_model_distributed,
 )
+from trainlib.trainer.early_stopping import register_early_stopping_callbacks
+from trainlib.trainer.eval_callback import register_eval_callbacks
+from trainlib.trainer.progress import register_progress_callbacks
 
 
 class TrainingComponents(NamedTuple):
@@ -33,6 +37,9 @@ def setup_training(
     callback_manager: CallbackManager | None = None,
     resume_from: str | None = None,
 ) -> TrainingComponents:
+    # Set random seeds for reproducibility
+    seed_all(config.trainer.seed)
+
     # Initialize distributed context
     ctx = init_distributed()
     strategy = get_strategy(config.trainer.strategy, ctx.world_size)
@@ -61,6 +68,13 @@ def setup_training(
 
     # Move model to correct device
     model = model_result.model
+
+    if config.trainer.activation_checkpointing:
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
+
     model.to(ctx.device)
 
     # Wrap model for distributed training
@@ -77,6 +91,8 @@ def setup_training(
     dataset = load_dataset(
         config.data.path,
         format=config.data.format,
+        source=config.data.source,
+        streaming=config.data.streaming,
         eval_split=config.data.eval_split,
     )
 
@@ -141,6 +157,31 @@ def setup_training(
         callback_manager=cb_manager,
     )
 
+    # Set up logging
+    from trainlib.logging import setup_logging
+
+    logging_manager = setup_logging(
+        config.logging,
+        cb_manager,
+        output_dir=config.output.dir,
+        rank=ctx.rank,
+    )
+
+    @cb_manager.on("train_start")
+    def _log_config(state: Any) -> None:
+        logging_manager.log_config(config.model_dump())
+
+    # Set up async checkpoint saver if requested
+    async_saver = None
+    if config.trainer.async_checkpoint:
+        from trainlib.trainer.async_checkpoint import AsyncCheckpointSaver
+
+        async_saver = AsyncCheckpointSaver()
+
+        @cb_manager.on("train_end")
+        def _wait_async_saver(state: Any) -> None:
+            async_saver.wait()
+
     # Register checkpoint callbacks
     register_checkpoint_callbacks(
         callback_manager=cb_manager,
@@ -149,6 +190,57 @@ def setup_training(
         output_dir=config.output.dir,
         checkpoint_every_n_steps=config.trainer.checkpoint_every_n_steps,
         save_last=config.trainer.save_last,
+        is_main_process=ctx.is_main_process,
+        async_saver=async_saver,
+    )
+
+    # Register eval callbacks if eval data is available
+    if eval_dataloader is not None and config.eval.every_n_steps > 0:
+        register_eval_callbacks(
+            callback_manager=cb_manager,
+            model=model,
+            eval_dataloader=eval_dataloader,
+            every_n_steps=config.eval.every_n_steps,
+            metrics=config.eval.metrics,
+            is_main_process=ctx.is_main_process,
+        )
+
+    # Register early stopping if configured
+    if config.eval.early_stopping_patience > 0 and eval_dataloader is not None:
+        register_early_stopping_callbacks(
+            callback_manager=cb_manager,
+            patience=config.eval.early_stopping_patience,
+            metric=config.eval.early_stopping_metric,
+            min_delta=config.eval.early_stopping_min_delta,
+        )
+
+    # Auto-merge LoRA adapters on training completion
+    if config.output.merge_on_complete and config.method in ("lora", "qlora"):
+
+        @cb_manager.on("train_end")
+        def _merge_on_complete(state: Any) -> None:
+            if not ctx.is_main_process:
+                return
+            if hasattr(model, "merge_and_unload"):
+                merged = model.merge_and_unload()
+                save_dir = f"{config.output.dir}/merged"
+                from pathlib import Path
+
+                Path(save_dir).mkdir(parents=True, exist_ok=True)
+                merged.save_pretrained(save_dir)
+                model_result.tokenizer.save_pretrained(save_dir)
+
+    # Register progress bar
+    total_steps = len(train_dataloader)
+    if config.trainer.gradient_accumulation > 1:
+        total_steps = total_steps // config.trainer.gradient_accumulation
+    total_steps *= config.trainer.num_epochs
+    if config.trainer.max_steps > 0:
+        total_steps = min(total_steps, config.trainer.max_steps)
+
+    register_progress_callbacks(
+        callback_manager=cb_manager,
+        total_steps=total_steps,
         is_main_process=ctx.is_main_process,
     )
 

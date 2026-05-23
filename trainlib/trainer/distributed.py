@@ -6,6 +6,8 @@ from typing import Any
 
 import torch
 
+from trainlib.trainer.device import get_device
+
 
 @dataclass
 class DistributedContext:
@@ -23,11 +25,7 @@ class DistributedContext:
 
     @property
     def device(self) -> torch.device:
-        if self.is_distributed:
-            return torch.device(f"cuda:{self.local_rank}")
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
+        return get_device(self.local_rank)
 
 
 def get_strategy(strategy: str, world_size: int = 1) -> str:

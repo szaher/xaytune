@@ -1,6 +1,7 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -74,3 +75,57 @@ class TestLoadDataset:
             train_ds, eval_ds = load_dataset(str(path), format="alpaca", eval_split=0.2)
             assert len(train_ds) + len(eval_ds) == 20
             assert len(eval_ds) == 4
+
+
+class TestLoadDatasetHuggingFace:
+    @patch("datasets.load_dataset")
+    def test_hf_source_loads_from_hub(self, mock_hf_load):
+        mock_ds = MagicMock()
+        mock_ds.__iter__ = MagicMock(return_value=iter([
+            {"text": "hello"},
+            {"text": "world"},
+        ]))
+        mock_ds.__len__ = MagicMock(return_value=2)
+        mock_hf_load.return_value = mock_ds
+
+        result = load_dataset("org/dataset", format="text", source="huggingface")
+
+        mock_hf_load.assert_called_once_with("org/dataset", split="train")
+        assert len(result) == 2
+
+    @patch("datasets.load_dataset")
+    def test_hf_source_with_eval_split(self, mock_hf_load):
+        train_ds = MagicMock()
+        train_ds.__iter__ = MagicMock(return_value=iter([{"text": f"t{i}"} for i in range(8)]))
+        train_ds.__len__ = MagicMock(return_value=8)
+
+        eval_ds = MagicMock()
+        eval_ds.__iter__ = MagicMock(return_value=iter([{"text": f"e{i}"} for i in range(2)]))
+        eval_ds.__len__ = MagicMock(return_value=2)
+
+        mock_raw = MagicMock()
+        mock_raw.train_test_split.return_value = {"train": train_ds, "test": eval_ds}
+        mock_hf_load.return_value = mock_raw
+
+        train, val = load_dataset(
+            "org/dataset", format="text", source="huggingface", eval_split=0.2,
+        )
+
+        mock_raw.train_test_split.assert_called_once_with(test_size=0.2)
+        assert len(train) == 8
+        assert len(val) == 2
+
+    @patch("datasets.load_dataset")
+    def test_hf_streaming_returns_iterable(self, mock_hf_load):
+        mock_ds = MagicMock()
+        mock_ds.map.return_value = mock_ds
+        mock_hf_load.return_value = mock_ds
+
+        load_dataset(
+            "org/dataset", format="text", source="huggingface", streaming=True,
+        )
+
+        mock_hf_load.assert_called_once_with(
+            "org/dataset", split="train", streaming=True,
+        )
+        mock_ds.map.assert_called_once()

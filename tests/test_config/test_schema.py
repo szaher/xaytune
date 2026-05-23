@@ -84,6 +84,37 @@ class TestTrainerConfig:
         assert cfg.checkpoint_every_n_steps == 500
         assert cfg.save_last is True
 
+    def test_activation_checkpointing_default_false(self):
+        cfg = TrainerConfig()
+        assert cfg.activation_checkpointing is False
+
+    def test_activation_checkpointing_enabled(self):
+        cfg = TrainerConfig(activation_checkpointing=True)
+        assert cfg.activation_checkpointing is True
+
+    def test_async_checkpoint_default_false(self):
+        cfg = TrainerConfig()
+        assert cfg.async_checkpoint is False
+
+    def test_async_checkpoint_enabled(self):
+        cfg = TrainerConfig(async_checkpoint=True)
+        assert cfg.async_checkpoint is True
+
+    def test_scheduler_default_cosine(self):
+        cfg = TrainerConfig()
+        assert cfg.scheduler == "cosine"
+
+    def test_scheduler_valid_values(self):
+        for sched in ("cosine", "linear", "constant", "constant_with_warmup"):
+            cfg = TrainerConfig(scheduler=sched)
+            assert cfg.scheduler == sched
+
+    def test_scheduler_invalid_value(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            TrainerConfig(scheduler="invalid")
+
 
 class TestEvalConfig:
     def test_defaults(self):

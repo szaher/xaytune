@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
+from trainlib.config.schema import DataConfig, ModelConfig, OutputConfig, TrainConfig, TrainerConfig
 from trainlib.models.loader import ModelResult
 from trainlib.recipes.base import TrainingComponents, setup_training
 from trainlib.trainer.callbacks import TrainState
@@ -497,3 +497,170 @@ class TestSetupTrainingResume:
         components = setup_training(config)
 
         assert components.resume_state is None
+
+
+class TestSeedSetting:
+    @patch("trainlib.recipes.base.seed_all")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_seed_applied(self, mock_load_ds, mock_load_model, mock_seed_all):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config()
+        config.trainer.seed = 123
+        setup_training(config)
+
+        mock_seed_all.assert_called_once_with(123)
+
+
+class TestActivationCheckpointing:
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_enabled_calls_gradient_checkpointing(
+        self, mock_load_ds, mock_load_model
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config(activation_checkpointing=True)
+        components = setup_training(config)
+
+        components.model.gradient_checkpointing_enable.assert_called_once_with(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_disabled_skips_gradient_checkpointing(
+        self, mock_load_ds, mock_load_model
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config(activation_checkpointing=False)
+        components = setup_training(config)
+
+        components.model.gradient_checkpointing_enable.assert_not_called()
+
+
+class TestMergeOnComplete:
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_merge_called_for_lora(self, mock_load_ds, mock_load_model):
+        mr = _mock_model_result()
+        merged_model = MagicMock()
+        mr.model.merge_and_unload.return_value = merged_model
+        mock_load_model.return_value = mr
+
+        with patch("trainlib.recipes.base.apply_lora") as mock_apply_lora:
+            lora_result = MagicMock()
+            lora_result.model = mr.model
+            lora_result.tokenizer = mr.tokenizer
+            mock_apply_lora.return_value = lora_result
+            mock_load_ds.return_value = _mock_dataset()
+
+            config = TrainConfig(
+                recipe="finetune",
+                method="lora",
+                model=ModelConfig(name="test-model"),
+                data=DataConfig(path="fake.jsonl", format="alpaca"),
+                trainer=TrainerConfig(
+                    batch_size=2, num_epochs=1, max_steps=1, save_last=False,
+                ),
+                output=OutputConfig(dir="/tmp/test-merge", merge_on_complete=True),
+            )
+            components = setup_training(config)
+
+        state = TrainState()
+        components.trainer.callback_manager.fire("train_end", state)
+
+        mr.model.merge_and_unload.assert_called_once()
+        merged_model.save_pretrained.assert_called_once_with("/tmp/test-merge/merged")
+        mr.tokenizer.save_pretrained.assert_called_once_with("/tmp/test-merge/merged")
+
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_merge_not_called_for_full_finetune(self, mock_load_ds, mock_load_model):
+        mr = _mock_model_result()
+        mock_load_model.return_value = mr
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = TrainConfig(
+            recipe="finetune",
+            method="full",
+            model=ModelConfig(name="test-model"),
+            data=DataConfig(path="fake.jsonl", format="alpaca"),
+            trainer=TrainerConfig(
+                batch_size=2, num_epochs=1, max_steps=1, save_last=False,
+            ),
+            output=OutputConfig(dir="/tmp/test-merge", merge_on_complete=True),
+        )
+        components = setup_training(config)
+
+        state = TrainState()
+        components.trainer.callback_manager.fire("train_end", state)
+
+        mr.model.merge_and_unload.assert_not_called()
+
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_merge_not_called_when_disabled(self, mock_load_ds, mock_load_model):
+        mr = _mock_model_result()
+        mock_load_model.return_value = mr
+        mock_load_ds.return_value = _mock_dataset()
+
+        with patch("trainlib.recipes.base.apply_lora") as mock_apply_lora:
+            lora_result = MagicMock()
+            lora_result.model = mr.model
+            lora_result.tokenizer = mr.tokenizer
+            mock_apply_lora.return_value = lora_result
+
+            config = TrainConfig(
+                recipe="finetune",
+                method="lora",
+                model=ModelConfig(name="test-model"),
+                data=DataConfig(path="fake.jsonl", format="alpaca"),
+                trainer=TrainerConfig(
+                    batch_size=2, num_epochs=1, max_steps=1, save_last=False,
+                ),
+                output=OutputConfig(dir="/tmp/test-merge", merge_on_complete=False),
+            )
+            components = setup_training(config)
+
+        state = TrainState()
+        components.trainer.callback_manager.fire("train_end", state)
+
+        mr.model.merge_and_unload.assert_not_called()
+
+
+class TestAsyncCheckpointWiring:
+    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_async_saver_created_when_enabled(
+        self, mock_load_ds, mock_load_model, mock_register
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config(async_checkpoint=True)
+        setup_training(config)
+
+        call_kwargs = mock_register.call_args.kwargs
+        assert call_kwargs["async_saver"] is not None
+
+    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
+    @patch("trainlib.recipes.base.load_model")
+    @patch("trainlib.recipes.base.load_dataset")
+    def test_no_async_saver_when_disabled(
+        self, mock_load_ds, mock_load_model, mock_register
+    ):
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_ds.return_value = _mock_dataset()
+
+        config = _make_config(async_checkpoint=False)
+        setup_training(config)
+
+        call_kwargs = mock_register.call_args.kwargs
+        assert call_kwargs["async_saver"] is None

@@ -29,19 +29,25 @@ class TestDistributedContext:
 
 
 class TestDistributedContextDevice:
-    def test_device_cpu_when_no_cuda(self):
+    def test_device_cpu_when_no_gpu(self):
         ctx = DistributedContext()
-        with patch("torch.cuda.is_available", return_value=False):
+        with patch("trainlib.trainer.device.get_device_type", return_value="cpu"):
             assert ctx.device == torch.device("cpu")
 
     def test_device_cuda_when_available_single_gpu(self):
         ctx = DistributedContext()
-        with patch("torch.cuda.is_available", return_value=True):
-            assert ctx.device == torch.device("cuda")
+        with patch("trainlib.trainer.device.get_device_type", return_value="cuda"):
+            assert ctx.device == torch.device("cuda:0")
 
     def test_device_cuda_local_rank_when_distributed(self):
         ctx = DistributedContext(rank=2, world_size=4, local_rank=2)
-        assert ctx.device == torch.device("cuda:2")
+        with patch("trainlib.trainer.device.get_device_type", return_value="cuda"):
+            assert ctx.device == torch.device("cuda:2")
+
+    def test_device_mps_when_available(self):
+        ctx = DistributedContext()
+        with patch("trainlib.trainer.device.get_device_type", return_value="mps"):
+            assert ctx.device == torch.device("mps")
 
 
 class TestGetStrategy:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -94,7 +93,7 @@ class TestInitDistributed:
     ):
         env = {"RANK": "0", "WORLD_SIZE": "2", "LOCAL_RANK": "0"}
         with patch.dict(os.environ, env, clear=True):
-            ctx = init_distributed()
+            init_distributed()
         mock_init.assert_not_called()
 
 

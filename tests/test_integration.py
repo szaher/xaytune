@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
 import trainlib
-from trainlib.config import load_config, validate_config
+from trainlib.config import load_config, validate_config  # noqa: F401  used in skipped tests
 from trainlib.config.schema import (
     DataConfig,
     ModelConfig,
@@ -76,7 +75,8 @@ class TestFinetuneIntegration:
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.load_model")
     def test_finetune_lora_returns_train_state(
-        self, mock_load_model, mock_load_dataset, mock_get_peft_model, mock_model_result, mock_dataset
+        self, mock_load_model, mock_load_dataset, mock_get_peft_model,
+        mock_model_result, mock_dataset
     ):
         mock_load_model.return_value = mock_model_result
         mock_load_dataset.return_value = mock_dataset
@@ -421,7 +421,6 @@ class TestGradientAccumulationIntegration:
         mock_load_dataset.return_value = dataset
 
         # Track optimizer calls
-        optimizer_step_count = [0]
         original_model_call = mock_model_result.model.__call__
 
         def track_backward(*args, **kwargs):

@@ -209,7 +209,7 @@ class TestDistributedCleanup:
         mock_load_dataset.return_value = mock_dataset
         mock_wrap.return_value = mock_model_result.model
 
-        state = trainlib.finetune(
+        trainlib.finetune(
             config=TrainConfig(
                 recipe="finetune",
                 model=ModelConfig(name="test-model"),
@@ -240,7 +240,7 @@ class TestDistributedCleanup:
         mock_load_model.return_value = mock_model_result
         mock_load_dataset.return_value = mock_dataset
 
-        state = trainlib.finetune(
+        trainlib.finetune(
             model="test-model",
             dataset="fake.jsonl",
             batch_size=2,
@@ -282,7 +282,7 @@ class TestDistributedAutoStrategy:
             # strategy defaults to "auto"
         )
 
-        state = trainlib.finetune(config=config)
+        trainlib.finetune(config=config)
 
         mock_wrap.assert_called_once()
         assert mock_wrap.call_args[1]["strategy"] == "fsdp"

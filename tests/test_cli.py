@@ -333,7 +333,10 @@ class TestLaunchCommand:
     @patch("subprocess.run")
     def test_launch_forwards_overrides(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
-        main(["launch", "--nproc-per-node", "1", "--config", "c.yaml", "--override", "trainer.lr=1e-4"])
+        main([
+            "launch", "--nproc-per-node", "1", "--config", "c.yaml",
+            "--override", "trainer.lr=1e-4",
+        ])
         cmd = mock_run.call_args[0][0]
         assert "--override" in cmd
         assert "trainer.lr=1e-4" in cmd

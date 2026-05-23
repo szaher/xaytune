@@ -83,13 +83,13 @@ def setup_training(
         eval_data = None
 
     # Create DataLoaders with DistributedSampler when needed
-    sampler = None
+    sampler: Any = None
     shuffle = True
     if ctx.is_distributed:
         from torch.utils.data.distributed import DistributedSampler
 
         sampler = DistributedSampler(
-            train_data,
+            train_data,  # type: ignore[arg-type]
             num_replicas=ctx.world_size,
             rank=ctx.rank,
             shuffle=True,
@@ -103,12 +103,12 @@ def setup_training(
         sampler=sampler,
     )
 
-    eval_sampler = None
+    eval_sampler: Any = None
     if ctx.is_distributed and eval_data is not None:
         from torch.utils.data.distributed import DistributedSampler
 
         eval_sampler = DistributedSampler(
-            eval_data,
+            eval_data,  # type: ignore[arg-type]
             num_replicas=ctx.world_size,
             rank=ctx.rank,
             shuffle=False,

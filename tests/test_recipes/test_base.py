@@ -393,7 +393,7 @@ class TestSetupTrainingDistributed:
     def test_wrap_called_with_correct_args(
         self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
     ):
-        """wrap_model_distributed should receive fsdp_config and deepspeed_config from TrainConfig."""
+        """wrap_model_distributed should receive fsdp_config and deepspeed_config."""
         ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
         mock_init.return_value = ctx
         mr = _mock_model_result()

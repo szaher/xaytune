@@ -15,7 +15,6 @@ from trainlib.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.trainer.callbacks import TrainState
 from trainlib.trainer.checkpointing import save_checkpoint
 
 

@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 
 from trainlib.config.schema import TrainConfig
 from trainlib.data import load_dataset
+from trainlib.data.validation import validate_dataset_sample
 from trainlib.models import apply_lora, load_model
 from trainlib.trainer import CallbackManager, Trainer
 from trainlib.trainer.checkpoint_callback import register_checkpoint_callbacks
@@ -142,6 +143,12 @@ def setup_training(
             shuffle=False,
             sampler=eval_sampler,
         )
+
+    # Validate a sample batch before training
+    validate_dataset_sample(
+        train_dataloader,
+        max_seq_length=config.data.max_seq_length,
+    )
 
     cb_manager = callback_manager or CallbackManager()
 

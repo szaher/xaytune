@@ -69,6 +69,7 @@ class TestTrainingComponents:
         assert "resume_state" in fields
 
 
+@patch("trainlib.recipes.base.validate_dataset_sample")
 class TestSetupTraining:
     def _make_config(self, method="full", **trainer_kwargs):
         return TrainConfig(
@@ -82,7 +83,7 @@ class TestSetupTraining:
     @patch("trainlib.recipes.base.load_model")
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.DataLoader")
-    def test_full_finetune_setup(self, mock_dl_cls, mock_load_ds, mock_load_model):
+    def test_full_finetune_setup(self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
         mock_model_result.tokenizer = MagicMock()
@@ -108,7 +109,7 @@ class TestSetupTraining:
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.DataLoader")
     def test_lora_setup_applies_peft(
-        self, mock_dl_cls, mock_load_ds, mock_load_model, mock_apply_lora
+        self, mock_dl_cls, mock_load_ds, mock_load_model, mock_apply_lora, mock_validate
     ):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
@@ -132,7 +133,9 @@ class TestSetupTraining:
     @patch("trainlib.recipes.base.load_model")
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.DataLoader")
-    def test_qlora_uses_4bit_quantization(self, mock_dl_cls, mock_load_ds, mock_load_model):
+    def test_qlora_uses_4bit_quantization(
+        self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate
+    ):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
         mock_model_result.tokenizer = MagicMock()
@@ -155,7 +158,9 @@ class TestSetupTraining:
     @patch("trainlib.recipes.base.load_model")
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.DataLoader")
-    def test_eval_split_creates_eval_dataloader(self, mock_dl_cls, mock_load_ds, mock_load_model):
+    def test_eval_split_creates_eval_dataloader(
+        self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate
+    ):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
         mock_model_result.tokenizer = MagicMock()
@@ -178,7 +183,9 @@ class TestSetupTraining:
     @patch("trainlib.recipes.base.load_model")
     @patch("trainlib.recipes.base.load_dataset")
     @patch("trainlib.recipes.base.DataLoader")
-    def test_no_eval_split_no_eval_dataloader(self, mock_dl_cls, mock_load_ds, mock_load_model):
+    def test_no_eval_split_no_eval_dataloader(
+        self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate
+    ):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
         mock_model_result.tokenizer = MagicMock()

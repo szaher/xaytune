@@ -1,4 +1,12 @@
-from trainlib.data.formats import format_alpaca, format_chat, format_sharegpt, format_text
+from unittest.mock import MagicMock
+
+from trainlib.data.formats import (
+    apply_chat_template,
+    format_alpaca,
+    format_chat,
+    format_sharegpt,
+    format_text,
+)
 from trainlib.data.registry import format_registry
 
 
@@ -80,3 +88,50 @@ class TestTextFormat:
 
     def test_registered(self):
         assert format_registry.has("text")
+
+
+class TestApplyChatTemplate:
+    def test_chat_format_uses_tokenizer(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "<s>[INST] Hi [/INST] Hello!</s>"
+        sample = {
+            "messages": [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+            ]
+        }
+        result = apply_chat_template(sample, tokenizer, format="chat")
+        tokenizer.apply_chat_template.assert_called_once_with(
+            sample["messages"], tokenize=False, add_generation_prompt=False,
+        )
+        assert result["text"] == "<s>[INST] Hi [/INST] Hello!</s>"
+
+    def test_sharegpt_format_converts_roles(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "<s>User: Hi\nAssistant: Hello!</s>"
+        sample = {
+            "conversations": [
+                {"from": "human", "value": "Hi"},
+                {"from": "gpt", "value": "Hello!"},
+            ]
+        }
+        result = apply_chat_template(sample, tokenizer, format="sharegpt")
+        call_messages = tokenizer.apply_chat_template.call_args[0][0]
+        assert call_messages[0]["role"] == "user"
+        assert call_messages[0]["content"] == "Hi"
+        assert call_messages[1]["role"] == "assistant"
+        assert call_messages[1]["content"] == "Hello!"
+        assert result["text"] == "<s>User: Hi\nAssistant: Hello!</s>"
+
+    def test_sharegpt_preserves_system_role(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "templated"
+        sample = {
+            "conversations": [
+                {"from": "system", "value": "Be helpful"},
+                {"from": "human", "value": "Hi"},
+            ]
+        }
+        apply_chat_template(sample, tokenizer, format="sharegpt")
+        call_messages = tokenizer.apply_chat_template.call_args[0][0]
+        assert call_messages[0]["role"] == "system"

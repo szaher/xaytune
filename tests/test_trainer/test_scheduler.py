@@ -94,7 +94,7 @@ class TestCreateScheduler:
 
     def test_constant_ignores_warmup_steps(self):
         opt = _make_optimizer(lr=0.5)
-        sched = create_scheduler(opt, "constant", total_steps=10, warmup_steps=5)
+        create_scheduler(opt, "constant", total_steps=10, warmup_steps=5)
 
         assert opt.param_groups[0]["lr"] == pytest.approx(0.5)
 

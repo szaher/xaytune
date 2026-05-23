@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from trainlib.data.formats import apply_chat_template
 from trainlib.data.registry import format_registry
 
 
@@ -48,6 +49,13 @@ def _load_huggingface(
     return [format_fn(sample) for sample in ds]
 
 
+def _make_format_fn(format: str, tokenizer: Any | None) -> Any:
+    if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+        if format in ("chat", "sharegpt"):
+            return lambda sample: apply_chat_template(sample, tokenizer, format=format)
+    return format_registry.get(format)
+
+
 def load_dataset(
     path: str,
     *,
@@ -55,6 +63,7 @@ def load_dataset(
     source: str = "local",
     streaming: bool = False,
     eval_split: float = 0.0,
+    tokenizer: Any | None = None,
     **kwargs: Any,
 ) -> list[dict] | tuple[list[dict], list[dict]]:
     if source == "huggingface":
@@ -65,7 +74,7 @@ def load_dataset(
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"Dataset not found: {path}")
-    format_fn = format_registry.get(format)
+    format_fn = _make_format_fn(format, tokenizer)
     raw_data = _load_jsonl(path)
     processed = [format_fn(sample) for sample in raw_data]
     if eval_split > 0:

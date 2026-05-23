@@ -51,3 +51,24 @@ def format_chat(sample: dict[str, Any]) -> dict[str, str]:
 def format_text(sample: dict[str, Any]) -> dict[str, str]:
     text = sample.get("text", sample.get("content", ""))
     return {"text": text}
+
+
+def apply_chat_template(
+    sample: dict[str, Any],
+    tokenizer: Any,
+    *,
+    format: str = "chat",
+) -> dict[str, str]:
+    if format == "sharegpt":
+        role_map = {"human": "user", "gpt": "assistant"}
+        conversations = sample.get("conversations", [])
+        messages = []
+        for turn in conversations:
+            role = turn.get("from", turn.get("role", ""))
+            content = turn.get("value", turn.get("content", ""))
+            messages.append({"role": role_map.get(role, role), "content": content})
+    else:
+        messages = sample.get("messages", [])
+
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+    return {"text": text}

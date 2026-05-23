@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
 import trainlib
-from trainlib.config import load_config, validate_config  # noqa: F401  used in skipped tests
+from trainlib.config import load_config
 from trainlib.config.schema import (
     DataConfig,
     ModelConfig,
@@ -325,13 +326,37 @@ class TestDataLoaderIntegration:
 class TestConfigIntegration:
     """Test config loading and validation end-to-end."""
 
-    def test_load_and_validate_lora_finetune_config(self):
-        # Skip - the example config uses 'base: lora' which references a base config file
-        pytest.skip("Example config uses inheritance which requires base files")
+    def test_load_and_validate_lora_finetune_config(self, tmp_path):
+        defaults_dir = Path(__file__).resolve().parent.parent / "trainlib" / "config" / "defaults"
+        config_yaml = tmp_path / "train.yaml"
+        config_yaml.write_text(
+            f"base: {defaults_dir / 'lora.yaml'}\n"
+            "model:\n"
+            "  name: test-model\n"
+            "data:\n"
+            "  path: data.jsonl\n"
+            "  format: alpaca\n"
+        )
+        config = load_config(str(config_yaml))
+        assert config.recipe == "finetune"
+        assert config.method == "lora"
+        assert config.lora.rank == 16
+        assert config.trainer.learning_rate == 2e-4
 
-    def test_config_with_overrides(self):
-        # Skip - same issue with base config inheritance
-        pytest.skip("Example config uses inheritance which requires base files")
+    def test_config_with_overrides(self, tmp_path):
+        defaults_dir = Path(__file__).resolve().parent.parent / "trainlib" / "config" / "defaults"
+        config_yaml = tmp_path / "train.yaml"
+        config_yaml.write_text(
+            f"base: {defaults_dir / 'lora.yaml'}\n"
+            "model:\n"
+            "  name: test-model\n"
+            "data:\n"
+            "  path: data.jsonl\n"
+            "  format: alpaca\n"
+        )
+        config = load_config(str(config_yaml), overrides=["trainer.batch_size=8"])
+        assert config.trainer.batch_size == 8
+        assert config.method == "lora"
 
     def test_programmatic_config_creation(self):
         config = TrainConfig(

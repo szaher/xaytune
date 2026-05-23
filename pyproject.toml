@@ -34,6 +34,11 @@ dependencies = [
     "rich>=13.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/szaher/trainlib"
+Repository = "https://github.com/szaher/trainlib"
+Issues = "https://github.com/szaher/trainlib/issues"
+
 [project.optional-dependencies]
 deepspeed = ["deepspeed>=0.14"]
 eval = ["lm-eval>=0.4"]

@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import torch
+
 from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
+from trainlib.models.loader import ModelResult
 from trainlib.recipes.base import TrainingComponents, setup_training
+from trainlib.trainer.distributed import DistributedContext
 
 
 class TestTrainingComponents:
@@ -18,6 +25,28 @@ class TestTrainingComponents:
         assert tc.trainer is not None
         assert tc.eval_dataloader is None
 
+    def test_is_namedtuple_with_distributed_ctx(self):
+        tc = TrainingComponents(
+            model=MagicMock(),
+            tokenizer=MagicMock(),
+            train_dataloader=MagicMock(),
+            eval_dataloader=None,
+            trainer=MagicMock(),
+            distributed_ctx=DistributedContext(),
+        )
+        assert tc.distributed_ctx is not None
+        assert not tc.distributed_ctx.is_distributed
+
+    def test_distributed_ctx_defaults_to_none(self):
+        tc = TrainingComponents(
+            model=MagicMock(),
+            tokenizer=MagicMock(),
+            train_dataloader=MagicMock(),
+            eval_dataloader=None,
+            trainer=MagicMock(),
+        )
+        assert tc.distributed_ctx is None
+
     def test_fields(self):
         fields = TrainingComponents._fields
         assert "model" in fields
@@ -25,6 +54,7 @@ class TestTrainingComponents:
         assert "train_dataloader" in fields
         assert "eval_dataloader" in fields
         assert "trainer" in fields
+        assert "distributed_ctx" in fields
 
 
 class TestSetupTraining:
@@ -149,3 +179,234 @@ class TestSetupTraining:
 
         assert mock_dl_cls.call_count == 1
         assert components.eval_dataloader is None
+
+
+# -- Helpers for distributed tests --
+
+
+def _mock_model_result() -> ModelResult:
+    model = MagicMock()
+    model.parameters.return_value = [torch.randn(10, requires_grad=True)]
+    model.to.return_value = model
+    tokenizer = MagicMock()
+    return ModelResult(model=model, tokenizer=tokenizer, name="test")
+
+
+def _mock_dataset() -> list[dict[str, torch.Tensor]]:
+    return [
+        {
+            "input_ids": torch.tensor([1, 2]),
+            "labels": torch.tensor([1, 2]),
+            "attention_mask": torch.tensor([1, 1]),
+        },
+        {
+            "input_ids": torch.tensor([3, 4]),
+            "labels": torch.tensor([3, 4]),
+            "attention_mask": torch.tensor([1, 1]),
+        },
+    ]
+
+
+def _make_config(**trainer_kwargs: Any) -> TrainConfig:
+    return TrainConfig(
+        recipe="finetune",
+        model=ModelConfig(name="test-model"),
+        data=DataConfig(path="fake.jsonl", format="alpaca"),
+        trainer=TrainerConfig(batch_size=2, num_epochs=1, max_steps=1, **trainer_kwargs),
+    )
+
+
+class TestSetupTrainingDistributed:
+    @patch("trainlib.recipes.base.wrap_model_distributed")
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_single_gpu_no_wrapping(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
+    ):
+        """Single GPU: no model wrapping, no DistributedSampler."""
+        mock_init.return_value = DistributedContext()  # default: not distributed
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = _mock_dataset()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        mock_wrap.assert_not_called()
+        assert components.distributed_ctx is not None
+        assert not components.distributed_ctx.is_distributed
+
+    @patch("trainlib.recipes.base.wrap_model_distributed")
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_distributed_wraps_model(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
+    ):
+        """Distributed: model should be wrapped."""
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        mock_init.return_value = ctx
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = _mock_dataset()
+        mock_wrap.return_value = MagicMock()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        mock_wrap.assert_called_once()
+        assert components.distributed_ctx.is_distributed
+
+    @patch("trainlib.recipes.base.wrap_model_distributed", return_value=MagicMock())
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_distributed_uses_distributed_sampler(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
+    ):
+        """Distributed: DataLoader should use DistributedSampler."""
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        mock_init.return_value = ctx
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = _mock_dataset()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        from torch.utils.data.distributed import DistributedSampler
+
+        assert isinstance(components.train_dataloader.sampler, DistributedSampler)
+
+    @patch("trainlib.recipes.base.wrap_model_distributed", return_value=MagicMock())
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_distributed_eval_dataloader_uses_distributed_sampler(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
+    ):
+        """Distributed with eval split: eval DataLoader should use DistributedSampler."""
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        mock_init.return_value = ctx
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = (_mock_dataset(), _mock_dataset())
+
+        config = TrainConfig(
+            recipe="finetune",
+            model=ModelConfig(name="test-model"),
+            data=DataConfig(path="fake.jsonl", format="alpaca", eval_split=0.1),
+            trainer=TrainerConfig(batch_size=2, num_epochs=1, max_steps=1),
+        )
+        components = setup_training(config)
+
+        from torch.utils.data.distributed import DistributedSampler
+
+        assert components.eval_dataloader is not None
+        assert isinstance(components.eval_dataloader.sampler, DistributedSampler)
+
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_single_gpu_no_distributed_sampler(
+        self, mock_load_model, mock_load_dataset, mock_init
+    ):
+        """Single GPU: DataLoader should NOT use DistributedSampler."""
+        mock_init.return_value = DistributedContext()
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = _mock_dataset()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        from torch.utils.data.distributed import DistributedSampler
+
+        assert not isinstance(components.train_dataloader.sampler, DistributedSampler)
+
+    @patch("trainlib.recipes.base.cleanup_distributed")
+    @patch("trainlib.recipes.base.wrap_model_distributed", return_value=MagicMock())
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_cleanup_registered_on_train_end(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap, mock_cleanup
+    ):
+        """Distributed: cleanup_distributed should fire on train_end."""
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        mock_init.return_value = ctx
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = _mock_dataset()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        # Fire train_end to trigger cleanup
+        from trainlib.trainer.callbacks import TrainState
+
+        state = TrainState()
+        components.trainer.callback_manager.fire("train_end", state)
+
+        mock_cleanup.assert_called_once_with(ctx)
+
+    @patch("trainlib.recipes.base.cleanup_distributed")
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_no_cleanup_registered_for_single_gpu(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_cleanup
+    ):
+        """Single GPU: cleanup_distributed should NOT be registered."""
+        mock_init.return_value = DistributedContext()
+        mock_load_model.return_value = _mock_model_result()
+        mock_load_dataset.return_value = _mock_dataset()
+
+        config = _make_config()
+        components = setup_training(config)
+
+        from trainlib.trainer.callbacks import TrainState
+
+        state = TrainState()
+        components.trainer.callback_manager.fire("train_end", state)
+
+        mock_cleanup.assert_not_called()
+
+    @patch("trainlib.recipes.base.wrap_model_distributed")
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_model_moved_to_device(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
+    ):
+        """Model should be moved to the distributed context device."""
+        ctx = DistributedContext()
+        mock_init.return_value = ctx
+        mr = _mock_model_result()
+        mock_load_model.return_value = mr
+        mock_load_dataset.return_value = _mock_dataset()
+
+        config = _make_config()
+        setup_training(config)
+
+        mr.model.to.assert_called_once_with(ctx.device)
+
+    @patch("trainlib.recipes.base.wrap_model_distributed")
+    @patch("trainlib.recipes.base.init_distributed")
+    @patch("trainlib.recipes.base.load_dataset")
+    @patch("trainlib.recipes.base.load_model")
+    def test_wrap_called_with_correct_args(
+        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
+    ):
+        """wrap_model_distributed should receive fsdp_config and deepspeed_config from TrainConfig."""
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        mock_init.return_value = ctx
+        mr = _mock_model_result()
+        mock_load_model.return_value = mr
+        mock_load_dataset.return_value = _mock_dataset()
+        mock_wrap.return_value = MagicMock()
+
+        config = _make_config()
+        setup_training(config)
+
+        call_kwargs = mock_wrap.call_args.kwargs
+        assert call_kwargs["strategy"] == "fsdp"  # auto resolves to fsdp for world_size=2
+        assert call_kwargs["ctx"] is ctx
+        assert call_kwargs["fsdp_config"] is config.fsdp
+        assert call_kwargs["deepspeed_config"] is config.deepspeed_config
+        assert call_kwargs["mixed_precision"] == config.trainer.mixed_precision

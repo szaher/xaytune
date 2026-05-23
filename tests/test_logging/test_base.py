@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 
 from trainlib.logging.base import LoggingBackend, LoggingManager
@@ -122,3 +124,44 @@ class TestLoggingManager:
         cb_manager.fire("train_end", TrainState())
 
         assert backend.closed is True
+
+
+class TestLoggingManagerRankGating:
+    def test_rank0_logs_normally(self):
+        manager = LoggingManager(rank=0)
+        backend = MagicMock(spec=LoggingBackend)
+        manager.add_backend(backend)
+        manager.log_scalar("loss", 0.5, 1)
+        backend.log_scalar.assert_called_once_with("loss", 0.5, 1)
+
+    def test_rank0_logs_config(self):
+        manager = LoggingManager(rank=0)
+        backend = MagicMock(spec=LoggingBackend)
+        manager.add_backend(backend)
+        manager.log_config({"lr": 0.001})
+        backend.log_config.assert_called_once_with({"lr": 0.001})
+
+    def test_non_rank0_suppresses_log_scalar(self):
+        manager = LoggingManager(rank=1)
+        backend = MagicMock(spec=LoggingBackend)
+        manager.add_backend(backend)
+        manager.log_scalar("loss", 0.5, 1)
+        backend.log_scalar.assert_not_called()
+
+    def test_non_rank0_suppresses_log_config(self):
+        manager = LoggingManager(rank=2)
+        backend = MagicMock(spec=LoggingBackend)
+        manager.add_backend(backend)
+        manager.log_config({"lr": 0.001})
+        backend.log_config.assert_not_called()
+
+    def test_non_rank0_still_closes(self):
+        manager = LoggingManager(rank=3)
+        backend = MagicMock(spec=LoggingBackend)
+        manager.add_backend(backend)
+        manager.close()
+        backend.close.assert_called_once()
+
+    def test_default_rank_is_zero(self):
+        manager = LoggingManager()
+        assert manager.rank == 0

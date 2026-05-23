@@ -26,8 +26,9 @@ def setup_logging(
     callback_manager: CallbackManager,
     *,
     output_dir: str = "output",
+    rank: int = 0,
 ) -> LoggingManager:
-    manager = LoggingManager(log_every_n_steps=config.log_every_n_steps)
+    manager = LoggingManager(log_every_n_steps=config.log_every_n_steps, rank=rank)
 
     manager.add_backend(ConsoleBackend())
 

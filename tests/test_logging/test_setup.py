@@ -75,6 +75,18 @@ class TestSetupLogging:
         with pytest.raises(ValueError, match="Unknown logging backend"):
             setup_logging(config, cb)
 
+    def test_setup_logging_passes_rank(self):
+        config = LoggingConfig(backends=["console"])
+        cb = CallbackManager()
+        manager = setup_logging(config, cb, rank=5)
+        assert manager.rank == 5
+
+    def test_setup_logging_default_rank_is_zero(self):
+        config = LoggingConfig(backends=["console"])
+        cb = CallbackManager()
+        manager = setup_logging(config, cb)
+        assert manager.rank == 0
+
 
 class TestModuleExports:
     def test_logging_backend_importable(self):

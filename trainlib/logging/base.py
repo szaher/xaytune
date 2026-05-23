@@ -18,18 +18,23 @@ class LoggingBackend(ABC):
 
 
 class LoggingManager:
-    def __init__(self, log_every_n_steps: int = 10) -> None:
+    def __init__(self, log_every_n_steps: int = 10, rank: int = 0) -> None:
         self.backends: list[LoggingBackend] = []
         self.log_every_n_steps = log_every_n_steps
+        self.rank = rank
 
     def add_backend(self, backend: LoggingBackend) -> None:
         self.backends.append(backend)
 
     def log_scalar(self, key: str, value: float, step: int) -> None:
+        if self.rank != 0:
+            return
         for backend in self.backends:
             backend.log_scalar(key, value, step)
 
     def log_config(self, config: dict[str, Any]) -> None:
+        if self.rank != 0:
+            return
         for backend in self.backends:
             backend.log_config(config)
 

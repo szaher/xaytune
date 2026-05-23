@@ -233,3 +233,46 @@ class TestExportCommand:
         from trainlib.cli import main
         result = main(["export"])
         assert result == 1
+
+
+class TestCompareCommand:
+    def test_compare_parser(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu,gsm8k"])
+        assert args.command == "compare"
+        assert args.models == ["model-a/", "model-b/"]
+        assert args.benchmarks == "mmlu,gsm8k"
+
+    def test_compare_calls_benchmark_evaluate_twice(self):
+        from unittest.mock import patch, call
+        from trainlib.cli import main
+
+        results_a = {"mmlu": {"acc,none": 0.65}}
+        results_b = {"mmlu": {"acc,none": 0.70}}
+
+        with patch("trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]) as mock_bench:
+            result = main(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu"])
+
+        assert result == 0
+        assert mock_bench.call_count == 2
+
+    def test_compare_prints_table(self, capsys):
+        from unittest.mock import patch
+        from trainlib.cli import main
+
+        results_a = {"mmlu": {"acc,none": 0.65}}
+        results_b = {"mmlu": {"acc,none": 0.70}}
+
+        with patch("trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]):
+            main(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu"])
+
+        captured = capsys.readouterr()
+        assert "model-a/" in captured.out
+        assert "model-b/" in captured.out
+        assert "mmlu" in captured.out
+
+    def test_compare_requires_two_models(self):
+        from trainlib.cli import main
+        result = main(["compare", "model-a/", "--benchmarks", "mmlu"])
+        assert result != 0

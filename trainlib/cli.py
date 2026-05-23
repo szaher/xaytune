@@ -64,6 +64,11 @@ def _build_parser() -> argparse.ArgumentParser:
     push_parser.add_argument("--model", required=True, help="Path to model directory")
     push_parser.add_argument("--repo", required=True, help="HF Hub repo (e.g., username/model-name)")
 
+    compare_parser = subparsers.add_parser("compare", help="Compare two models side-by-side")
+    compare_parser.add_argument("models", nargs="+", help="Model paths to compare (exactly 2)")
+    compare_parser.add_argument("--benchmarks", required=True, help="Comma-separated benchmarks")
+    compare_parser.add_argument("--num-fewshot", type=int, default=None, help="Number of few-shot examples")
+
     return parser
 
 
@@ -86,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export":
         return _handle_export(args)
+
+    if args.command == "compare":
+        return _handle_compare(args)
 
     return 0
 
@@ -236,6 +244,44 @@ def _export_push(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+
+
+def _handle_compare(args: argparse.Namespace) -> int:
+    if len(args.models) != 2:
+        print("Error: compare requires exactly 2 models", file=sys.stderr)
+        return 1
+
+    from trainlib.eval.benchmarks import benchmark_evaluate
+
+    benchmarks = [b.strip() for b in args.benchmarks.split(",")]
+    model_a, model_b = args.models
+
+    results_a = benchmark_evaluate(
+        model=model_a, benchmarks=benchmarks, num_fewshot=args.num_fewshot,
+    )
+    results_b = benchmark_evaluate(
+        model=model_b, benchmarks=benchmarks, num_fewshot=args.num_fewshot,
+    )
+
+    all_tasks = sorted(set(results_a) | set(results_b))
+    header = f"{'Benchmark':<20} {'Metric':<25} {model_a:<15} {model_b:<15}"
+    print(header)
+    print("-" * len(header))
+
+    for task in all_tasks:
+        metrics_a = results_a.get(task, {})
+        metrics_b = results_b.get(task, {})
+        all_metrics = sorted(set(metrics_a) | set(metrics_b))
+        for metric in all_metrics:
+            val_a = metrics_a.get(metric, "N/A")
+            val_b = metrics_b.get(metric, "N/A")
+            if isinstance(val_a, float):
+                val_a = f"{val_a:.4f}"
+            if isinstance(val_b, float):
+                val_b = f"{val_b:.4f}"
+            print(f"{task:<20} {metric:<25} {val_a:<15} {val_b:<15}")
+
+    return 0
 
 
 if __name__ == "__main__":

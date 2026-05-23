@@ -1,8 +1,11 @@
 import pytest
+from pydantic import ValidationError
 
 from trainlib.config.schema import (
     DataConfig,
+    DeepSpeedConfig,
     EvalConfig,
+    FSDPConfig,
     LoggingConfig,
     LoraConfig,
     ModelConfig,
@@ -113,6 +116,43 @@ class TestOutputConfig:
         assert cfg.dir == "my-output"
 
 
+class TestFSDPConfig:
+    def test_defaults(self):
+        cfg = FSDPConfig()
+        assert cfg.sharding_strategy == "full_shard"
+        assert cfg.cpu_offload is False
+        assert cfg.backward_prefetch is None
+        assert cfg.mixed_precision is True
+
+    def test_custom(self):
+        cfg = FSDPConfig(
+            sharding_strategy="shard_grad_op",
+            cpu_offload=True,
+            backward_prefetch="backward_pre",
+            mixed_precision=False,
+        )
+        assert cfg.sharding_strategy == "shard_grad_op"
+        assert cfg.cpu_offload is True
+        assert cfg.backward_prefetch == "backward_pre"
+        assert cfg.mixed_precision is False
+
+    def test_invalid_sharding_strategy(self):
+        with pytest.raises(ValidationError):
+            FSDPConfig(sharding_strategy="invalid")
+
+
+class TestDeepSpeedConfig:
+    def test_defaults(self):
+        cfg = DeepSpeedConfig()
+        assert cfg.zero_stage == 2
+        assert cfg.config_file is None
+
+    def test_custom(self):
+        cfg = DeepSpeedConfig(config_file="ds_config.json", zero_stage=3)
+        assert cfg.config_file == "ds_config.json"
+        assert cfg.zero_stage == 3
+
+
 class TestTrainConfig:
     def test_minimal(self):
         cfg = TrainConfig(
@@ -158,6 +198,26 @@ class TestTrainConfig:
                 model=ModelConfig(name="m"),
                 data=DataConfig(path="d", format="alpaca"),
             )
+
+    def test_includes_fsdp_and_deepspeed_defaults(self):
+        cfg = TrainConfig(
+            recipe="finetune",
+            model=ModelConfig(name="my-model"),
+            data=DataConfig(path="data.jsonl", format="alpaca"),
+        )
+        assert cfg.fsdp.sharding_strategy == "full_shard"
+        assert cfg.fsdp.cpu_offload is False
+        assert cfg.deepspeed_config.zero_stage == 2
+        assert cfg.deepspeed_config.config_file is None
+
+    def test_reinforce_method(self):
+        cfg = TrainConfig(
+            recipe="align",
+            method="reinforce",
+            model=ModelConfig(name="my-model"),
+            data=DataConfig(path="data.jsonl", format="alpaca"),
+        )
+        assert cfg.method == "reinforce"
 
     def test_to_dict_roundtrip(self):
         cfg = TrainConfig(

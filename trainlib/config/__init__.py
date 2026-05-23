@@ -3,7 +3,9 @@ from pathlib import Path
 from trainlib.config.parser import apply_overrides, load_config, merge_dicts
 from trainlib.config.schema import (
     DataConfig,
+    DeepSpeedConfig,
     EvalConfig,
+    FSDPConfig,
     LoggingConfig,
     LoraConfig,
     ModelConfig,
@@ -22,7 +24,9 @@ __all__ = [
     "apply_overrides",
     "ConfigValidationError",
     "DataConfig",
+    "DeepSpeedConfig",
     "EvalConfig",
+    "FSDPConfig",
     "get_defaults_dir",
     "load_config",
     "LoggingConfig",

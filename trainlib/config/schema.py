@@ -80,6 +80,18 @@ class OutputConfig(BaseModel):
     merge_on_complete: bool = False
 
 
+class FSDPConfig(BaseModel):
+    sharding_strategy: Literal["full_shard", "shard_grad_op", "no_shard"] = "full_shard"
+    cpu_offload: bool = False
+    backward_prefetch: Literal["backward_pre", "backward_post"] | None = None
+    mixed_precision: bool = True
+
+
+class DeepSpeedConfig(BaseModel):
+    config_file: str | None = None
+    zero_stage: int = 2
+
+
 class TrainConfig(BaseModel):
     recipe: Literal["finetune", "pretrain", "align"]
     method: str = "full"
@@ -91,6 +103,8 @@ class TrainConfig(BaseModel):
     eval: EvalConfig = EvalConfig()
     logging: LoggingConfig = LoggingConfig()
     output: OutputConfig = OutputConfig()
+    fsdp: FSDPConfig = FSDPConfig()
+    deepspeed_config: DeepSpeedConfig = DeepSpeedConfig()
 
     @field_validator("recipe")
     @classmethod
@@ -103,7 +117,7 @@ class TrainConfig(BaseModel):
     @field_validator("method")
     @classmethod
     def validate_method(cls, v: str) -> str:
-        valid = {"full", "lora", "qlora", "dpo", "grpo", "ppo", "orpo", "simpo"}
+        valid = {"full", "lora", "qlora", "dpo", "grpo", "ppo", "orpo", "simpo", "reinforce"}
         if v not in valid:
             raise ValueError(f"method must be one of {valid}, got '{v}'")
         return v

@@ -77,6 +77,57 @@ class TestLoadDataset:
             assert len(eval_ds) == 4
 
 
+class TestAutoChatTemplate:
+    def _write_jsonl(self, data: list[dict], path: Path):
+        with open(path, "w") as f:
+            for item in data:
+                f.write(json.dumps(item) + "\n")
+
+    def test_chat_format_uses_tokenizer_template(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "<s>user: hi</s>"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = [{"messages": [{"role": "user", "content": "hi"}]}]
+            path = Path(tmpdir) / "data.jsonl"
+            self._write_jsonl(data, path)
+            ds = load_dataset(str(path), format="chat", tokenizer=tokenizer)
+            assert ds[0]["text"] == "<s>user: hi</s>"
+            tokenizer.apply_chat_template.assert_called_once()
+
+    def test_sharegpt_format_uses_tokenizer_template(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "<s>user: hello</s>"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = [{"conversations": [{"from": "human", "value": "hello"}]}]
+            path = Path(tmpdir) / "data.jsonl"
+            self._write_jsonl(data, path)
+            ds = load_dataset(str(path), format="sharegpt", tokenizer=tokenizer)
+            assert ds[0]["text"] == "<s>user: hello</s>"
+            tokenizer.apply_chat_template.assert_called_once()
+
+    def test_alpaca_format_ignores_tokenizer(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "should not be used"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = [{"instruction": "Say hi", "input": "", "output": "Hello!"}]
+            path = Path(tmpdir) / "data.jsonl"
+            self._write_jsonl(data, path)
+            ds = load_dataset(str(path), format="alpaca", tokenizer=tokenizer)
+            assert "Instruction" in ds[0]["text"]
+            tokenizer.apply_chat_template.assert_not_called()
+
+    def test_no_tokenizer_uses_default_format(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = [{"messages": [{"role": "user", "content": "hi"}]}]
+            path = Path(tmpdir) / "data.jsonl"
+            self._write_jsonl(data, path)
+            ds = load_dataset(str(path), format="chat")
+            assert "User" in ds[0]["text"]
+
+
 class TestLoadDatasetHuggingFace:
     @patch("datasets.load_dataset")
     def test_hf_source_loads_from_hub(self, mock_hf_load):

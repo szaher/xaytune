@@ -13,7 +13,7 @@ from trainlib.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.config.validation import ConfigValidationError, validate_config
+from trainlib.config.validation import ConfigValidationError, preflight_check, validate_config
 
 
 def get_defaults_dir() -> Path:
@@ -34,6 +34,7 @@ __all__ = [
     "merge_dicts",
     "ModelConfig",
     "OutputConfig",
+    "preflight_check",
     "TrainConfig",
     "TrainerConfig",
     "validate_config",

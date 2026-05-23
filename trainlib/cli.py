@@ -80,6 +80,31 @@ def _build_parser() -> argparse.ArgumentParser:
         "--num-fewshot", type=int, default=None, help="Number of few-shot examples"
     )
 
+    lr_find_parser = subparsers.add_parser("lr-find", help="Find optimal learning rate")
+    lr_find_parser.add_argument("--config", required=True, help="Path to YAML config file")
+    lr_find_parser.add_argument(
+        "--start-lr", type=float, default=1e-7, help="Start LR (default: 1e-7)"
+    )
+    lr_find_parser.add_argument(
+        "--end-lr", type=float, default=1.0, help="End LR (default: 1.0)"
+    )
+    lr_find_parser.add_argument(
+        "--num-iterations", type=int, default=100, help="Number of steps (default: 100)"
+    )
+    lr_find_parser.add_argument(
+        "--smoothing-factor", type=float, default=0.05, help="EMA smoothing (default: 0.05)"
+    )
+    lr_find_parser.add_argument(
+        "--output", default=None, help="Save results to JSON file"
+    )
+
+    studio_parser = subparsers.add_parser("studio", help="Launch Training Studio web UI")
+    studio_parser.add_argument("--host", default="0.0.0.0", help="Host (default: 0.0.0.0)")
+    studio_parser.add_argument("--port", type=int, default=7860, help="Port (default: 7860)")
+    studio_parser.add_argument(
+        "--share", action="store_true", help="Create public Gradio link"
+    )
+
     launch_parser = subparsers.add_parser("launch", help="Launch distributed training via torchrun")
     launch_parser.add_argument(
         "--nproc-per-node",
@@ -118,6 +143,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "compare":
         return _handle_compare(args)
+
+    if args.command == "lr-find":
+        return _handle_lr_find(args)
+
+    if args.command == "studio":
+        return _handle_studio(args)
 
     if args.command == "launch":
         return _handle_launch(args)
@@ -313,8 +344,15 @@ def _handle_launch(args: argparse.Namespace) -> int:
     for override in args.override:
         cmd.extend(["--override", override])
 
-    result = subprocess.run(cmd)
-    return result.returncode
+    try:
+        result = subprocess.run(cmd)
+        return result.returncode
+    except FileNotFoundError:
+        print(
+            "Error: torchrun not found. Install PyTorch with distributed support.",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def _handle_compare(args: argparse.Namespace) -> int:
@@ -355,6 +393,54 @@ def _handle_compare(args: argparse.Namespace) -> int:
             if isinstance(val_b, float):
                 val_b = f"{val_b:.4f}"
             print(f"{task:<20} {metric:<25} {val_a:<15} {val_b:<15}")
+
+    return 0
+
+
+def _handle_studio(args: argparse.Namespace) -> int:
+    try:
+        from trainlib.studio.server import launch
+    except ImportError:
+        print(
+            "Error: Install studio dependencies: pip install trainlib[studio]",
+            file=sys.stderr,
+        )
+        return 1
+    launch(host=args.host, port=args.port, share=args.share)
+    return 0
+
+
+def _handle_lr_find(args: argparse.Namespace) -> int:
+    import json
+
+    from trainlib.recipes.base import setup_training
+    from trainlib.trainer.lr_finder import lr_find
+
+    try:
+        config = load_config(args.config)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error loading config: {e}", file=sys.stderr)
+        return 1
+
+    components = setup_training(config)
+    result = lr_find(
+        components.model,
+        components.train_dataloader,
+        start_lr=args.start_lr,
+        end_lr=args.end_lr,
+        num_iterations=args.num_iterations,
+        smoothing_factor=args.smoothing_factor,
+    )
+
+    print(f"Suggested LR: {result.suggested_lr}")
+
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(result.to_dict(), f, indent=2)
+        print(f"Results saved to {args.output}")
 
     return 0
 

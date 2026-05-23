@@ -15,6 +15,7 @@ from trainlib.trainer.distributed import (
 from trainlib.trainer.early_stopping import register_early_stopping_callbacks
 from trainlib.trainer.eval_callback import register_eval_callbacks
 from trainlib.trainer.loop import Trainer
+from trainlib.trainer.lr_finder import LRFinderResult, lr_find
 from trainlib.trainer.scheduler import create_scheduler, resolve_warmup_steps
 
 _global_callback_manager = CallbackManager()
@@ -31,6 +32,8 @@ __all__ = [
     "get_device_type",
     "get_strategy",
     "load_checkpoint",
+    "lr_find",
+    "LRFinderResult",
     "on",
     "register_early_stopping_callbacks",
     "register_eval_callbacks",

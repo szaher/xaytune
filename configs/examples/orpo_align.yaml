@@ -3,6 +3,9 @@
 recipe: align
 method: orpo
 
+method_params:
+  lambda_weight: 1.0
+
 model:
   name: output/sft-model
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -109,6 +109,7 @@ class TrainConfig(BaseModel):
     eval: EvalConfig = EvalConfig()
     logging: LoggingConfig = LoggingConfig()
     output: OutputConfig = OutputConfig()
+    method_params: dict[str, Any] = {}
     fsdp: FSDPConfig = FSDPConfig()
     deepspeed_config: DeepSpeedConfig = DeepSpeedConfig()
 

@@ -37,10 +37,16 @@ def align(
             )
 
         trainer_fields = {}
+        method_params = {}
         trainer_param_names = {f for f in TrainerConfig.model_fields}
+        method_param_names = {
+            "beta", "kl_coeff", "lambda_weight", "gamma", "clip_eps",
+        }
         for k in list(kwargs.keys()):
             if k in trainer_param_names:
                 trainer_fields[k] = kwargs.pop(k)
+            elif k in method_param_names:
+                method_params[k] = kwargs.pop(k)
 
         config = TrainConfig(
             recipe="align",
@@ -53,6 +59,7 @@ def align(
                 batch_size=batch_size,
                 **trainer_fields,
             ),
+            method_params=method_params,
         )
 
     components = _base.setup_training(config, resume_from=resume_from)
@@ -67,6 +74,7 @@ def align(
         loss_fn = create_alignment_loss_fn(
             method=config.method,
             ref_model=ref_model,
+            **config.method_params,
         )
 
     state = components.trainer.train(

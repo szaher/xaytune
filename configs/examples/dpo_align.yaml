@@ -3,6 +3,9 @@
 recipe: align
 method: dpo
 
+method_params:
+  beta: 0.1
+
 model:
   name: output/sft-model
 

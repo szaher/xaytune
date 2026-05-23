@@ -29,10 +29,11 @@ def _load_huggingface(
     format: str,
     streaming: bool = False,
     eval_split: float = 0.0,
+    tokenizer: Any | None = None,
 ) -> Any:
     import datasets
 
-    format_fn = format_registry.get(format)
+    format_fn = _make_format_fn(format, tokenizer)
 
     if eval_split > 0 and not streaming:
         ds = datasets.load_dataset(path, split="train")
@@ -69,6 +70,7 @@ def load_dataset(
     if source == "huggingface":
         return _load_huggingface(
             path, format=format, streaming=streaming, eval_split=eval_split,
+            tokenizer=tokenizer,
         )
 
     file_path = Path(path)

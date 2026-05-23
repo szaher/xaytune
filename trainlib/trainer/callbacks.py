@@ -32,6 +32,16 @@ class TrainState:
     def stop_training(self) -> None:
         self.should_stop = True
 
+    def to_dict(self) -> dict[str, Any]:
+        import dataclasses as _dc
+
+        d = _dc.asdict(self)
+        safe_metrics: dict[str, Any] = {}
+        for k, v in d["metrics"].items():
+            safe_metrics[k] = v.item() if hasattr(v, "item") else v
+        d["metrics"] = safe_metrics
+        return d
+
 
 class CallbackManager:
     def __init__(self) -> None:

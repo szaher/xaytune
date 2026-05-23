@@ -250,6 +250,36 @@ class TestTrainConfig:
         )
         assert cfg.method == "reinforce"
 
+    def test_method_params_default_empty(self):
+        cfg = TrainConfig(
+            recipe="finetune",
+            model=ModelConfig(name="m"),
+            data=DataConfig(path="d", format="alpaca"),
+        )
+        assert cfg.method_params == {}
+
+    def test_method_params_set(self):
+        cfg = TrainConfig(
+            recipe="align",
+            method="dpo",
+            model=ModelConfig(name="m"),
+            data=DataConfig(path="d", format="alpaca"),
+            method_params={"beta": 0.2},
+        )
+        assert cfg.method_params == {"beta": 0.2}
+
+    def test_method_params_roundtrip(self):
+        cfg = TrainConfig(
+            recipe="align",
+            method="grpo",
+            model=ModelConfig(name="m"),
+            data=DataConfig(path="d", format="alpaca"),
+            method_params={"kl_coeff": 0.1},
+        )
+        d = cfg.model_dump()
+        cfg2 = TrainConfig(**d)
+        assert cfg2.method_params == {"kl_coeff": 0.1}
+
     def test_to_dict_roundtrip(self):
         cfg = TrainConfig(
             recipe="finetune",

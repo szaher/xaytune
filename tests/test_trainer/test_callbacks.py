@@ -1,3 +1,7 @@
+import json
+
+import torch
+
 from trainlib.trainer.callbacks import CallbackManager, TrainState
 
 
@@ -114,3 +118,45 @@ class TestCallbackManager:
         state = TrainState(step=10)
         manager.fire("step_end", state)
         assert state.should_stop is True
+
+
+class TestTrainStateToDict:
+    def test_to_dict_returns_all_fields(self):
+        state = TrainState(step=3, epoch=1, global_step=13, num_epochs=5, max_steps=100)
+        d = state.to_dict()
+        assert d["step"] == 3
+        assert d["epoch"] == 1
+        assert d["global_step"] == 13
+        assert d["num_epochs"] == 5
+        assert d["max_steps"] == 100
+        assert d["should_stop"] is False
+
+    def test_to_dict_converts_tensors(self):
+        state = TrainState(metrics={"loss": torch.tensor(0.5), "lr": torch.tensor(1e-4)})
+        d = state.to_dict()
+        assert isinstance(d["metrics"]["loss"], float)
+        assert isinstance(d["metrics"]["lr"], float)
+        assert abs(d["metrics"]["loss"] - 0.5) < 1e-6
+
+    def test_to_dict_preserves_plain_values(self):
+        state = TrainState(metrics={"loss": 0.5, "name": "test"})
+        d = state.to_dict()
+        assert d["metrics"]["loss"] == 0.5
+        assert d["metrics"]["name"] == "test"
+
+    def test_to_dict_empty_metrics(self):
+        state = TrainState()
+        d = state.to_dict()
+        assert d["metrics"] == {}
+
+    def test_to_dict_is_json_serializable(self):
+        state = TrainState(
+            step=1,
+            epoch=0,
+            global_step=5,
+            metrics={"loss": torch.tensor(0.42), "acc": 0.95},
+        )
+        serialized = json.dumps(state.to_dict())
+        assert isinstance(serialized, str)
+        parsed = json.loads(serialized)
+        assert parsed["global_step"] == 5

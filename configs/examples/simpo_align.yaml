@@ -3,6 +3,10 @@
 recipe: align
 method: simpo
 
+method_params:
+  beta: 2.0
+  gamma: 0.5
+
 model:
   name: output/sft-model
 

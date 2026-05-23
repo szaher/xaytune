@@ -135,6 +135,38 @@ class TestAlign:
         assert callable(call_kwargs["loss_fn"])
 
     @patch(_SETUP)
+    def test_method_params_passed_to_config(self, mock_setup):
+        mock_components = MagicMock()
+        mock_components.trainer.train.return_value = TrainState()
+        mock_components.model = MagicMock()
+        mock_setup.return_value = mock_components
+
+        align(model="test-model", dataset="prefs.jsonl", method="dpo", beta=0.2)
+
+        config = mock_setup.call_args[0][0]
+        assert config.method_params == {"beta": 0.2}
+
+    @patch(_SETUP)
+    def test_method_params_from_config_used(self, mock_setup):
+        mock_model = torch.nn.Linear(1, 1)
+        mock_components = MagicMock()
+        mock_components.model = mock_model
+        mock_components.trainer.train.return_value = TrainState()
+        mock_setup.return_value = mock_components
+
+        config = TrainConfig(
+            recipe="align",
+            method="dpo",
+            model=ModelConfig(name="test-model"),
+            data=DataConfig(path="prefs.jsonl", format="preference"),
+            method_params={"beta": 0.5},
+        )
+        align(config=config)
+
+        call_kwargs = mock_components.trainer.train.call_args.kwargs
+        assert call_kwargs["loss_fn"] is not None
+
+    @patch(_SETUP)
     def test_non_alignment_method_no_loss_fn(self, mock_setup):
         mock_components = MagicMock()
         mock_components.trainer.train.return_value = TrainState()

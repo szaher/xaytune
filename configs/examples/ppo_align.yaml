@@ -3,6 +3,9 @@
 recipe: align
 method: ppo
 
+method_params:
+  clip_eps: 0.2
+
 model:
   name: output/sft-model
 

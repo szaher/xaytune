@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from trainlib.config.schema import (
@@ -6,7 +8,7 @@ from trainlib.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.config.validation import ConfigValidationError, validate_config
+from trainlib.config.validation import ConfigValidationError, preflight_check, validate_config
 
 
 class TestValidateConfig:
@@ -121,3 +123,77 @@ class TestValidateConfig:
             trainer=TrainerConfig(warmup_steps=0, warmup_ratio=0.0),
         )
         validate_config(cfg)
+
+    def test_method_params_valid_dpo_beta(self):
+        cfg = self._make_config(recipe="align", method="dpo", method_params={"beta": 0.2})
+        validate_config(cfg)
+
+    def test_method_params_unknown_for_dpo(self):
+        cfg = self._make_config(recipe="align", method="dpo", method_params={"kl_coeff": 0.1})
+        with pytest.raises(ConfigValidationError, match="Unknown method_params"):
+            validate_config(cfg)
+
+    def test_method_params_on_finetune_rejected(self):
+        cfg = self._make_config(recipe="finetune", method="full", method_params={"beta": 0.1})
+        with pytest.raises(ConfigValidationError, match="only supported for alignment"):
+            validate_config(cfg)
+
+    def test_method_params_simpo_two_params(self):
+        cfg = self._make_config(
+            recipe="align", method="simpo",
+            method_params={"beta": 2.0, "gamma": 0.5},
+        )
+        validate_config(cfg)
+
+    def test_method_params_empty_passes(self):
+        cfg = self._make_config(recipe="align", method="dpo", method_params={})
+        validate_config(cfg)
+
+
+class TestPreflightCheck:
+    def _make_config(self, **kwargs) -> TrainConfig:
+        defaults = {
+            "recipe": "finetune",
+            "model": ModelConfig(name="test-model"),
+            "data": DataConfig(path="data.jsonl", format="alpaca"),
+        }
+        defaults.update(kwargs)
+        return TrainConfig(**defaults)
+
+    @patch("torch.cuda.is_available", return_value=False)
+    @patch("torch.backends.mps.is_available", return_value=False)
+    def test_quantization_without_cuda(self, _mock_mps, _mock_cuda):
+        cfg = self._make_config(model=ModelConfig(name="m", quantization="4bit"))
+        issues = preflight_check(cfg)
+        assert any("CUDA" in i for i in issues)
+
+    @patch("torch.cuda.is_available", return_value=True)
+    def test_quantization_with_cuda_ok(self, _mock_cuda):
+        cfg = self._make_config(model=ModelConfig(name="m", quantization="4bit"))
+        issues = preflight_check(cfg)
+        assert not any("Quantization" in i for i in issues)
+
+    def test_data_path_not_found(self):
+        cfg = self._make_config(
+            data=DataConfig(path="/nonexistent/path/data.jsonl", format="alpaca"),
+        )
+        issues = preflight_check(cfg)
+        assert any("not found" in i for i in issues)
+
+    def test_data_path_exists(self, tmp_path):
+        data_file = tmp_path / "data.jsonl"
+        data_file.write_text('{"text": "hello"}\n')
+        cfg = self._make_config(
+            data=DataConfig(path=str(data_file), format="alpaca"),
+        )
+        issues = preflight_check(cfg)
+        assert not any("not found" in i for i in issues)
+
+    def test_hf_source_skips_path_check(self):
+        cfg = self._make_config(
+            data=DataConfig(
+                path="org/nonexistent-dataset", format="alpaca", source="huggingface",
+            ),
+        )
+        issues = preflight_check(cfg)
+        assert not any("not found" in i for i in issues)

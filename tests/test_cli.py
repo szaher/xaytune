@@ -412,3 +412,58 @@ class TestLaunchCommand:
         main(["launch", "--nproc-per-node", "1", "--nnodes", "4", "--config", "c.yaml"])
         cmd = mock_run.call_args[0][0]
         assert "--nnodes=4" in cmd
+
+    @patch("subprocess.run", side_effect=FileNotFoundError("torchrun not found"))
+    def test_launch_missing_torchrun(self, mock_run):
+        result = main(["launch", "--nproc-per-node", "1", "--config", "c.yaml"])
+        assert result == 1
+
+
+class TestLRFindCommand:
+    def test_lr_find_parser_exists(self):
+        from trainlib.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["lr-find", "--config", "foo.yaml"])
+        assert args.command == "lr-find"
+        assert args.config == "foo.yaml"
+        assert args.start_lr == 1e-7
+        assert args.end_lr == 1.0
+        assert args.num_iterations == 100
+
+    def test_lr_find_parser_custom_args(self):
+        from trainlib.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args([
+            "lr-find", "--config", "c.yaml",
+            "--start-lr", "1e-5", "--end-lr", "0.1",
+            "--num-iterations", "50", "--smoothing-factor", "0.1",
+            "--output", "results.json",
+        ])
+        assert args.start_lr == 1e-5
+        assert args.end_lr == 0.1
+        assert args.num_iterations == 50
+        assert args.smoothing_factor == 0.1
+        assert args.output == "results.json"
+
+    @patch("trainlib.cli.load_config")
+    @patch("trainlib.recipes.base.setup_training")
+    @patch("trainlib.trainer.lr_finder.lr_find")
+    def test_lr_find_handler_called(
+        self, mock_lr_find, mock_setup, mock_load
+    ):
+        from trainlib.trainer.lr_finder import LRFinderResult
+
+        mock_config = MagicMock()
+        mock_load.return_value = mock_config
+        mock_components = MagicMock()
+        mock_setup.return_value = mock_components
+        mock_lr_find.return_value = LRFinderResult(
+            lrs=[1e-7, 1e-6], losses=[1.0, 0.9], suggested_lr=1e-6
+        )
+
+        result = main(["lr-find", "--config", "test.yaml"])
+
+        assert result == 0
+        mock_lr_find.assert_called_once()

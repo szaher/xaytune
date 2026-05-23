@@ -12,7 +12,10 @@ class TestPackageMetadata:
         assert trainlib.__version__ == "0.1.0"
 
     def test_all_exports(self):
-        expected = {"__version__", "align", "evaluate", "finetune", "pretrain"}
+        expected = {
+            "__version__", "align", "evaluate", "finetune",
+            "JobManager", "lr_find", "pretrain",
+        }
         assert set(trainlib.__all__) == expected
 
 

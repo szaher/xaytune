@@ -80,6 +80,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "--num-fewshot", type=int, default=None, help="Number of few-shot examples"
     )
 
+    launch_parser = subparsers.add_parser("launch", help="Launch distributed training via torchrun")
+    launch_parser.add_argument(
+        "--nproc-per-node",
+        type=int,
+        default=None,
+        help="Number of processes per node (default: auto-detect GPUs)",
+    )
+    launch_parser.add_argument("--nnodes", type=int, default=1, help="Number of nodes")
+    launch_parser.add_argument("--config", required=True, help="Path to training config file")
+    launch_parser.add_argument(
+        "--override", action="append", default=[], help="Config overrides (key=value)"
+    )
+
     return parser
 
 
@@ -105,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "compare":
         return _handle_compare(args)
+
+    if args.command == "launch":
+        return _handle_launch(args)
 
     return 0
 
@@ -256,6 +272,34 @@ def _export_push(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+
+
+def _handle_launch(args: argparse.Namespace) -> int:
+    import subprocess
+
+    nproc = args.nproc_per_node
+    if nproc is None:
+        import torch
+
+        nproc = torch.cuda.device_count() if torch.cuda.is_available() else 1
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+        f"--nproc-per-node={nproc}",
+        f"--nnodes={args.nnodes}",
+        "-m",
+        "trainlib.cli",
+        "train",
+        "--config",
+        args.config,
+    ]
+    for override in args.override:
+        cmd.extend(["--override", override])
+
+    result = subprocess.run(cmd)
+    return result.returncode
 
 
 def _handle_compare(args: argparse.Namespace) -> int:

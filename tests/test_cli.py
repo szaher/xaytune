@@ -311,3 +311,57 @@ class TestCompareCommand:
 
         result = main(["compare", "model-a/", "--benchmarks", "mmlu"])
         assert result != 0
+
+
+class TestLaunchCommand:
+    @patch("subprocess.run")
+    @patch("torch.cuda.is_available", return_value=True)
+    @patch("torch.cuda.device_count", return_value=4)
+    def test_launch_auto_detects_gpu_count(self, mock_count, mock_avail, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        main(["launch", "--config", "config.yaml"])
+        cmd = mock_run.call_args[0][0]
+        assert "--nproc-per-node=4" in cmd
+
+    @patch("subprocess.run")
+    def test_launch_uses_explicit_nproc(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        main(["launch", "--nproc-per-node", "2", "--config", "config.yaml"])
+        cmd = mock_run.call_args[0][0]
+        assert "--nproc-per-node=2" in cmd
+
+    @patch("subprocess.run")
+    def test_launch_forwards_overrides(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        main(["launch", "--nproc-per-node", "1", "--config", "c.yaml", "--override", "trainer.lr=1e-4"])
+        cmd = mock_run.call_args[0][0]
+        assert "--override" in cmd
+        assert "trainer.lr=1e-4" in cmd
+
+    @patch("subprocess.run")
+    def test_launch_uses_torchrun_module(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        main(["launch", "--nproc-per-node", "1", "--config", "c.yaml"])
+        cmd = mock_run.call_args[0][0]
+        assert "-m" in cmd
+        assert "torch.distributed.run" in cmd
+
+    @patch("subprocess.run")
+    def test_launch_returns_subprocess_returncode(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        result = main(["launch", "--nproc-per-node", "1", "--config", "c.yaml"])
+        assert result == 1
+
+    @patch("subprocess.run")
+    def test_launch_default_nnodes_is_1(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        main(["launch", "--nproc-per-node", "1", "--config", "c.yaml"])
+        cmd = mock_run.call_args[0][0]
+        assert "--nnodes=1" in cmd
+
+    @patch("subprocess.run")
+    def test_launch_custom_nnodes(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        main(["launch", "--nproc-per-node", "1", "--nnodes", "4", "--config", "c.yaml"])
+        cmd = mock_run.call_args[0][0]
+        assert "--nnodes=4" in cmd

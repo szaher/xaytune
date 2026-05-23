@@ -67,3 +67,20 @@ class TestImports:
             dpo_loss, grpo_loss, orpo_loss, simpo_loss,
             ppo_clip_loss, reinforce_loss,
         )
+
+
+class TestEntryPoint:
+    def test_cli_entry_point_defined(self):
+        from importlib.metadata import entry_points
+        eps = entry_points()
+        console_scripts = eps.select(group="console_scripts")
+        names = [ep.name for ep in console_scripts]
+        assert "trainlib" in names
+
+    def test_cli_entry_point_resolves(self):
+        from importlib.metadata import entry_points
+        eps = entry_points()
+        console_scripts = eps.select(group="console_scripts")
+        trainlib_ep = [ep for ep in console_scripts if ep.name == "trainlib"][0]
+        fn = trainlib_ep.load()
+        assert callable(fn)

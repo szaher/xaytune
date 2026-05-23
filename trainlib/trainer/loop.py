@@ -37,6 +37,8 @@ class Trainer:
         train_dataloader: Any,
         optimizer: Any | None = None,
         scheduler: Any | None = None,
+        resume_state: TrainState | None = None,
+        resume_checkpoint_dir: str | None = None,
     ) -> TrainState:
         if optimizer is None:
             optimizer = torch.optim.AdamW(
@@ -44,6 +46,7 @@ class Trainer:
                 lr=self.config.learning_rate,
                 weight_decay=self.config.weight_decay,
             )
+        self._optimizer = optimizer
 
         # Determine device type for autocast
         self._device_type = "cpu"
@@ -65,18 +68,46 @@ class Trainer:
             self._amp_dtype = torch.bfloat16
         # fp32 → no autocast, no scaler
 
-        state = TrainState(
-            num_epochs=self.config.num_epochs,
-            max_steps=self.config.max_steps,
-        )
+        # Resume optimizer/scaler state from checkpoint
+        if resume_checkpoint_dir:
+            from pathlib import Path
+
+            opt_path = Path(resume_checkpoint_dir) / "optimizer.pt"
+            if opt_path.exists():
+                optimizer.load_state_dict(torch.load(opt_path, weights_only=True))
+            scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"
+            if self._scaler is not None and scaler_path.exists():
+                self._scaler.load_state_dict(torch.load(scaler_path, weights_only=True))
+
+        if resume_state is not None:
+            state = TrainState(
+                step=resume_state.step,
+                epoch=resume_state.epoch,
+                global_step=resume_state.global_step,
+                num_epochs=self.config.num_epochs,
+                max_steps=self.config.max_steps,
+                metrics=dict(resume_state.metrics),
+            )
+        else:
+            state = TrainState(
+                num_epochs=self.config.num_epochs,
+                max_steps=self.config.max_steps,
+            )
+
+        # Determine the step to resume from in the first epoch
+        resumed_step = resume_state.step if resume_state is not None else -1
 
         self.callback_manager.fire("train_start", state)
 
-        for epoch in range(self.config.num_epochs):
+        for epoch in range(state.epoch, self.config.num_epochs):
             state.epoch = epoch
             self.callback_manager.fire("epoch_start", state)
 
             for step, batch in enumerate(train_dataloader):
+                # Skip already-completed steps in the resumed epoch
+                if epoch == (resume_state.epoch if resume_state else -1) and step <= resumed_step:
+                    continue
+
                 state.step = step
                 self.callback_manager.fire("step_start", state)
 

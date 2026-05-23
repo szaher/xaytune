@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import torch
 
 from trainlib.config.schema import TrainerConfig
-from trainlib.trainer.callbacks import CallbackManager
+from trainlib.trainer.callbacks import CallbackManager, TrainState
 from trainlib.trainer.loop import Trainer
 
 
@@ -166,3 +166,93 @@ class TestMixedPrecision:
             )
             state = trainer.train(model=model, train_dataloader=dl)
             assert state.global_step == 2, f"Failed for {mode}"
+
+
+class TestResumeTraining:
+    def _make_model_and_dataloader(self, num_samples=10):
+        model = MagicMock()
+        model.parameters.return_value = [torch.randn(10, requires_grad=True)]
+        mock_output = MagicMock()
+        mock_output.loss = torch.tensor(0.5, requires_grad=True)
+        model.return_value = mock_output
+        model.__call__ = MagicMock(return_value=mock_output)
+        dataloader = [
+            {"input_ids": torch.tensor([i]), "labels": torch.tensor([i])}
+            for i in range(num_samples)
+        ]
+        return model, dataloader
+
+    def test_optimizer_stored_as_instance_attr(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(2)
+        trainer.train(model=model, train_dataloader=dl)
+        assert trainer._optimizer is not None
+
+    def test_optimizer_stored_when_externally_provided(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(2)
+        ext_optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        trainer.train(model=model, train_dataloader=dl, optimizer=ext_optimizer)
+        assert trainer._optimizer is ext_optimizer
+
+    def test_resume_none_is_default_behavior(self):
+        config = TrainerConfig(num_epochs=1, max_steps=3, batch_size=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(5)
+        state = trainer.train(model=model, train_dataloader=dl, resume_state=None)
+        assert state.global_step == 3  # max_steps=3
+
+    def test_resume_skips_completed_epochs(self):
+        config = TrainerConfig(num_epochs=3, max_steps=-1, batch_size=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(2)
+
+        resume = TrainState(epoch=1, step=1, global_step=4)
+        state = trainer.train(model=model, train_dataloader=dl, resume_state=resume)
+
+        # Should only run epochs 1 and 2 (skipping epoch 0)
+        # Epoch 1: steps after step 1 = none (2 samples, steps 0,1 both skipped)
+        # Epoch 2: both steps run = global_step goes from 4 to 6
+        assert state.global_step == 6
+        assert state.epoch == 2
+
+    def test_resume_continues_global_step(self):
+        config = TrainerConfig(num_epochs=2, max_steps=-1, batch_size=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(3)
+
+        resume = TrainState(epoch=0, step=1, global_step=2)
+        state = trainer.train(model=model, train_dataloader=dl, resume_state=resume)
+
+        # Epoch 0: skip steps 0,1 -> run step 2 -> global_step 3
+        # Epoch 1: run steps 0,1,2 -> global_step 6
+        assert state.global_step == 6
+
+    def test_resume_with_max_steps(self):
+        config = TrainerConfig(num_epochs=10, max_steps=5, batch_size=1)
+        trainer = Trainer(config=config)
+        model, dl = self._make_model_and_dataloader(10)
+
+        resume = TrainState(epoch=0, step=2, global_step=3)
+        state = trainer.train(model=model, train_dataloader=dl, resume_state=resume)
+
+        # Resume from global_step=3, max_steps=5, so only 2 more steps
+        assert state.global_step == 5
+        assert state.should_stop
+
+    def test_resume_fires_train_start(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1, batch_size=1)
+        events = []
+        cm = CallbackManager()
+
+        @cm.on("train_start")
+        def on_start(state):
+            events.append("train_start")
+
+        trainer = Trainer(config=config, callback_manager=cm)
+        model, dl = self._make_model_and_dataloader(2)
+        resume = TrainState(epoch=0, step=0, global_step=0)
+        trainer.train(model=model, train_dataloader=dl, resume_state=resume)
+        assert "train_start" in events

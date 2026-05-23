@@ -101,3 +101,67 @@ class TestListCommand:
         result = main(["list", "unknown"])
         captured = capsys.readouterr()
         assert result == 1
+
+
+class TestEvalCommand:
+    def test_eval_parser_exists(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--model", "test-model", "--benchmarks", "mmlu"])
+        assert args.command == "eval"
+        assert args.model == "test-model"
+        assert args.benchmarks == "mmlu"
+
+    def test_eval_with_metrics(self):
+        from trainlib.cli import _build_parser
+        parser = _build_parser()
+        args = parser.parse_args([
+            "eval", "--model", "test-model",
+            "--metrics", "loss,perplexity",
+            "--dataset", "data/eval.jsonl",
+        ])
+        assert args.metrics == "loss,perplexity"
+        assert args.dataset == "data/eval.jsonl"
+
+    def test_eval_benchmarks_calls_benchmark_evaluate(self):
+        from unittest.mock import patch, MagicMock
+        from trainlib.cli import main
+
+        with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
+            mock_bench.return_value = {"mmlu": {"acc,none": 0.65}}
+            result = main(["eval", "--model", "test-model", "--benchmarks", "mmlu,gsm8k"])
+
+        assert result == 0
+        mock_bench.assert_called_once_with(
+            model="test-model",
+            benchmarks=["mmlu", "gsm8k"],
+            num_fewshot=None,
+        )
+
+    def test_eval_num_fewshot(self):
+        from unittest.mock import patch
+        from trainlib.cli import main
+
+        with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
+            mock_bench.return_value = {}
+            main(["eval", "--model", "m", "--benchmarks", "mmlu", "--num-fewshot", "5"])
+
+        call_kwargs = mock_bench.call_args[1]
+        assert call_kwargs["num_fewshot"] == 5
+
+    def test_eval_requires_model(self):
+        from trainlib.cli import main
+        with pytest.raises(SystemExit) as exc_info:
+            main(["eval"])
+        assert exc_info.value.code != 0
+
+    def test_eval_prints_results(self, capsys):
+        from unittest.mock import patch
+        from trainlib.cli import main
+
+        with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
+            mock_bench.return_value = {"mmlu": {"acc,none": 0.65}}
+            main(["eval", "--model", "m", "--benchmarks", "mmlu"])
+
+        captured = capsys.readouterr()
+        assert "mmlu" in captured.out

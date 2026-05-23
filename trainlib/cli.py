@@ -41,6 +41,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Component type: recipes, formats, metrics, rewards",
     )
 
+    eval_parser = subparsers.add_parser("eval", help="Evaluate a model")
+    eval_parser.add_argument("--model", required=True, help="Model path or HF Hub name")
+    eval_parser.add_argument("--benchmarks", default=None, help="Comma-separated benchmarks (e.g., mmlu,gsm8k)")
+    eval_parser.add_argument("--metrics", default=None, help="Comma-separated metrics (e.g., loss,perplexity)")
+    eval_parser.add_argument("--dataset", default=None, help="Path to evaluation dataset")
+    eval_parser.add_argument("--num-fewshot", type=int, default=None, help="Number of few-shot examples")
+
     return parser
 
 
@@ -57,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         return _handle_list(args)
+
+    if args.command == "eval":
+        return _handle_eval(args)
 
     return 0
 
@@ -112,6 +122,48 @@ def _handle_list(args: argparse.Namespace) -> int:
     for item in registry.list():
         print(f"  {item}")
     return 0
+
+
+def _handle_eval(args: argparse.Namespace) -> int:
+    if args.benchmarks:
+        from trainlib.eval.benchmarks import benchmark_evaluate
+
+        benchmarks = [b.strip() for b in args.benchmarks.split(",")]
+        results = benchmark_evaluate(
+            model=args.model,
+            benchmarks=benchmarks,
+            num_fewshot=args.num_fewshot,
+        )
+
+        for task_name, task_results in results.items():
+            print(f"\n{task_name}:")
+            for metric_name, value in task_results.items():
+                print(f"  {metric_name}: {value}")
+
+        return 0
+
+    if args.dataset:
+        import json
+        from pathlib import Path
+        from trainlib.eval import evaluate
+
+        dataset_path = Path(args.dataset)
+        if not dataset_path.exists():
+            print(f"Error: Dataset not found: {args.dataset}", file=sys.stderr)
+            return 1
+
+        data = [json.loads(line) for line in dataset_path.read_text().splitlines() if line.strip()]
+        metrics = [m.strip() for m in args.metrics.split(",")] if args.metrics else None
+
+        results = evaluate(model=args.model, dataset=data, metrics=metrics)
+
+        for metric_name, value in results.items():
+            print(f"{metric_name}: {value:.4f}")
+
+        return 0
+
+    print("Error: Provide --benchmarks or --dataset", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

@@ -1,0 +1,24 @@
+# LoRA fine-tuning example
+# Usage: trainlib train --config configs/examples/lora_finetune.yaml
+base: lora
+
+model:
+  name: meta-llama/Llama-3.1-8B
+
+data:
+  path: data/train.jsonl
+  format: alpaca
+  eval_split: 0.05
+
+trainer:
+  batch_size: 4
+  gradient_accumulation: 4
+  learning_rate: 2e-4
+  num_epochs: 3
+
+logging:
+  backends: [console, tensorboard]
+  project: lora-finetune
+
+output:
+  dir: output/lora-finetune

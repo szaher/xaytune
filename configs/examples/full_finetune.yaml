@@ -1,0 +1,26 @@
+# Full fine-tuning example (all parameters trainable)
+# Usage: trainlib train --config configs/examples/full_finetune.yaml
+base: full_finetune
+
+model:
+  name: meta-llama/Llama-3.1-8B
+
+data:
+  path: data/train.jsonl
+  format: alpaca
+  eval_split: 0.05
+
+trainer:
+  strategy: fsdp
+  batch_size: 2
+  gradient_accumulation: 8
+  learning_rate: 5e-5
+  num_epochs: 3
+
+logging:
+  backends: [console, tensorboard]
+  project: full-finetune
+
+output:
+  dir: output/full-finetune
+  merge_on_complete: true

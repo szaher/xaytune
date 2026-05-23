@@ -1,0 +1,28 @@
+# Pre-training / continued pre-training example
+# Usage: trainlib train --config configs/examples/pretrain.yaml
+base: pretrain
+
+model:
+  name: meta-llama/Llama-3.1-8B
+
+data:
+  path: data/corpus/
+  format: text
+  packing: true
+  streaming: true
+  max_seq_length: 4096
+
+trainer:
+  strategy: fsdp
+  batch_size: 2
+  gradient_accumulation: 16
+  learning_rate: 3e-4
+  max_steps: 100000
+  warmup_steps: 2000
+
+logging:
+  backends: [console, tensorboard]
+  project: pretrain
+
+output:
+  dir: output/pretrain

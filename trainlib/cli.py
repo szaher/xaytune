@@ -145,8 +145,20 @@ def _handle_train(args: argparse.Namespace) -> int:
         print(config.model_dump_json(indent=2))
         return 0
 
+    resume_from = None
+    if args.resume:
+        from trainlib.trainer.checkpointing import find_latest_checkpoint
+
+        resume_from = find_latest_checkpoint(config.output.dir)
+        if resume_from is None:
+            print(
+                f"Error: No checkpoint found in '{config.output.dir}'",
+                file=sys.stderr,
+            )
+            return 1
+
     recipe_fn = recipe_registry.get(config.recipe)
-    recipe_fn(config=config)
+    recipe_fn(config=config, resume_from=resume_from)
     return 0
 
 

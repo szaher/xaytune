@@ -71,8 +71,47 @@ class TestTrainCommand:
         result = main(["train", "--config", "test.yaml"])
 
         mock_registry.get.assert_called_once_with("finetune")
-        mock_recipe.assert_called_once_with(config=mock_config)
+        mock_recipe.assert_called_once_with(config=mock_config, resume_from=None)
         assert result == 0
+
+    @patch("trainlib.trainer.checkpointing.find_latest_checkpoint")
+    @patch("trainlib.cli.load_config")
+    @patch("trainlib.cli.validate_config")
+    @patch("trainlib.cli.recipe_registry")
+    def test_train_resume_passes_checkpoint_dir(
+        self, mock_registry, mock_validate, mock_load, mock_find
+    ):
+        mock_config = MagicMock()
+        mock_config.recipe = "finetune"
+        mock_config.output.dir = "output"
+        mock_load.return_value = mock_config
+        mock_recipe = MagicMock()
+        mock_registry.get.return_value = mock_recipe
+        mock_find.return_value = "output/checkpoint-100"
+
+        result = main(["train", "--config", "test.yaml", "--resume"])
+
+        mock_find.assert_called_once_with("output")
+        mock_recipe.assert_called_once_with(
+            config=mock_config, resume_from="output/checkpoint-100"
+        )
+        assert result == 0
+
+    @patch("trainlib.trainer.checkpointing.find_latest_checkpoint")
+    @patch("trainlib.cli.load_config")
+    @patch("trainlib.cli.validate_config")
+    def test_train_resume_no_checkpoint_returns_error(
+        self, mock_validate, mock_load, mock_find
+    ):
+        mock_config = MagicMock()
+        mock_config.recipe = "finetune"
+        mock_config.output.dir = "output"
+        mock_load.return_value = mock_config
+        mock_find.return_value = None
+
+        result = main(["train", "--config", "test.yaml", "--resume"])
+
+        assert result == 1
 
 
 class TestListCommand:

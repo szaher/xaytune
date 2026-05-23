@@ -194,7 +194,7 @@ def _handle_eval(args: argparse.Namespace) -> int:
         data = [json.loads(line) for line in dataset_path.read_text().splitlines() if line.strip()]
         metrics = [m.strip() for m in args.metrics.split(",")] if args.metrics else None
 
-        results = evaluate(model=args.model, dataset=data, metrics=metrics)
+        results = evaluate(model=args.model, dataset=data, metrics=metrics)  # type: ignore[assignment]
 
         for metric_name, value in results.items():
             print(f"{metric_name}: {value:.4f}")

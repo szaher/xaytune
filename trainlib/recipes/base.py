@@ -57,7 +57,7 @@ def setup_training(
         eval_data = None
 
     train_dataloader: Any = DataLoader(
-        train_data,
+        train_data,  # type: ignore[arg-type]
         batch_size=config.trainer.batch_size,
         shuffle=True,
     )
@@ -65,7 +65,7 @@ def setup_training(
     eval_dataloader: Any = None
     if eval_data is not None:
         eval_dataloader = DataLoader(
-            eval_data,
+            eval_data,  # type: ignore[arg-type]
             batch_size=config.trainer.batch_size,
             shuffle=False,
         )

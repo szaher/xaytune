@@ -171,3 +171,15 @@ trainlib export push --model output/merged --repo username/my-model
 # 3b. Or convert to GGUF for local inference
 trainlib export gguf --model output/merged --output model.gguf
 ```
+
+---
+
+## Full API Reference
+
+::: trainlib.export.merge.merge
+
+::: trainlib.export.merge.save
+
+::: trainlib.export.hub.push_to_hub
+
+::: trainlib.export.gguf.to_gguf

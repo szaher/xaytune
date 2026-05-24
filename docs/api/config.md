@@ -195,3 +195,45 @@ config = load_config(
 # Validate
 validate_config(config)
 ```
+
+---
+
+## Full API Reference
+
+### Schema Classes
+
+::: trainlib.config.schema.TrainConfig
+
+::: trainlib.config.schema.ModelConfig
+
+::: trainlib.config.schema.DataConfig
+
+::: trainlib.config.schema.LoraConfig
+
+::: trainlib.config.schema.TrainerConfig
+
+::: trainlib.config.schema.EvalConfig
+
+::: trainlib.config.schema.LoggingConfig
+
+::: trainlib.config.schema.OutputConfig
+
+::: trainlib.config.schema.FSDPConfig
+
+::: trainlib.config.schema.DeepSpeedConfig
+
+### Parser
+
+::: trainlib.config.parser.load_config
+
+::: trainlib.config.parser.merge_dicts
+
+::: trainlib.config.parser.apply_overrides
+
+### Validation
+
+::: trainlib.config.validation.validate_config
+
+::: trainlib.config.validation.preflight_check
+
+::: trainlib.config.validation.ConfigValidationError

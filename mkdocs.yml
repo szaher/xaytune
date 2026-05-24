@@ -43,8 +43,12 @@ nav:
       - Alignment: recipes/alignment.md
   - API Reference:
       - Overview: api/index.md
+      - Recipes: api/recipes.md
+      - Data Pipeline: api/data.md
+      - Trainer: api/trainer.md
       - Config: api/config.md
       - Callbacks: api/callbacks.md
+      - Alignment Losses: api/alignment.md
       - Evaluation: api/evaluation.md
       - Export: api/export.md
   - CLI Reference: cli.md

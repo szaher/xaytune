@@ -149,3 +149,17 @@ trainlib compare model-a model-b --benchmarks mmlu,gsm8k
 ```
 
 This prints a table showing each model's score on every benchmark metric.
+
+---
+
+## Full API Reference
+
+::: trainlib.eval.evaluate.evaluate
+
+::: trainlib.eval.benchmarks.benchmark_evaluate
+
+::: trainlib.eval.metrics.compute_loss
+
+::: trainlib.eval.metrics.compute_perplexity
+
+::: trainlib.eval.metrics.compute_token_accuracy

@@ -102,3 +102,11 @@ def notify_checkpoint(state):
 def handle_error(state):
     print(f"Error at step {state.global_step}: {state.metrics.get('error')}")
 ```
+
+---
+
+## Full API Reference
+
+::: trainlib.trainer.callbacks.TrainState
+
+::: trainlib.trainer.callbacks.CallbackManager

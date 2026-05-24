@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import trainlib
 from trainlib.cli import main
 
 FIXTURES = Path(__file__).parent / "test_config" / "fixtures"
@@ -53,7 +54,7 @@ class TestCLI:
 
     def test_version(self):
         result = self._run("--version")
-        assert "0.1.0" in result.stdout
+        assert trainlib.__version__ in result.stdout
 
 
 class TestTrainCommand:

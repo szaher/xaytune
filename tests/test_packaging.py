@@ -6,10 +6,10 @@ import trainlib
 
 class TestPackageMetadata:
     def test_version_is_string(self):
-        assert isinstance(trainlib.__version__, "0.1.0".__class__)
+        assert isinstance(trainlib.__version__, str)
 
     def test_version_matches_pyproject(self):
-        assert trainlib.__version__ == "0.1.0"
+        assert trainlib.__version__ == "0.5.0"
 
     def test_all_exports(self):
         expected = {
@@ -27,7 +27,7 @@ class TestPythonModule:
             text=True,
         )
         assert result.returncode == 0
-        assert "0.1.0" in result.stdout
+        assert trainlib.__version__ in result.stdout
 
     def test_python_m_trainlib_help(self):
         result = subprocess.run(

@@ -25,6 +25,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import shutil
@@ -45,11 +46,15 @@ from trainlib.config.schema import (
     TrainerConfig,
 )
 from trainlib.data import load_dataset
-from trainlib.data.tokenizer import collate_tokenized, tokenize_dataset
+from trainlib.data.tokenizer import (
+    collate_preference,
+    collate_tokenized,
+    tokenize_dataset,
+    tokenize_preference_dataset,
+)
 from trainlib.eval import evaluate
 from trainlib.export import save
-from trainlib.recipes.align.dpo import dpo_loss
-from trainlib.recipes.align.logprobs import get_sequence_logps
+from trainlib.recipes.align.loss_dispatch import create_alignment_loss_fn
 from trainlib.recipes.base import setup_training
 from trainlib.trainer import CallbackManager
 from trainlib.trainer.callbacks import TrainState
@@ -184,46 +189,41 @@ print("\n" + "-" * 60)
 print("4. ALIGNMENT — DPO loss function")
 print("-" * 60)
 
-# DPO operates on tokenized preference pairs (chosen_input_ids / rejected_input_ids).
-# Here we demonstrate the DPO loss computation directly with the tiny model.
+# Write preference data (prompt + chosen + rejected)
+pref_path = data_dir / "prefs.jsonl"
+pref_samples = [
+    {"prompt": "What is AI? ", "chosen": "Artificial intelligence.", "rejected": "Magic."},
+    {"prompt": "Say hi. ", "chosen": "Hello there!", "rejected": "No."},
+    {"prompt": "2+2? ", "chosen": "4", "rejected": "5"},
+    {"prompt": "Color of sky? ", "chosen": "Blue", "rejected": "Green"},
+]
+with open(pref_path, "w") as f:
+    for s in pref_samples:
+        f.write(json.dumps(s) + "\n")
+
+# Tokenize preference pairs
+pref_tokenized = tokenize_preference_dataset(pref_samples, tokenizer, max_seq_length=128)
+print(f"   Tokenized {len(pref_tokenized)} preference pairs")
+print(f"   Keys: {list(pref_tokenized[0].keys())}")
+
+# Collate into a batch
+pref_batch = collate_preference(pref_tokenized[:2], pad_token_id=tokenizer.pad_token_id)
+print(f"   Batch chosen shape:   {list(pref_batch['chosen_input_ids'].shape)}")
+print(f"   Batch rejected shape: {list(pref_batch['rejected_input_ids'].shape)}")
+
+# Create DPO loss function with a reference model
 policy_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
-ref_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+ref_model = copy.deepcopy(policy_model)
 ref_model.eval()
+for p in ref_model.parameters():
+    p.requires_grad = False
 
-# Tokenize a chosen/rejected pair
-chosen_text = "AI is artificial intelligence, a branch of computer science."
-rejected_text = "AI is magic."
-chosen_enc = tokenizer(chosen_text, return_tensors="pt", padding=True)
-rejected_enc = tokenizer(rejected_text, return_tensors="pt", padding=True)
+loss_fn = create_alignment_loss_fn(method="dpo", ref_model=ref_model, beta=0.2)
+policy_model.train()
+loss = loss_fn(policy_model, pref_batch, None)
 
-with torch.no_grad():
-    ref_chosen_out = ref_model(**chosen_enc)
-    ref_rejected_out = ref_model(**rejected_enc)
-    ref_chosen_logps = get_sequence_logps(
-        ref_chosen_out.logits, chosen_enc["input_ids"], chosen_enc["attention_mask"],
-    )
-    ref_rejected_logps = get_sequence_logps(
-        ref_rejected_out.logits, rejected_enc["input_ids"], rejected_enc["attention_mask"],
-    )
-
-policy_chosen_out = policy_model(**chosen_enc)
-policy_rejected_out = policy_model(**rejected_enc)
-policy_chosen_logps = get_sequence_logps(
-    policy_chosen_out.logits, chosen_enc["input_ids"], chosen_enc["attention_mask"],
-)
-policy_rejected_logps = get_sequence_logps(
-    policy_rejected_out.logits, rejected_enc["input_ids"], rejected_enc["attention_mask"],
-)
-
-loss = dpo_loss(
-    policy_chosen_logps=policy_chosen_logps,
-    policy_rejected_logps=policy_rejected_logps,
-    ref_chosen_logps=ref_chosen_logps,
-    ref_rejected_logps=ref_rejected_logps,
-    beta=0.2,
-)
-print("   Method:       DPO (beta=0.2)")
-print(f"   DPO loss:     {loss.item():.4f}")
+print("   Method:         DPO (beta=0.2)")
+print(f"   DPO loss:       {loss.item():.4f}")
 assert math.isfinite(loss.item())
 assert loss.requires_grad
 print(f"   Differentiable: {loss.requires_grad}")

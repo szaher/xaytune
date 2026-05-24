@@ -20,7 +20,8 @@ def validate_batch(
         issues.append(f"Batch must be a dict, got {type(batch).__name__}")
         return issues
 
-    if "input_ids" not in batch:
+    is_preference = "chosen_input_ids" in batch
+    if "input_ids" not in batch and not is_preference:
         issues.append("Batch missing required field: 'input_ids'")
 
     if "input_ids" in batch:

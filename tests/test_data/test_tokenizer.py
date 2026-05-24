@@ -4,7 +4,12 @@ from unittest.mock import MagicMock
 
 import torch
 
-from trainlib.data.tokenizer import collate_tokenized, tokenize_dataset
+from trainlib.data.tokenizer import (
+    collate_preference,
+    collate_tokenized,
+    tokenize_dataset,
+    tokenize_preference_dataset,
+)
 
 
 def _make_tokenizer(vocab_size: int = 100, max_length: int = 512) -> MagicMock:
@@ -142,3 +147,165 @@ class TestCollateTokenized:
         result = collate_tokenized(batch)
         assert result["input_ids"].dtype == torch.long
         assert result["labels"].dtype == torch.long
+
+
+class TestTokenizePreferenceDataset:
+    def test_tokenize_preference_samples(self):
+        data = [{"prompt": "Question? ", "chosen": "Good answer", "rejected": "Bad answer"}]
+        tok = _make_tokenizer()
+        result = tokenize_preference_dataset(data, tok)
+        assert len(result) == 1
+        assert "chosen_input_ids" in result[0]
+        assert "chosen_attention_mask" in result[0]
+        assert "rejected_input_ids" in result[0]
+        assert "rejected_attention_mask" in result[0]
+        assert "input_ids" not in result[0]
+
+    def test_tokenize_preference_already_tokenized(self):
+        data = [{"chosen_input_ids": [1, 2], "rejected_input_ids": [3, 4]}]
+        tok = _make_tokenizer()
+        result = tokenize_preference_dataset(data, tok)
+        assert result is data
+
+    def test_tokenize_preference_concatenates_prompt(self):
+        call_texts = []
+
+        def _tokenize(
+            text, *, truncation=True, max_length=512, padding=False,
+            return_attention_mask=True,
+        ):
+            call_texts.append(text)
+            ids = list(range(1, len(text.split()) + 1))
+            return {"input_ids": ids, "attention_mask": [1] * len(ids)}
+
+        tok = MagicMock(side_effect=_tokenize)
+        tok.model_max_length = 512
+        data = [{"prompt": "Q: ", "chosen": "A", "rejected": "B"}]
+        tokenize_preference_dataset(data, tok)
+        assert call_texts[0] == "Q: A"
+        assert call_texts[1] == "Q: B"
+
+    def test_tokenize_preference_skips_empty_chosen(self):
+        data = [{"prompt": "Q", "chosen": "", "rejected": "B"}]
+        tok = _make_tokenizer()
+        result = tokenize_preference_dataset(data, tok)
+        assert result == []
+
+    def test_tokenize_preference_skips_empty_rejected(self):
+        data = [{"prompt": "Q", "chosen": "A", "rejected": ""}]
+        tok = _make_tokenizer()
+        result = tokenize_preference_dataset(data, tok)
+        assert result == []
+
+    def test_tokenize_preference_empty_data(self):
+        tok = _make_tokenizer()
+        result = tokenize_preference_dataset([], tok)
+        assert result == []
+
+    def test_tokenize_preference_no_prompt(self):
+        call_texts = []
+
+        def _tokenize(
+            text, *, truncation=True, max_length=512, padding=False,
+            return_attention_mask=True,
+        ):
+            call_texts.append(text)
+            ids = list(range(1, len(text.split()) + 1))
+            return {"input_ids": ids, "attention_mask": [1] * len(ids)}
+
+        tok = MagicMock(side_effect=_tokenize)
+        tok.model_max_length = 512
+        data = [{"prompt": "", "chosen": "Good", "rejected": "Bad"}]
+        tokenize_preference_dataset(data, tok)
+        assert call_texts[0] == "Good"
+        assert call_texts[1] == "Bad"
+
+
+class TestCollatePreference:
+    def test_collate_preference_pads_both(self):
+        batch = [
+            {
+                "chosen_input_ids": [1, 2],
+                "chosen_attention_mask": [1, 1],
+                "rejected_input_ids": [3, 4, 5],
+                "rejected_attention_mask": [1, 1, 1],
+            },
+            {
+                "chosen_input_ids": [6, 7, 8],
+                "chosen_attention_mask": [1, 1, 1],
+                "rejected_input_ids": [9],
+                "rejected_attention_mask": [1],
+            },
+        ]
+        result = collate_preference(batch)
+        assert result["chosen_input_ids"].shape == (2, 3)
+        assert result["rejected_input_ids"].shape == (2, 3)
+        assert result["chosen_input_ids"][0].tolist() == [1, 2, 0]
+        assert result["rejected_input_ids"][1].tolist() == [9, 0, 0]
+
+    def test_collate_preference_attention_mask(self):
+        batch = [
+            {
+                "chosen_input_ids": [1],
+                "chosen_attention_mask": [1],
+                "rejected_input_ids": [2, 3],
+                "rejected_attention_mask": [1, 1],
+            },
+            {
+                "chosen_input_ids": [4, 5],
+                "chosen_attention_mask": [1, 1],
+                "rejected_input_ids": [6],
+                "rejected_attention_mask": [1],
+            },
+        ]
+        result = collate_preference(batch)
+        assert result["chosen_attention_mask"][0].tolist() == [1, 0]
+        assert result["rejected_attention_mask"][1].tolist() == [1, 0]
+
+    def test_collate_preference_returns_tensors(self):
+        batch = [
+            {
+                "chosen_input_ids": [1, 2],
+                "chosen_attention_mask": [1, 1],
+                "rejected_input_ids": [3],
+                "rejected_attention_mask": [1],
+            },
+        ]
+        result = collate_preference(batch)
+        for key in result:
+            assert isinstance(result[key], torch.Tensor)
+            assert result[key].dtype == torch.long
+
+    def test_collate_preference_custom_pad_token(self):
+        batch = [
+            {
+                "chosen_input_ids": [1],
+                "chosen_attention_mask": [1],
+                "rejected_input_ids": [2, 3],
+                "rejected_attention_mask": [1, 1],
+            },
+            {
+                "chosen_input_ids": [4, 5],
+                "chosen_attention_mask": [1, 1],
+                "rejected_input_ids": [6],
+                "rejected_attention_mask": [1],
+            },
+        ]
+        result = collate_preference(batch, pad_token_id=99)
+        assert result["chosen_input_ids"][0].tolist() == [1, 99]
+        assert result["rejected_input_ids"][1].tolist() == [6, 99]
+
+    def test_collate_preference_has_four_keys(self):
+        batch = [
+            {
+                "chosen_input_ids": [1],
+                "chosen_attention_mask": [1],
+                "rejected_input_ids": [2],
+                "rejected_attention_mask": [1],
+            },
+        ]
+        result = collate_preference(batch)
+        assert set(result.keys()) == {
+            "chosen_input_ids", "chosen_attention_mask",
+            "rejected_input_ids", "rejected_attention_mask",
+        }

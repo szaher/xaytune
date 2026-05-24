@@ -173,19 +173,38 @@ class Trainer:
         if isinstance(batch, dict):
             batch = self._move_batch_to_device(batch)
 
+        # Skip forward pass for preference batches — alignment loss_fn does its own
+        skip_forward = (
+            self._loss_fn is not None
+            and isinstance(batch, dict)
+            and "chosen_input_ids" in batch
+        )
+
         # Forward pass with optional autocast
         if self._amp_dtype is not None:
             with torch.amp.autocast(self._device_type, dtype=self._amp_dtype):
-                outputs = model(**batch) if isinstance(batch, dict) else model(batch)
+                if skip_forward:
+                    loss = self._loss_fn(model, batch, None)
+                elif isinstance(batch, dict):
+                    outputs = model(**batch)
+                    if self._loss_fn is not None:
+                        loss = self._loss_fn(model, batch, outputs)
+                    else:
+                        loss = outputs.loss if hasattr(outputs, "loss") else outputs
+                else:
+                    outputs = model(batch)
+                    loss = outputs.loss if hasattr(outputs, "loss") else outputs
+        else:
+            if skip_forward:
+                loss = self._loss_fn(model, batch, None)
+            elif isinstance(batch, dict):
+                outputs = model(**batch)
                 if self._loss_fn is not None:
                     loss = self._loss_fn(model, batch, outputs)
                 else:
                     loss = outputs.loss if hasattr(outputs, "loss") else outputs
-        else:
-            outputs = model(**batch) if isinstance(batch, dict) else model(batch)
-            if self._loss_fn is not None:
-                loss = self._loss_fn(model, batch, outputs)
             else:
+                outputs = model(batch)
                 loss = outputs.loss if hasattr(outputs, "loss") else outputs
 
         if self.config.gradient_accumulation > 1:

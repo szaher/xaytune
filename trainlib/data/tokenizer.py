@@ -49,6 +49,87 @@ def tokenize_dataset(
     return tokenized
 
 
+def tokenize_preference_dataset(
+    data: list[dict[str, Any]],
+    tokenizer: Any,
+    max_seq_length: int = 0,
+) -> list[dict[str, list[int]]]:
+    if not data:
+        return []
+
+    if "chosen_input_ids" in data[0]:
+        return data
+
+    max_length = max_seq_length if max_seq_length > 0 else getattr(
+        tokenizer, "model_max_length", 1024
+    )
+
+    tokenized = []
+    for sample in data:
+        prompt = sample.get("prompt", "")
+        chosen = sample.get("chosen", "")
+        rejected = sample.get("rejected", "")
+        if not chosen or not rejected:
+            continue
+
+        chosen_text = f"{prompt}{chosen}" if prompt else chosen
+        rejected_text = f"{prompt}{rejected}" if prompt else rejected
+
+        chosen_enc = tokenizer(
+            chosen_text,
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+            return_attention_mask=True,
+        )
+        rejected_enc = tokenizer(
+            rejected_text,
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+            return_attention_mask=True,
+        )
+
+        if not chosen_enc["input_ids"] or not rejected_enc["input_ids"]:
+            continue
+
+        tokenized.append({
+            "chosen_input_ids": chosen_enc["input_ids"],
+            "chosen_attention_mask": chosen_enc["attention_mask"],
+            "rejected_input_ids": rejected_enc["input_ids"],
+            "rejected_attention_mask": rejected_enc["attention_mask"],
+        })
+
+    return tokenized
+
+
+def collate_preference(
+    batch: list[dict[str, Any]],
+    pad_token_id: int = 0,
+) -> dict[str, torch.Tensor]:
+    result: dict[str, torch.Tensor] = {}
+
+    for prefix in ("chosen", "rejected"):
+        ids_key = f"{prefix}_input_ids"
+        mask_key = f"{prefix}_attention_mask"
+
+        max_len = max(len(_to_list(sample[ids_key])) for sample in batch)
+
+        all_ids = []
+        all_mask = []
+        for sample in batch:
+            ids = _to_list(sample[ids_key])
+            pad_len = max_len - len(ids)
+            all_ids.append(ids + [pad_token_id] * pad_len)
+            mask = _to_list(sample.get(mask_key, [1] * len(ids)))
+            all_mask.append(mask + [0] * pad_len)
+
+        result[ids_key] = torch.tensor(all_ids, dtype=torch.long)
+        result[mask_key] = torch.tensor(all_mask, dtype=torch.long)
+
+    return result
+
+
 def _to_list(val: Any) -> list[int]:
     if isinstance(val, torch.Tensor):
         return val.tolist()

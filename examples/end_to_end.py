@@ -498,7 +498,7 @@ distill_state = distill_trainer.train(
     model=student,
     train_dataloader=lr_loader,
 )
-print(f"   Trainer subclass: DistillTrainer")
+print("   Trainer subclass: DistillTrainer")
 print(f"   Final loss:       {distill_state.metrics.get('loss', 'N/A'):.6f}")
 print(f"   Global steps:     {distill_state.global_step}")
 assert distill_state.global_step > 0
@@ -531,7 +531,8 @@ state = xaytune.finetune(
     mixed_precision="fp32",
 )
 print(
-    f"   Injected nn.Module — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}"
+    f"   Injected nn.Module — loss: {state.metrics.get('loss', 'N/A'):.4f},"
+    f" steps: {state.global_step}"
 )
 assert state.global_step > 0
 
@@ -557,7 +558,8 @@ state = xaytune.finetune(
     mixed_precision="fp32",
 )
 print(
-    f"   Registered loader  — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}"
+    f"   Registered loader  — loss: {state.metrics.get('loss', 'N/A'):.4f},"
+    f" steps: {state.global_step}"
 )
 assert state.global_step > 0
 print("   OK")

@@ -1,5 +1,5 @@
 # REINFORCE alignment example
-# Usage: trainlib train --config configs/examples/reinforce_align.yaml
+# Usage: xaytune train --config configs/examples/reinforce_align.yaml
 recipe: align
 method: reinforce
 

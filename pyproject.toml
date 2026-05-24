@@ -82,6 +82,9 @@ exclude = ["examples/**/*.ipynb"]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["N812"]  # Allow lowercase imports as non-lowercase (e.g., torch.nn.functional as F)
 
+[tool.ruff.lint.per-file-ignores]
+"examples/*.py" = ["E402", "I001"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

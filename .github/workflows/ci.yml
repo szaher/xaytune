@@ -38,4 +38,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv pip install -e ".[dev]" --system
-      - run: mypy trainlib/ --ignore-missing-imports
+      - run: mypy xaytune/ --ignore-missing-imports

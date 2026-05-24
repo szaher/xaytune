@@ -1,5 +1,5 @@
 # Full fine-tuning example (all parameters trainable)
-# Usage: trainlib train --config configs/examples/full_finetune.yaml
+# Usage: xaytune train --config configs/examples/full_finetune.yaml
 base: full_finetune
 
 model:

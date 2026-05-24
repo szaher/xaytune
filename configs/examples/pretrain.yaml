@@ -1,5 +1,5 @@
 # Pre-training / continued pre-training example
-# Usage: trainlib train --config configs/examples/pretrain.yaml
+# Usage: xaytune train --config configs/examples/pretrain.yaml
 base: pretrain
 
 model:

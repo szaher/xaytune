@@ -1,5 +1,5 @@
 # DPO alignment example
-# Usage: trainlib train --config configs/examples/dpo_align.yaml
+# Usage: xaytune train --config configs/examples/dpo_align.yaml
 recipe: align
 method: dpo
 

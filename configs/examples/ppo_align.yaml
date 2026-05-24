@@ -1,5 +1,5 @@
 # PPO alignment example (Proximal Policy Optimization)
-# Usage: trainlib train --config configs/examples/ppo_align.yaml
+# Usage: xaytune train --config configs/examples/ppo_align.yaml
 recipe: align
 method: ppo
 

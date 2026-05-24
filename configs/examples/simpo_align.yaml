@@ -1,5 +1,5 @@
 # SimPO alignment example (Simple Preference Optimization)
-# Usage: trainlib train --config configs/examples/simpo_align.yaml
+# Usage: xaytune train --config configs/examples/simpo_align.yaml
 recipe: align
 method: simpo
 

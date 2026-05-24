@@ -1,5 +1,5 @@
 # QLoRA fine-tuning example (4-bit quantized base model)
-# Usage: trainlib train --config configs/examples/qlora_finetune.yaml
+# Usage: xaytune train --config configs/examples/qlora_finetune.yaml
 base: qlora
 
 model:

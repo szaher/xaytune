@@ -1,5 +1,5 @@
 # LoRA fine-tuning example
-# Usage: trainlib train --config configs/examples/lora_finetune.yaml
+# Usage: xaytune train --config configs/examples/lora_finetune.yaml
 base: lora
 
 model:

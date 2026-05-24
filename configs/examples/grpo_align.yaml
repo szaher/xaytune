@@ -1,5 +1,5 @@
 # GRPO alignment example (Group Relative Policy Optimization)
-# Usage: trainlib train --config configs/examples/grpo_align.yaml
+# Usage: xaytune train --config configs/examples/grpo_align.yaml
 recipe: align
 method: grpo
 

@@ -179,27 +179,66 @@ class FSDPConfig(BaseModel):
 
     Attributes:
         sharding_strategy: How to shard parameters across ranks.
-        cpu_offload: Offload parameters and gradients to CPU.
-        backward_prefetch: Prefetch strategy for backward pass.
-        mixed_precision: Use mixed precision within FSDP.
+            ``"full_shard"`` shards params, grads, and optimizer states.
+            ``"shard_grad_op"`` only shards grads and optimizer states.
+            ``"no_shard"`` disables sharding (equivalent to DDP).
+        cpu_offload: Offload parameters and gradients to CPU RAM.
+            Reduces GPU memory at the cost of slower training.
+        backward_prefetch: Prefetch next layer's params during backward.
+            ``"backward_pre"`` is faster, ``"backward_post"`` uses less memory.
+        mixed_precision: Use FSDP-native mixed precision (dtype from
+            ``TrainerConfig.mixed_precision``).
+        auto_wrap_min_params: Minimum parameter count for automatic FSDP
+            wrapping. Layers with fewer parameters than this are grouped
+            together. Set to 0 to disable auto-wrapping.
+        forward_prefetch: Prefetch next layer's params during forward pass.
+        sync_module_states: Broadcast module states from rank 0 on init.
+            Useful when only rank 0 loads the checkpoint.
+        limit_all_gathers: Rate-limit all-gathers to reduce memory spikes.
+        activation_checkpointing: Apply activation checkpointing to
+            auto-wrapped layers (trades compute for memory).
     """
 
     sharding_strategy: Literal["full_shard", "shard_grad_op", "no_shard"] = "full_shard"
     cpu_offload: bool = False
     backward_prefetch: Literal["backward_pre", "backward_post"] | None = None
     mixed_precision: bool = True
+    auto_wrap_min_params: int = 100_000
+    forward_prefetch: bool = False
+    sync_module_states: bool = True
+    limit_all_gathers: bool = True
+    activation_checkpointing: bool = False
 
 
 class DeepSpeedConfig(BaseModel):
     """DeepSpeed integration configuration.
 
     Attributes:
-        config_file: Path to a DeepSpeed JSON config file.
-        zero_stage: ZeRO optimization stage (0, 1, 2, or 3).
+        config_file: Path to a DeepSpeed JSON config file. When provided,
+            all other fields are ignored and the JSON file is used directly.
+        zero_stage: ZeRO optimization stage.
+            ``0`` = disabled, ``1`` = optimizer state partitioning,
+            ``2`` = gradient + optimizer partitioning,
+            ``3`` = full parameter partitioning.
+        offload_optimizer: Offload optimizer states to CPU (ZeRO stage 2/3).
+        offload_param: Offload parameters to CPU (ZeRO stage 3 only).
+        overlap_comm: Overlap gradient communication with backward pass.
+        contiguous_gradients: Use contiguous memory for gradients.
+        reduce_bucket_size: Size of gradient reduction buckets in bytes.
+        stage3_prefetch_bucket_size: Prefetch buffer size for ZeRO-3.
+        stage3_param_persistence_threshold: Params smaller than this stay
+            on GPU even in ZeRO-3 (reduces communication overhead).
     """
 
     config_file: str | None = None
-    zero_stage: int = 2
+    zero_stage: Literal[0, 1, 2, 3] = 2
+    offload_optimizer: bool = False
+    offload_param: bool = False
+    overlap_comm: bool = True
+    contiguous_gradients: bool = True
+    reduce_bucket_size: int = 500_000_000
+    stage3_prefetch_bucket_size: int = 50_000_000
+    stage3_param_persistence_threshold: int = 100_000
 
 
 class TrainConfig(BaseModel):

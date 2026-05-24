@@ -127,6 +127,26 @@ def wrap_model_distributed(
                         buffer_dtype=mp_dtype,
                     )
 
+            if getattr(fsdp_config, "auto_wrap_min_params", 0) > 0:
+                from functools import partial
+
+                from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+
+                fsdp_kwargs["auto_wrap_policy"] = partial(
+                    size_based_auto_wrap_policy,
+                    min_num_params=fsdp_config.auto_wrap_min_params,
+                )
+
+            fsdp_kwargs["forward_prefetch"] = getattr(
+                fsdp_config, "forward_prefetch", False,
+            )
+            fsdp_kwargs["sync_module_states"] = getattr(
+                fsdp_config, "sync_module_states", True,
+            )
+            fsdp_kwargs["limit_all_gathers"] = getattr(
+                fsdp_config, "limit_all_gathers", True,
+            )
+
         fsdp_kwargs.update(kwargs)
         return FullyShardedDataParallel(model, **fsdp_kwargs)
 
@@ -141,8 +161,33 @@ def wrap_model_distributed(
                 with open(deepspeed_config.config_file) as f:
                     config_dict = json.load(f)
             else:
+                zero_opt: dict[str, Any] = {
+                    "stage": deepspeed_config.zero_stage,
+                    "overlap_comm": getattr(deepspeed_config, "overlap_comm", True),
+                    "contiguous_gradients": getattr(
+                        deepspeed_config, "contiguous_gradients", True,
+                    ),
+                    "reduce_bucket_size": getattr(
+                        deepspeed_config, "reduce_bucket_size", 500_000_000,
+                    ),
+                }
+
+                if getattr(deepspeed_config, "offload_optimizer", False):
+                    zero_opt["offload_optimizer"] = {"device": "cpu", "pin_memory": True}
+
+                if getattr(deepspeed_config, "offload_param", False):
+                    zero_opt["offload_param"] = {"device": "cpu", "pin_memory": True}
+
+                if deepspeed_config.zero_stage == 3:
+                    zero_opt["stage3_prefetch_bucket_size"] = getattr(
+                        deepspeed_config, "stage3_prefetch_bucket_size", 50_000_000,
+                    )
+                    zero_opt["stage3_param_persistence_threshold"] = getattr(
+                        deepspeed_config, "stage3_param_persistence_threshold", 100_000,
+                    )
+
                 config_dict = {
-                    "zero_optimization": {"stage": deepspeed_config.zero_stage},
+                    "zero_optimization": zero_opt,
                     "train_batch_size": "auto",
                     "train_micro_batch_size_per_gpu": "auto",
                 }

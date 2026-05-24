@@ -390,3 +390,61 @@ class TestCustomLossFn:
         )
 
         assert abs(state.metrics["loss"] - 1.23) < 1e-5
+
+
+class TestGradientAccumulation:
+    def test_accum_across_epoch_boundary(self):
+        config = TrainerConfig(
+            num_epochs=2, batch_size=1, gradient_accumulation=3,
+        )
+        trainer = Trainer(config=config)
+
+        mock_model = MagicMock()
+        mock_model.parameters.return_value = [torch.randn(4, requires_grad=True)]
+        mock_model.return_value = MagicMock()
+        mock_model.return_value.loss = torch.tensor(0.6, requires_grad=True)
+
+        mock_optimizer = MagicMock()
+        mock_scheduler = MagicMock()
+
+        # 2 batches per epoch * 2 epochs = 4 micro-steps total
+        # With accum=3, optimizer should step once (at micro-step 3) not twice
+        dl = [
+            {"input_ids": torch.tensor([1])},
+            {"input_ids": torch.tensor([2])},
+        ]
+
+        trainer.train(
+            model=mock_model,
+            train_dataloader=dl,
+            optimizer=mock_optimizer,
+            scheduler=mock_scheduler,
+        )
+
+        assert mock_optimizer.step.call_count == 1
+
+    def test_accum_steps_correctly_within_epoch(self):
+        config = TrainerConfig(
+            num_epochs=1, batch_size=1, gradient_accumulation=2,
+        )
+        trainer = Trainer(config=config)
+
+        mock_model = MagicMock()
+        mock_model.parameters.return_value = [torch.randn(4, requires_grad=True)]
+        mock_model.return_value = MagicMock()
+        mock_model.return_value.loss = torch.tensor(0.5, requires_grad=True)
+
+        mock_optimizer = MagicMock()
+        mock_scheduler = MagicMock()
+
+        # 6 micro-steps / accum=2 = 3 optimizer steps
+        dl = [{"input_ids": torch.tensor([i])} for i in range(6)]
+
+        trainer.train(
+            model=mock_model,
+            train_dataloader=dl,
+            optimizer=mock_optimizer,
+            scheduler=mock_scheduler,
+        )
+
+        assert mock_optimizer.step.call_count == 3

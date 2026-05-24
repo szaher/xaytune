@@ -133,6 +133,8 @@ class Trainer:
         # Determine the step to resume from in the first epoch
         resumed_step = resume_state.step if resume_state is not None else -1
 
+        self._accum_count = 0
+
         self.callback_manager.fire("train_start", state)
 
         for epoch in range(state.epoch, self.config.num_epochs):
@@ -226,7 +228,8 @@ class Trainer:
         else:
             loss.backward()
 
-        if (state.step + 1) % self.config.gradient_accumulation == 0 or state.step == 0:
+        self._accum_count += 1
+        if self._accum_count % self.config.gradient_accumulation == 0:
             if self._scaler is not None:
                 if self.config.max_grad_norm > 0:
                     self._scaler.unscale_(optimizer)

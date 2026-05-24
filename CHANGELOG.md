@@ -48,7 +48,7 @@
 - Checkpointing: periodic saves, save-last, async checkpoint, resume from checkpoint.
 - Early stopping with configurable patience, metric, and min delta.
 - LR finder with EMA smoothing and suggested LR.
-- Distributed training: DDP, FSDP, DeepSpeed via `trainlib launch`.
+- Distributed training: DDP, FSDP, DeepSpeed via `xaytune launch`.
 - Logging backends: console, WandB, MLflow, TensorBoard.
 - Progress bar with Rich.
 - Python API one-liners: `finetune()`, `pretrain()`, `align()`.

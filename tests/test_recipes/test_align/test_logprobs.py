@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.logprobs import (
+from xaytune.recipes.align.logprobs import (
     get_model_logps,
     get_per_token_logps,
     get_sequence_logps,
@@ -50,9 +50,7 @@ class TestGetModelLogps:
     def test_with_mock_model(self):
         class FakeModel(torch.nn.Module):
             def forward(self, input_ids, attention_mask=None):
-                logits = torch.randn(
-                    input_ids.shape[0], input_ids.shape[1], 100
-                )
+                logits = torch.randn(input_ids.shape[0], input_ids.shape[1], 100)
                 return type("Out", (), {"logits": logits})()
 
         model = FakeModel()
@@ -64,9 +62,7 @@ class TestGetModelLogps:
     def test_uses_labels_when_provided(self):
         class FakeModel(torch.nn.Module):
             def forward(self, input_ids, attention_mask=None):
-                logits = torch.randn(
-                    input_ids.shape[0], input_ids.shape[1], 100
-                )
+                logits = torch.randn(input_ids.shape[0], input_ids.shape[1], 100)
                 return type("Out", (), {"logits": logits})()
 
         model = FakeModel()

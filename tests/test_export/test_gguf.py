@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trainlib.export.gguf import to_gguf
+from xaytune.export.gguf import to_gguf
 
 
 class TestToGguf:
@@ -13,7 +13,7 @@ class TestToGguf:
         model_dir.mkdir()
         output = tmp_path / "output.gguf"
 
-        with patch("trainlib.export.gguf.subprocess.run") as mock_run:
+        with patch("xaytune.export.gguf.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             to_gguf(str(model_dir), output=str(output))
 
@@ -26,7 +26,7 @@ class TestToGguf:
         model_dir.mkdir()
         output = tmp_path / "output.gguf"
 
-        with patch("trainlib.export.gguf.subprocess.run") as mock_run:
+        with patch("xaytune.export.gguf.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             to_gguf(str(model_dir), output=str(output))
 
@@ -39,7 +39,7 @@ class TestToGguf:
         model_dir.mkdir()
         output = tmp_path / "output.gguf"
 
-        with patch("trainlib.export.gguf.subprocess.run") as mock_run:
+        with patch("xaytune.export.gguf.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             to_gguf(str(model_dir), output=str(output), quantization="Q8_0")
 
@@ -55,7 +55,7 @@ class TestToGguf:
         model_dir = tmp_path / "model"
         model_dir.mkdir()
 
-        with patch("trainlib.export.gguf.subprocess.run") as mock_run:
+        with patch("xaytune.export.gguf.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stderr="conversion failed")
             with pytest.raises(RuntimeError, match="GGUF conversion failed"):
                 to_gguf(str(model_dir), output="out.gguf")
@@ -65,7 +65,7 @@ class TestToGguf:
         model_dir.mkdir()
         output = tmp_path / "nested" / "dir" / "output.gguf"
 
-        with patch("trainlib.export.gguf.subprocess.run") as mock_run:
+        with patch("xaytune.export.gguf.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             to_gguf(str(model_dir), output=str(output))
 
@@ -74,6 +74,6 @@ class TestToGguf:
 
 class TestGgufImport:
     def test_importable_from_export(self):
-        from trainlib.export import to_gguf as fn
+        from xaytune.export import to_gguf as fn
 
         assert callable(fn)

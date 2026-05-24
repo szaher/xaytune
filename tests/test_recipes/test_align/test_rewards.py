@@ -1,6 +1,6 @@
 import pytest
 
-from trainlib.recipes.align.rewards import (
+from xaytune.recipes.align.rewards import (
     composite_reward,
     format_check_reward,
     length_penalty_reward,
@@ -69,21 +69,15 @@ class TestLengthPenaltyReward:
 class TestFormatCheckReward:
     def test_all_markers_present(self):
         response = "## Step 1\n```python\ncode\n```"
-        reward = format_check_reward(
-            "p", response, required_markers=["##", "```"]
-        )
+        reward = format_check_reward("p", response, required_markers=["##", "```"])
         assert reward == 1.0
 
     def test_no_markers_present(self):
-        reward = format_check_reward(
-            "p", "plain text", required_markers=["##", "```"]
-        )
+        reward = format_check_reward("p", "plain text", required_markers=["##", "```"])
         assert reward == 0.0
 
     def test_partial_markers(self):
-        reward = format_check_reward(
-            "p", "## heading only", required_markers=["##", "```"]
-        )
+        reward = format_check_reward("p", "## heading only", required_markers=["##", "```"])
         assert reward == 0.5
 
     def test_empty_markers_returns_zero(self):

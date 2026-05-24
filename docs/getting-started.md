@@ -2,7 +2,7 @@
 
 ## Installation
 
-Install trainlib from source:
+Install xaytune from source:
 
 ```bash
 pip install -e .
@@ -10,7 +10,7 @@ pip install -e .
 
 ### Optional Dependencies
 
-trainlib ships optional extras for evaluation, logging, and distributed training:
+xaytune ships optional extras for evaluation, logging, and distributed training:
 
 ```bash
 # Benchmark evaluation (lm-eval)
@@ -43,12 +43,12 @@ pip install -e ".[dev]"
 
 ### Python API
 
-The fastest way to start training is with the top-level `trainlib.finetune()` function:
+The fastest way to start training is with the top-level `xaytune.finetune()` function:
 
 ```python
-import trainlib
+import xaytune
 
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="lora",
@@ -100,13 +100,13 @@ output:
 Then run:
 
 ```bash
-trainlib train --config my_config.yaml
+xaytune train --config my_config.yaml
 ```
 
 !!! tip "Dry run"
     Use `--dry-run` to validate your config without starting training:
     ```bash
-    trainlib train --config my_config.yaml --dry-run
+    xaytune train --config my_config.yaml --dry-run
     ```
 
 ### Config Overrides
@@ -114,7 +114,7 @@ trainlib train --config my_config.yaml
 Override any config value from the command line using dot notation:
 
 ```bash
-trainlib train --config my_config.yaml \
+xaytune train --config my_config.yaml \
     --override model.name=mistralai/Mistral-7B-v0.3 \
     --override trainer.learning_rate=1e-4
 ```
@@ -126,13 +126,13 @@ trainlib train --config my_config.yaml \
 Evaluate a model against standard benchmarks:
 
 ```bash
-trainlib eval --model output/my-finetune --benchmarks mmlu,gsm8k
+xaytune eval --model output/my-finetune --benchmarks mmlu,gsm8k
 ```
 
 Or evaluate on a custom dataset:
 
 ```bash
-trainlib eval --model output/my-finetune --dataset data/eval.jsonl --metrics loss,perplexity
+xaytune eval --model output/my-finetune --dataset data/eval.jsonl --metrics loss,perplexity
 ```
 
 ---
@@ -142,19 +142,19 @@ trainlib eval --model output/my-finetune --dataset data/eval.jsonl --metrics los
 Merge LoRA adapters back into the base model:
 
 ```bash
-trainlib export merge --checkpoint output/my-finetune --output output/merged
+xaytune export merge --checkpoint output/my-finetune --output output/merged
 ```
 
 Push to Hugging Face Hub:
 
 ```bash
-trainlib export push --model output/merged --repo username/my-model
+xaytune export push --model output/merged --repo username/my-model
 ```
 
 Convert to GGUF for local inference with llama.cpp:
 
 ```bash
-trainlib export gguf --model output/merged --output model.gguf --quant Q4_K_M
+xaytune export gguf --model output/merged --output model.gguf --quant Q4_K_M
 ```
 
 ---

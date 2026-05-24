@@ -1,15 +1,15 @@
 # Config Schema Reference
 
-trainlib uses [Pydantic](https://docs.pydantic.dev/) models for configuration. The root model is `TrainConfig`, which nests several sub-models for model, data, training, evaluation, logging, and output settings.
+xaytune uses [Pydantic](https://docs.pydantic.dev/) models for configuration. The root model is `TrainConfig`, which nests several sub-models for model, data, training, evaluation, logging, and output settings.
 
-All config models live in `trainlib.config.schema`.
+All config models live in `xaytune.config.schema`.
 
 ## TrainConfig
 
 The top-level configuration object. Every training run is driven by a `TrainConfig`.
 
 ```python
-from trainlib.config.schema import TrainConfig
+from xaytune.config.schema import TrainConfig
 
 config = TrainConfig(
     recipe="finetune",
@@ -43,7 +43,7 @@ config = TrainConfig(
 ## ModelConfig
 
 ```python
-from trainlib.config.schema import ModelConfig
+from xaytune.config.schema import ModelConfig
 
 model = ModelConfig(
     name="meta-llama/Llama-3.1-8B",
@@ -65,7 +65,7 @@ model = ModelConfig(
 ## DataConfig
 
 ```python
-from trainlib.config.schema import DataConfig
+from xaytune.config.schema import DataConfig
 
 data = DataConfig(
     path="data/train.jsonl",
@@ -93,7 +93,7 @@ data = DataConfig(
 ## LoraConfig
 
 ```python
-from trainlib.config.schema import LoraConfig
+from xaytune.config.schema import LoraConfig
 
 lora = LoraConfig(
     rank=16,
@@ -115,7 +115,7 @@ lora = LoraConfig(
 ## TrainerConfig
 
 ```python
-from trainlib.config.schema import TrainerConfig
+from xaytune.config.schema import TrainerConfig
 
 trainer = TrainerConfig(
     strategy="auto",
@@ -181,7 +181,7 @@ trainer = TrainerConfig(
 ## Loading Configs from YAML
 
 ```python
-from trainlib.config import load_config, validate_config
+from xaytune.config import load_config, validate_config
 
 # Load from YAML file
 config = load_config("configs/examples/lora_finetune.yaml")
@@ -202,38 +202,38 @@ validate_config(config)
 
 ### Schema Classes
 
-::: trainlib.config.schema.TrainConfig
+::: xaytune.config.schema.TrainConfig
 
-::: trainlib.config.schema.ModelConfig
+::: xaytune.config.schema.ModelConfig
 
-::: trainlib.config.schema.DataConfig
+::: xaytune.config.schema.DataConfig
 
-::: trainlib.config.schema.LoraConfig
+::: xaytune.config.schema.LoraConfig
 
-::: trainlib.config.schema.TrainerConfig
+::: xaytune.config.schema.TrainerConfig
 
-::: trainlib.config.schema.EvalConfig
+::: xaytune.config.schema.EvalConfig
 
-::: trainlib.config.schema.LoggingConfig
+::: xaytune.config.schema.LoggingConfig
 
-::: trainlib.config.schema.OutputConfig
+::: xaytune.config.schema.OutputConfig
 
-::: trainlib.config.schema.FSDPConfig
+::: xaytune.config.schema.FSDPConfig
 
-::: trainlib.config.schema.DeepSpeedConfig
+::: xaytune.config.schema.DeepSpeedConfig
 
 ### Parser
 
-::: trainlib.config.parser.load_config
+::: xaytune.config.parser.load_config
 
-::: trainlib.config.parser.merge_dicts
+::: xaytune.config.parser.merge_dicts
 
-::: trainlib.config.parser.apply_overrides
+::: xaytune.config.parser.apply_overrides
 
 ### Validation
 
-::: trainlib.config.validation.validate_config
+::: xaytune.config.validation.validate_config
 
-::: trainlib.config.validation.preflight_check
+::: xaytune.config.validation.preflight_check
 
-::: trainlib.config.validation.ConfigValidationError
+::: xaytune.config.validation.ConfigValidationError

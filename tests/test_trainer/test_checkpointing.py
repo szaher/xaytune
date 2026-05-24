@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trainlib.trainer.callbacks import TrainState
-from trainlib.trainer.checkpointing import find_latest_checkpoint, load_checkpoint, save_checkpoint
+from xaytune.trainer.callbacks import TrainState
+from xaytune.trainer.checkpointing import find_latest_checkpoint, load_checkpoint, save_checkpoint
 
 
 class TestSaveCheckpoint:
@@ -15,7 +15,7 @@ class TestSaveCheckpoint:
             output_dir = Path(tmpdir) / "checkpoints" / "step-100"
             state = TrainState(global_step=100, epoch=2)
 
-            with patch("trainlib.trainer.checkpointing.torch"):
+            with patch("xaytune.trainer.checkpointing.torch"):
                 save_checkpoint(
                     output_dir=str(output_dir),
                     model=MagicMock(),
@@ -30,7 +30,7 @@ class TestSaveCheckpoint:
             output_dir = Path(tmpdir) / "step-100"
             state = TrainState(global_step=100, epoch=2, metrics={"loss": 0.5})
 
-            with patch("trainlib.trainer.checkpointing.torch"):
+            with patch("xaytune.trainer.checkpointing.torch"):
                 save_checkpoint(
                     output_dir=str(output_dir),
                     model=MagicMock(),
@@ -45,7 +45,7 @@ class TestSaveCheckpoint:
             assert metadata["epoch"] == 2
             assert metadata["metrics"]["loss"] == 0.5
 
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_save_calls_torch_save(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "step-50"
@@ -64,7 +64,7 @@ class TestSaveCheckpoint:
 
 
 class TestLoadCheckpoint:
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_load_restores_state(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             ckpt_dir = Path(tmpdir) / "step-100"
@@ -115,7 +115,7 @@ class TestFindLatestCheckpoint:
 
 
 class TestScalerCheckpointing:
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_save_checkpoint_with_scaler(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "step-100"
@@ -139,7 +139,7 @@ class TestScalerCheckpointing:
             assert len(scaler_save_calls) == 1
             mock_scaler.state_dict.assert_called_once()
 
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_save_checkpoint_without_scaler(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "step-100"
@@ -160,7 +160,7 @@ class TestScalerCheckpointing:
             ]
             assert len(scaler_save_calls) == 0
 
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_load_checkpoint_with_scaler(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             ckpt_dir = Path(tmpdir) / "step-100"
@@ -182,7 +182,7 @@ class TestScalerCheckpointing:
 
             mock_scaler.load_state_dict.assert_called_once_with({"scale": 1024.0})
 
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_load_checkpoint_no_scaler_file(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             ckpt_dir = Path(tmpdir) / "step-100"
@@ -212,7 +212,7 @@ class TestStepMetadata:
             output_dir = Path(tmpdir) / "step-5"
             state = TrainState(global_step=50, epoch=1, step=5)
 
-            with patch("trainlib.trainer.checkpointing.torch"):
+            with patch("xaytune.trainer.checkpointing.torch"):
                 save_checkpoint(
                     output_dir=str(output_dir),
                     model=MagicMock(),
@@ -224,7 +224,7 @@ class TestStepMetadata:
             metadata = json.loads(metadata_path.read_text())
             assert metadata["step"] == 5
 
-    @patch("trainlib.trainer.checkpointing.torch")
+    @patch("xaytune.trainer.checkpointing.torch")
     def test_load_restores_step(self, mock_torch):
         with tempfile.TemporaryDirectory() as tmpdir:
             ckpt_dir = Path(tmpdir) / "step-5"

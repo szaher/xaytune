@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from trainlib.trainer.callbacks import CallbackManager, TrainState
-from trainlib.trainer.checkpoint_callback import register_checkpoint_callbacks
+from xaytune.trainer.callbacks import CallbackManager, TrainState
+from xaytune.trainer.checkpoint_callback import register_checkpoint_callbacks
 
 
 def _make_trainer_mock():
@@ -14,7 +14,7 @@ def _make_trainer_mock():
 
 
 class TestPeriodicCheckpoint:
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_saves_at_interval(self, mock_save):
         cb = CallbackManager()
         trainer = _make_trainer_mock()
@@ -38,7 +38,7 @@ class TestPeriodicCheckpoint:
         assert "/out/checkpoint-3" in dirs
         assert "/out/checkpoint-6" in dirs
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_no_save_at_step_zero(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -53,7 +53,7 @@ class TestPeriodicCheckpoint:
         cb.fire("step_end", TrainState(global_step=0))
         mock_save.assert_not_called()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_disabled_when_interval_zero(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -68,7 +68,7 @@ class TestPeriodicCheckpoint:
         cb.fire("step_end", TrainState(global_step=5))
         mock_save.assert_not_called()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_not_main_process_skips_save(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -84,7 +84,7 @@ class TestPeriodicCheckpoint:
         cb.fire("step_end", TrainState(global_step=1))
         mock_save.assert_not_called()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_passes_scaler_to_save(self, mock_save):
         cb = CallbackManager()
         trainer = _make_trainer_mock()
@@ -103,7 +103,7 @@ class TestPeriodicCheckpoint:
         cb.fire("step_end", TrainState(global_step=1))
         assert mock_save.call_args.kwargs["scaler"] is trainer._scaler
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_passes_scheduler_to_save(self, mock_save):
         cb = CallbackManager()
         trainer = _make_trainer_mock()
@@ -122,7 +122,7 @@ class TestPeriodicCheckpoint:
         cb.fire("step_end", TrainState(global_step=1))
         assert mock_save.call_args.kwargs["scheduler"] is trainer._scheduler
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_scheduler_none_when_not_set(self, mock_save):
         cb = CallbackManager()
         trainer = MagicMock(spec=[])
@@ -140,7 +140,7 @@ class TestPeriodicCheckpoint:
         cb.fire("step_end", TrainState(global_step=1))
         assert mock_save.call_args.kwargs["scheduler"] is None
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_fires_checkpoint_saved_event(self, mock_save):
         cb = CallbackManager()
         saved_events = []
@@ -165,7 +165,7 @@ class TestPeriodicCheckpoint:
 
 
 class TestFinalCheckpoint:
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_save_last_on_train_end(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -181,7 +181,7 @@ class TestFinalCheckpoint:
         mock_save.assert_called_once()
         assert mock_save.call_args.kwargs["output_dir"] == "/out/checkpoint-10"
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_save_last_skips_if_already_saved(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -198,7 +198,7 @@ class TestFinalCheckpoint:
 
         assert mock_save.call_count == 1
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_save_last_false_no_final(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -213,7 +213,7 @@ class TestFinalCheckpoint:
         cb.fire("train_end", TrainState(global_step=10))
         mock_save.assert_not_called()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_not_main_process_skips_final(self, mock_save):
         cb = CallbackManager()
         register_checkpoint_callbacks(
@@ -231,7 +231,7 @@ class TestFinalCheckpoint:
 
 
 class TestAsyncSaverIntegration:
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_async_saver_used_when_provided(self, mock_save):
         cb = CallbackManager()
         async_saver = MagicMock()
@@ -251,7 +251,7 @@ class TestAsyncSaverIntegration:
         async_saver.save.assert_called_once()
         mock_save.assert_not_called()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_sync_save_when_no_async_saver(self, mock_save):
         cb = CallbackManager()
 
@@ -267,7 +267,7 @@ class TestAsyncSaverIntegration:
         cb.fire("step_end", TrainState(global_step=1))
         mock_save.assert_called_once()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_final_checkpoint_waits_on_async(self, mock_save):
         cb = CallbackManager()
         async_saver = MagicMock()
@@ -287,7 +287,7 @@ class TestAsyncSaverIntegration:
         async_saver.save.assert_called_once()
         async_saver.wait.assert_called_once()
 
-    @patch("trainlib.trainer.checkpoint_callback.save_checkpoint")
+    @patch("xaytune.trainer.checkpoint_callback.save_checkpoint")
     def test_wait_called_even_when_save_last_false(self, mock_save):
         cb = CallbackManager()
         async_saver = MagicMock()

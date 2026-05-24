@@ -6,15 +6,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-import trainlib
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config.schema import (
     DataConfig,
     ModelConfig,
     OutputConfig,
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.trainer.checkpointing import save_checkpoint
+from xaytune.trainer.checkpointing import save_checkpoint
 
 
 def _mock_model():
@@ -33,7 +33,7 @@ def _mock_model():
 
 
 def _mock_model_result(model=None):
-    from trainlib.models.loader import ModelResult
+    from xaytune.models.loader import ModelResult
 
     return ModelResult(
         model=model or _mock_model(),
@@ -56,16 +56,14 @@ def _make_dataset(n=10):
 @pytest.fixture()
 def real_checkpoint_io():
     """Override conftest's autouse _no_checkpoint_io to allow real saves."""
-    with patch("trainlib.trainer.checkpoint_callback.save_checkpoint", save_checkpoint):
+    with patch("xaytune.trainer.checkpoint_callback.save_checkpoint", save_checkpoint):
         yield
 
 
 class TestSchedulerEndToEnd:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_cosine_scheduler_with_warmup(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_cosine_scheduler_with_warmup(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(6)
 
@@ -84,14 +82,12 @@ class TestSchedulerEndToEnd:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
         assert state.global_step == 6
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_linear_scheduler(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_linear_scheduler(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(4)
 
@@ -109,14 +105,12 @@ class TestSchedulerEndToEnd:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
         assert state.global_step == 4
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_constant_with_warmup_scheduler(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_constant_with_warmup_scheduler(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(4)
 
@@ -135,11 +129,11 @@ class TestSchedulerEndToEnd:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
         assert state.global_step == 4
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_checkpoint_includes_scheduler_state(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -163,18 +157,16 @@ class TestSchedulerEndToEnd:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         ckpt_2 = Path(output_dir) / "checkpoint-2"
         assert ckpt_2.exists()
         assert (ckpt_2 / "scheduler.pt").exists()
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_warmup_ratio_works(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_warmup_ratio_works(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(10)
 
@@ -193,5 +185,5 @@ class TestSchedulerEndToEnd:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
         assert state.global_step == 10

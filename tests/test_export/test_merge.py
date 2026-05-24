@@ -5,11 +5,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trainlib.export.merge import merge, save
+from xaytune.export.merge import merge, save
 
 
 class TestMerge:
-    @patch("trainlib.models.load_model")
+    @patch("xaytune.models.load_model")
     def test_merge_loads_and_merges(self, mock_load_model):
         mock_result = MagicMock()
         mock_model = MagicMock()
@@ -24,7 +24,7 @@ class TestMerge:
 
         mock_model.merge_and_unload.assert_called_once()
 
-    @patch("trainlib.models.load_model")
+    @patch("xaytune.models.load_model")
     def test_merge_saves_model_and_tokenizer(self, mock_load_model):
         mock_result = MagicMock()
         mock_merged = MagicMock()
@@ -40,7 +40,7 @@ class TestMerge:
             mock_merged.save_pretrained.assert_called_once_with(tmpdir)
             mock_result.tokenizer.save_pretrained.assert_called_once_with(tmpdir)
 
-    @patch("trainlib.models.load_model")
+    @patch("xaytune.models.load_model")
     def test_merge_non_peft_raises(self, mock_load_model):
         mock_result = MagicMock()
         mock_result.peft_applied = False
@@ -83,7 +83,7 @@ class TestSave:
                 metadata={"recipe": "finetune", "method": "lora"},
             )
 
-            meta_path = Path(tmpdir) / "trainlib_metadata.json"
+            meta_path = Path(tmpdir) / "xaytune_metadata.json"
             assert meta_path.exists()
             meta = json.loads(meta_path.read_text())
             assert meta["recipe"] == "finetune"

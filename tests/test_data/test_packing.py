@@ -1,4 +1,4 @@
-from trainlib.data.packing import pack_sequences
+from xaytune.data.packing import pack_sequences
 
 
 class TestPackSequences:

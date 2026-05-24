@@ -2,13 +2,13 @@ from unittest.mock import patch
 
 import pytest
 
-from trainlib.config.schema import (
+from xaytune.config.schema import (
     DataConfig,
     ModelConfig,
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.config.validation import ConfigValidationError, preflight_check, validate_config
+from xaytune.config.validation import ConfigValidationError, preflight_check, validate_config
 
 
 class TestValidateConfig:
@@ -140,7 +140,8 @@ class TestValidateConfig:
 
     def test_method_params_simpo_two_params(self):
         cfg = self._make_config(
-            recipe="align", method="simpo",
+            recipe="align",
+            method="simpo",
             method_params={"beta": 2.0, "gamma": 0.5},
         )
         validate_config(cfg)
@@ -192,7 +193,9 @@ class TestPreflightCheck:
     def test_hf_source_skips_path_check(self):
         cfg = self._make_config(
             data=DataConfig(
-                path="org/nonexistent-dataset", format="alpaca", source="huggingface",
+                path="org/nonexistent-dataset",
+                format="alpaca",
+                source="huggingface",
             ),
         )
         issues = preflight_check(cfg)

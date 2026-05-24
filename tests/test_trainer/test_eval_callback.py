@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from trainlib.trainer.callbacks import CallbackManager, TrainState
-from trainlib.trainer.eval_callback import register_eval_callbacks
+from xaytune.trainer.callbacks import CallbackManager, TrainState
+from xaytune.trainer.eval_callback import register_eval_callbacks
 
 
 def _make_eval_dataloader(n=3):
@@ -15,9 +15,7 @@ def _make_eval_dataloader(n=3):
     model.training = True
     model.return_value = mock_output
 
-    batches = [
-        {"input_ids": MagicMock(), "labels": MagicMock()} for _ in range(n)
-    ]
+    batches = [{"input_ids": MagicMock(), "labels": MagicMock()} for _ in range(n)]
     return model, batches
 
 

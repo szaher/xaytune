@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.loss_dispatch import (
+from xaytune.recipes.align.loss_dispatch import (
     create_alignment_loss_fn,
     is_alignment_method,
 )
@@ -54,9 +54,7 @@ class TestCreateAlignmentLossFn:
     def test_dpo_creates_loss(self):
         model = _FakeModel()
         ref_model = _FakeModel()
-        loss_fn = create_alignment_loss_fn(
-            method="dpo", ref_model=ref_model
-        )
+        loss_fn = create_alignment_loss_fn(method="dpo", ref_model=ref_model)
         loss = loss_fn(model, _make_dpo_batch(), None)
         assert isinstance(loss, torch.Tensor)
         assert loss.ndim == 0
@@ -64,9 +62,7 @@ class TestCreateAlignmentLossFn:
     def test_grpo_creates_loss(self):
         model = _FakeModel()
         ref_model = _FakeModel()
-        loss_fn = create_alignment_loss_fn(
-            method="grpo", ref_model=ref_model
-        )
+        loss_fn = create_alignment_loss_fn(method="grpo", ref_model=ref_model)
         loss = loss_fn(model, _make_grpo_batch(), None)
         assert isinstance(loss, torch.Tensor)
 

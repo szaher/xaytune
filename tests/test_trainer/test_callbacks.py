@@ -2,7 +2,7 @@ import json
 
 import torch
 
-from trainlib.trainer.callbacks import CallbackManager, TrainState
+from xaytune.trainer.callbacks import CallbackManager, TrainState
 
 
 class TestTrainState:

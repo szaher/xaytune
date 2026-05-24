@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from trainlib.trainer.lr_finder import LRFinderResult, lr_find
+from xaytune.trainer.lr_finder import LRFinderResult, lr_find
 
 
 def _make_model():
@@ -9,10 +9,7 @@ def _make_model():
 
 
 def _make_dataloader(num_batches=20):
-    return [
-        {"input": torch.randn(4, 10), "target": torch.randn(4, 1)}
-        for _ in range(num_batches)
-    ]
+    return [{"input": torch.randn(4, 10), "target": torch.randn(4, 1)} for _ in range(num_batches)]
 
 
 class _WrapperModel(nn.Module):
@@ -29,9 +26,7 @@ class _WrapperModel(nn.Module):
 
 class TestLRFinderResult:
     def test_to_dict(self):
-        result = LRFinderResult(
-            lrs=[1e-7, 1e-6], losses=[1.0, 0.9], suggested_lr=1e-6
-        )
+        result = LRFinderResult(lrs=[1e-7, 1e-6], losses=[1.0, 0.9], suggested_lr=1e-6)
         d = result.to_dict()
         assert d["lrs"] == [1e-7, 1e-6]
         assert d["losses"] == [1.0, 0.9]
@@ -68,9 +63,7 @@ class TestLRFind:
     def test_model_state_restored(self):
         model = _WrapperModel()
         dl = _make_dataloader()
-        params_before = {
-            k: v.clone() for k, v in model.state_dict().items()
-        }
+        params_before = {k: v.clone() for k, v in model.state_dict().items()}
         lr_find(model, dl, num_iterations=10)
         params_after = model.state_dict()
         for key in params_before:
@@ -79,9 +72,7 @@ class TestLRFind:
     def test_suggested_lr_within_range(self):
         model = _WrapperModel()
         dl = _make_dataloader()
-        result = lr_find(
-            model, dl, start_lr=1e-6, end_lr=0.1, num_iterations=20
-        )
+        result = lr_find(model, dl, start_lr=1e-6, end_lr=0.1, num_iterations=20)
         if result.suggested_lr is not None:
             assert 1e-6 <= result.suggested_lr <= 0.1
 

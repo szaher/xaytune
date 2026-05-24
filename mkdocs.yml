@@ -1,11 +1,13 @@
-site_name: trainlib
+site_name: xaytune
 site_description: An opinionated LLM training and fine-tuning library
-site_url: https://szaher.github.io/trainlib/
-repo_url: https://github.com/szaher/trainlib
-repo_name: szaher/trainlib
+site_url: https://szaher.github.io/xaytune/
+repo_url: https://github.com/szaher/xaytune
+repo_name: szaher/xaytune
 
 theme:
   name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -102,4 +104,4 @@ exclude_docs: |
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/szaher/trainlib
+      link: https://github.com/szaher/xaytune

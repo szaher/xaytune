@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-from trainlib.trainer.device import (
+from xaytune.trainer.device import (
     detect_device_type_from_model,
     get_device,
     get_device_type,
@@ -15,18 +15,18 @@ from trainlib.trainer.device import (
 
 
 class TestGetDeviceType:
-    @patch("trainlib.trainer.device.torch")
+    @patch("xaytune.trainer.device.torch")
     def test_cuda_preferred(self, mock_torch):
         mock_torch.cuda.is_available.return_value = True
         assert get_device_type() == "cuda"
 
-    @patch("trainlib.trainer.device.torch")
+    @patch("xaytune.trainer.device.torch")
     def test_mps_fallback(self, mock_torch):
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = True
         assert get_device_type() == "mps"
 
-    @patch("trainlib.trainer.device.torch")
+    @patch("xaytune.trainer.device.torch")
     def test_cpu_fallback(self, mock_torch):
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
@@ -48,8 +48,8 @@ class TestGetDevice:
 
 
 class TestSeedAll:
-    @patch("trainlib.trainer.device.torch")
-    @patch("trainlib.trainer.device.random")
+    @patch("xaytune.trainer.device.torch")
+    @patch("xaytune.trainer.device.random")
     def test_seeds_random_and_torch(self, mock_random, mock_torch):
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = False
@@ -59,8 +59,8 @@ class TestSeedAll:
         mock_random.seed.assert_called_once_with(42)
         mock_torch.manual_seed.assert_called_once_with(42)
 
-    @patch("trainlib.trainer.device.torch")
-    @patch("trainlib.trainer.device.random")
+    @patch("xaytune.trainer.device.torch")
+    @patch("xaytune.trainer.device.random")
     def test_seeds_cuda_when_available(self, mock_random, mock_torch):
         mock_torch.cuda.is_available.return_value = True
         mock_torch.backends.mps.is_available.return_value = False
@@ -69,8 +69,8 @@ class TestSeedAll:
 
         mock_torch.cuda.manual_seed_all.assert_called_once_with(42)
 
-    @patch("trainlib.trainer.device.torch")
-    @patch("trainlib.trainer.device.random")
+    @patch("xaytune.trainer.device.torch")
+    @patch("xaytune.trainer.device.random")
     def test_seeds_mps_when_available(self, mock_random, mock_torch):
         mock_torch.cuda.is_available.return_value = False
         mock_torch.backends.mps.is_available.return_value = True

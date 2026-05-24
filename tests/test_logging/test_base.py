@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from trainlib.logging.base import LoggingBackend, LoggingManager
-from trainlib.trainer.callbacks import CallbackManager, TrainState
+from xaytune.logging.base import LoggingBackend, LoggingManager
+from xaytune.trainer.callbacks import CallbackManager, TrainState
 
 
 class FakeBackend(LoggingBackend):

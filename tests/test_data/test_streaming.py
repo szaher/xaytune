@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import torch
 
-from trainlib.data.tokenizer import (
+from xaytune.data.tokenizer import (
     StreamingTokenizedDataset,
     collate_tokenized,
     tokenize_sample,

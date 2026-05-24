@@ -9,7 +9,7 @@ import pytest
 class TestBenchmarkEvaluate:
     def test_calls_lm_eval_simple_evaluate(self):
         # Clean slate
-        sys.modules.pop("trainlib.eval.benchmarks", None)
+        sys.modules.pop("xaytune.eval.benchmarks", None)
 
         mock_lm_eval = MagicMock()
         mock_lm_eval.simple_evaluate.return_value = {
@@ -20,7 +20,7 @@ class TestBenchmarkEvaluate:
         sys.modules["lm_eval"] = mock_lm_eval
 
         try:
-            from trainlib.eval.benchmarks import benchmark_evaluate
+            from xaytune.eval.benchmarks import benchmark_evaluate
 
             results = benchmark_evaluate(
                 model="test-model",
@@ -31,11 +31,11 @@ class TestBenchmarkEvaluate:
             assert "mmlu" in results
         finally:
             sys.modules.pop("lm_eval", None)
-            sys.modules.pop("trainlib.eval.benchmarks", None)
+            sys.modules.pop("xaytune.eval.benchmarks", None)
 
     def test_multiple_benchmarks(self):
         # Clean slate
-        sys.modules.pop("trainlib.eval.benchmarks", None)
+        sys.modules.pop("xaytune.eval.benchmarks", None)
 
         mock_lm_eval = MagicMock()
         mock_lm_eval.simple_evaluate.return_value = {
@@ -47,7 +47,7 @@ class TestBenchmarkEvaluate:
         sys.modules["lm_eval"] = mock_lm_eval
 
         try:
-            from trainlib.eval.benchmarks import benchmark_evaluate
+            from xaytune.eval.benchmarks import benchmark_evaluate
 
             results = benchmark_evaluate(
                 model="test-model",
@@ -58,22 +58,22 @@ class TestBenchmarkEvaluate:
             assert "hellaswag" in results
         finally:
             sys.modules.pop("lm_eval", None)
-            sys.modules.pop("trainlib.eval.benchmarks", None)
+            sys.modules.pop("xaytune.eval.benchmarks", None)
 
     def test_raises_when_lm_eval_not_installed(self):
         sys.modules.pop("lm_eval", None)
-        sys.modules.pop("trainlib.eval.benchmarks", None)
-        sys.modules.pop("trainlib.eval", None)
+        sys.modules.pop("xaytune.eval.benchmarks", None)
+        sys.modules.pop("xaytune.eval", None)
 
         with patch.dict(sys.modules, {"lm_eval": None}):
             with pytest.raises(ImportError, match="lm-eval"):
-                from trainlib.eval import benchmarks
+                from xaytune.eval import benchmarks
 
                 benchmarks.benchmark_evaluate(model="x", benchmarks=["mmlu"])
 
     def test_returns_dict_of_benchmark_results(self):
         # Clean slate
-        sys.modules.pop("trainlib.eval.benchmarks", None)
+        sys.modules.pop("xaytune.eval.benchmarks", None)
 
         mock_lm_eval = MagicMock()
         mock_lm_eval.simple_evaluate.return_value = {
@@ -84,7 +84,7 @@ class TestBenchmarkEvaluate:
         sys.modules["lm_eval"] = mock_lm_eval
 
         try:
-            from trainlib.eval.benchmarks import benchmark_evaluate
+            from xaytune.eval.benchmarks import benchmark_evaluate
 
             results = benchmark_evaluate(
                 model="test-model",
@@ -95,18 +95,18 @@ class TestBenchmarkEvaluate:
             assert isinstance(results["gsm8k"], dict)
         finally:
             sys.modules.pop("lm_eval", None)
-            sys.modules.pop("trainlib.eval.benchmarks", None)
+            sys.modules.pop("xaytune.eval.benchmarks", None)
 
     def test_num_fewshot_passed_through(self):
         # Clean slate
-        sys.modules.pop("trainlib.eval.benchmarks", None)
+        sys.modules.pop("xaytune.eval.benchmarks", None)
 
         mock_lm_eval = MagicMock()
         mock_lm_eval.simple_evaluate.return_value = {"results": {}}
         sys.modules["lm_eval"] = mock_lm_eval
 
         try:
-            from trainlib.eval.benchmarks import benchmark_evaluate
+            from xaytune.eval.benchmarks import benchmark_evaluate
 
             benchmark_evaluate(
                 model="test-model",
@@ -118,22 +118,22 @@ class TestBenchmarkEvaluate:
             assert call_kwargs["num_fewshot"] == 5
         finally:
             sys.modules.pop("lm_eval", None)
-            sys.modules.pop("trainlib.eval.benchmarks", None)
+            sys.modules.pop("xaytune.eval.benchmarks", None)
 
 
 class TestBenchmarkImport:
     def test_importable_from_eval(self):
         # Clean slate
-        sys.modules.pop("trainlib.eval.benchmarks", None)
-        sys.modules.pop("trainlib.eval", None)
+        sys.modules.pop("xaytune.eval.benchmarks", None)
+        sys.modules.pop("xaytune.eval", None)
 
         mock_lm_eval = MagicMock()
         sys.modules["lm_eval"] = mock_lm_eval
         try:
-            from trainlib.eval import benchmark_evaluate
+            from xaytune.eval import benchmark_evaluate
 
             assert callable(benchmark_evaluate)
         finally:
             sys.modules.pop("lm_eval", None)
-            sys.modules.pop("trainlib.eval.benchmarks", None)
-            sys.modules.pop("trainlib.eval", None)
+            sys.modules.pop("xaytune.eval.benchmarks", None)
+            sys.modules.pop("xaytune.eval", None)

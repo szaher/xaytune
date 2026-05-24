@@ -1,6 +1,6 @@
 import pytest
 
-from trainlib.utils.registry import Registry
+from xaytune.utils.registry import Registry
 
 
 class TestRegistry:

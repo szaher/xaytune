@@ -1,4 +1,4 @@
-from trainlib.config import get_defaults_dir, load_config, validate_config
+from xaytune.config import get_defaults_dir, load_config, validate_config
 
 
 class TestDefaults:
@@ -31,6 +31,6 @@ class TestConfigPublicAPI:
         assert callable(validate_config)
 
     def test_schema_classes_importable(self):
-        from trainlib.config import TrainConfig
+        from xaytune.config import TrainConfig
 
         assert TrainConfig is not None

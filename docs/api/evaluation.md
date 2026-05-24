@@ -1,13 +1,13 @@
 # Evaluation
 
-trainlib provides two evaluation paths: custom dataset evaluation with `evaluate()` and benchmark evaluation with `benchmark_evaluate()`.
+xaytune provides two evaluation paths: custom dataset evaluation with `evaluate()` and benchmark evaluation with `benchmark_evaluate()`.
 
 ## evaluate()
 
 Evaluate a model on a custom dataset with configurable metrics.
 
 ```python
-from trainlib.eval import evaluate
+from xaytune.eval import evaluate
 
 results = evaluate(
     model="output/my-finetune",
@@ -39,7 +39,7 @@ def evaluate(
 **Returns:** `dict[str, float]` mapping metric names to their computed values.
 
 !!! note
-    When `model` is a string path, trainlib automatically loads the model and tokenizer using `trainlib.models.load_model()`.
+    When `model` is a string path, xaytune automatically loads the model and tokenizer using `xaytune.models.load_model()`.
 
 ---
 
@@ -48,7 +48,7 @@ def evaluate(
 Run standard benchmarks using [lm-eval](https://github.com/EleutherAI/lm-evaluation-harness).
 
 ```python
-from trainlib.eval.benchmarks import benchmark_evaluate
+from xaytune.eval.benchmarks import benchmark_evaluate
 
 results = benchmark_evaluate(
     model="meta-llama/Llama-3.1-8B",
@@ -82,14 +82,14 @@ def benchmark_evaluate(
 !!! warning "Requires `lm-eval`"
     Install the eval extra to use benchmarks:
     ```bash
-    pip install trainlib[eval]
+    pip install xaytune[eval]
     ```
 
 ---
 
 ## Built-in Metrics
 
-trainlib ships three metrics, registered in `trainlib.eval.metrics.metric_registry`:
+xaytune ships three metrics, registered in `xaytune.eval.metrics.metric_registry`:
 
 | Metric | Function | Description |
 |--------|----------|-------------|
@@ -102,7 +102,7 @@ trainlib ships three metrics, registered in `trainlib.eval.metrics.metric_regist
 Register your own metrics with the `@register_metric` decorator:
 
 ```python
-from trainlib.eval.metrics import register_metric
+from xaytune.eval.metrics import register_metric
 
 @register_metric("bleu")
 def compute_bleu(predictions, references, **kwargs):
@@ -131,13 +131,13 @@ eval:
 ### Benchmark Evaluation
 
 ```bash
-trainlib eval --model output/my-finetune --benchmarks mmlu,gsm8k --num-fewshot 5
+xaytune eval --model output/my-finetune --benchmarks mmlu,gsm8k --num-fewshot 5
 ```
 
 ### Dataset Evaluation
 
 ```bash
-trainlib eval --model output/my-finetune --dataset data/eval.jsonl --metrics loss,perplexity
+xaytune eval --model output/my-finetune --dataset data/eval.jsonl --metrics loss,perplexity
 ```
 
 ### Model Comparison
@@ -145,7 +145,7 @@ trainlib eval --model output/my-finetune --dataset data/eval.jsonl --metrics los
 Compare two models side-by-side on the same benchmarks:
 
 ```bash
-trainlib compare model-a model-b --benchmarks mmlu,gsm8k
+xaytune compare model-a model-b --benchmarks mmlu,gsm8k
 ```
 
 This prints a table showing each model's score on every benchmark metric.
@@ -154,12 +154,12 @@ This prints a table showing each model's score on every benchmark metric.
 
 ## Full API Reference
 
-::: trainlib.eval.evaluate.evaluate
+::: xaytune.eval.evaluate.evaluate
 
-::: trainlib.eval.benchmarks.benchmark_evaluate
+::: xaytune.eval.benchmarks.benchmark_evaluate
 
-::: trainlib.eval.metrics.compute_loss
+::: xaytune.eval.metrics.compute_loss
 
-::: trainlib.eval.metrics.compute_perplexity
+::: xaytune.eval.metrics.compute_perplexity
 
-::: trainlib.eval.metrics.compute_token_accuracy
+::: xaytune.eval.metrics.compute_token_accuracy

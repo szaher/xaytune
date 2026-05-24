@@ -7,15 +7,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-import trainlib
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config.schema import (
     DataConfig,
     ModelConfig,
     OutputConfig,
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.trainer.checkpointing import save_checkpoint
+from xaytune.trainer.checkpointing import save_checkpoint
 
 
 def _mock_model():
@@ -34,7 +34,7 @@ def _mock_model():
 
 
 def _mock_model_result(model=None):
-    from trainlib.models.loader import ModelResult
+    from xaytune.models.loader import ModelResult
 
     return ModelResult(
         model=model or _mock_model(),
@@ -57,13 +57,13 @@ def _make_dataset(n=10):
 @pytest.fixture()
 def real_checkpoint_io():
     """Override conftest's autouse _no_checkpoint_io to allow real saves."""
-    with patch("trainlib.trainer.checkpoint_callback.save_checkpoint", save_checkpoint):
+    with patch("xaytune.trainer.checkpoint_callback.save_checkpoint", save_checkpoint):
         yield
 
 
 class TestCheckpointResumeCycle:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_full_checkpoint_cycle(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -87,7 +87,7 @@ class TestCheckpointResumeCycle:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 6
 
@@ -102,8 +102,8 @@ class TestCheckpointResumeCycle:
         meta_3 = json.loads((ckpt_3 / "metadata.json").read_text())
         assert meta_3["global_step"] == 3
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_save_last_creates_final_checkpoint(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -126,15 +126,15 @@ class TestCheckpointResumeCycle:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         ckpt_final = Path(output_dir) / "checkpoint-4"
         assert ckpt_final.exists()
         assert (ckpt_final / "metadata.json").exists()
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_save_last_skips_duplicate(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -157,19 +157,19 @@ class TestCheckpointResumeCycle:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 3
         ckpt_dirs = [d for d in Path(output_dir).iterdir() if d.is_dir()]
         assert len(ckpt_dirs) == 1
 
-    @patch("trainlib.recipes.base.wrap_model_distributed", side_effect=lambda m, **kw: m)
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.wrap_model_distributed", side_effect=lambda m, **kw: m)
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_distributed_only_rank0_saves(
         self, mock_load_model, mock_load_dataset, mock_wrap, tmp_path, real_checkpoint_io
     ):
-        from trainlib.trainer.distributed import DistributedContext
+        from xaytune.trainer.distributed import DistributedContext
 
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(6)
@@ -191,8 +191,8 @@ class TestCheckpointResumeCycle:
         )
 
         ctx = DistributedContext(rank=1, world_size=2, local_rank=1)
-        with patch("trainlib.recipes.base.init_distributed", return_value=ctx):
-            state = trainlib.finetune(config=config)
+        with patch("xaytune.recipes.base.init_distributed", return_value=ctx):
+            state = xaytune.finetune(config=config)
 
         assert state.global_step == 3
         output_path = Path(output_dir)
@@ -200,8 +200,8 @@ class TestCheckpointResumeCycle:
             ckpt_dirs = [d for d in output_path.iterdir() if d.is_dir()]
             assert len(ckpt_dirs) == 0
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_resume_restores_global_step(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -225,7 +225,7 @@ class TestCheckpointResumeCycle:
             output=OutputConfig(dir=output_dir),
         )
 
-        state1 = trainlib.finetune(config=config)
+        state1 = xaytune.finetune(config=config)
         assert state1.global_step == 5
 
         ckpt_path = str(Path(output_dir) / "checkpoint-5")
@@ -249,6 +249,6 @@ class TestCheckpointResumeCycle:
             output=OutputConfig(dir=output_dir),
         )
 
-        state2 = trainlib.finetune(config=config2, resume_from=ckpt_path)
+        state2 = xaytune.finetune(config=config2, resume_from=ckpt_path)
 
         assert state2.global_step == 10

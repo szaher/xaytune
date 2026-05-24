@@ -4,10 +4,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trainlib.config.schema import LoggingConfig
-from trainlib.logging import LoggingBackend, LoggingManager, setup_logging
-from trainlib.logging.console import ConsoleBackend
-from trainlib.trainer.callbacks import CallbackManager, TrainState
+from xaytune.config.schema import LoggingConfig
+from xaytune.logging import LoggingBackend, LoggingManager, setup_logging
+from xaytune.logging.console import ConsoleBackend
+from xaytune.trainer.callbacks import CallbackManager, TrainState
 
 
 class TestSetupLogging:
@@ -30,7 +30,7 @@ class TestSetupLogging:
         console_count = sum(1 for b in manager.backends if isinstance(b, ConsoleBackend))
         assert console_count == 1
 
-    @patch("trainlib.logging.TensorBoardBackend")
+    @patch("xaytune.logging.TensorBoardBackend")
     def test_tensorboard_added(self, mock_tb_cls):
         mock_tb_cls.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["console", "tensorboard"])
@@ -38,7 +38,7 @@ class TestSetupLogging:
         setup_logging(config, cb, output_dir="output/test")
         mock_tb_cls.assert_called_once_with(log_dir="output/test/runs")
 
-    @patch("trainlib.logging._create_wandb_backend")
+    @patch("xaytune.logging._create_wandb_backend")
     def test_wandb_added(self, mock_create_wandb):
         mock_create_wandb.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["wandb"], project="my-proj", run_name="run-1")
@@ -46,7 +46,7 @@ class TestSetupLogging:
         setup_logging(config, cb)
         mock_create_wandb.assert_called_once_with(project="my-proj", run_name="run-1")
 
-    @patch("trainlib.logging._create_mlflow_backend")
+    @patch("xaytune.logging._create_mlflow_backend")
     def test_mlflow_added(self, mock_create_mlflow):
         mock_create_mlflow.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["mlflow"], run_name="run-1")
@@ -90,16 +90,16 @@ class TestSetupLogging:
 
 class TestModuleExports:
     def test_logging_backend_importable(self):
-        from trainlib.logging import LoggingBackend
+        from xaytune.logging import LoggingBackend
 
         assert LoggingBackend is not None
 
     def test_logging_manager_importable(self):
-        from trainlib.logging import LoggingManager
+        from xaytune.logging import LoggingManager
 
         assert LoggingManager is not None
 
     def test_setup_logging_importable(self):
-        from trainlib.logging import setup_logging
+        from xaytune.logging import setup_logging
 
         assert callable(setup_logging)

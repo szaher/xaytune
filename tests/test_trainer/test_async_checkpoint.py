@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from trainlib.trainer.async_checkpoint import AsyncCheckpointSaver
-from trainlib.trainer.callbacks import TrainState
+from xaytune.trainer.async_checkpoint import AsyncCheckpointSaver
+from xaytune.trainer.callbacks import TrainState
 
 
 def _make_model():
@@ -63,7 +63,7 @@ class TestAsyncCheckpointSaver:
 
         ckpt_dir = str(tmp_path / "checkpoint-1")
 
-        with patch("trainlib.trainer.checkpointing.torch.save", side_effect=slow_save):
+        with patch("xaytune.trainer.checkpointing.torch.save", side_effect=slow_save):
             start = time.monotonic()
             saver.save(
                 output_dir=ckpt_dir,
@@ -100,7 +100,7 @@ class TestAsyncCheckpointSaver:
         saver = AsyncCheckpointSaver()
 
         with patch(
-            "trainlib.trainer.async_checkpoint.save_checkpoint",
+            "xaytune.trainer.async_checkpoint.save_checkpoint",
             side_effect=RuntimeError("disk full"),
         ):
             saver.save(

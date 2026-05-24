@@ -6,15 +6,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-import trainlib
-from trainlib.config import load_config
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config import load_config
+from xaytune.config.schema import (
     DataConfig,
     ModelConfig,
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.trainer.callbacks import TrainState
+from xaytune.trainer.callbacks import TrainState
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def mock_tokenizer():
 @pytest.fixture
 def mock_model_result(mock_model, mock_tokenizer):
     """Create a ModelResult with mocked model and tokenizer."""
-    from trainlib.models.loader import ModelResult
+    from xaytune.models.loader import ModelResult
 
     return ModelResult(
         model=mock_model,
@@ -72,12 +72,16 @@ def mock_dataset():
 class TestFinetuneIntegration:
     """Test finetune recipe end-to-end with mocked model/data."""
 
-    @patch("trainlib.models.peft.get_peft_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.models.peft.get_peft_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_finetune_lora_returns_train_state(
-        self, mock_load_model, mock_load_dataset, mock_get_peft_model,
-        mock_model_result, mock_dataset
+        self,
+        mock_load_model,
+        mock_load_dataset,
+        mock_get_peft_model,
+        mock_model_result,
+        mock_dataset,
     ):
         mock_load_model.return_value = mock_model_result
         mock_load_dataset.return_value = mock_dataset
@@ -91,7 +95,7 @@ class TestFinetuneIntegration:
             trainer=TrainerConfig(batch_size=2, num_epochs=1, max_steps=2),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert isinstance(state, TrainState)
         assert state.global_step > 0
@@ -100,15 +104,15 @@ class TestFinetuneIntegration:
         mock_load_model.assert_called_once()
         mock_load_dataset.assert_called_once()
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_finetune_full_with_kwargs(
         self, mock_load_model, mock_load_dataset, mock_model_result, mock_dataset
     ):
         mock_load_model.return_value = mock_model_result
         mock_load_dataset.return_value = mock_dataset
 
-        state = trainlib.finetune(
+        state = xaytune.finetune(
             model="test-model",
             dataset="fake.jsonl",
             method="full",
@@ -123,9 +127,9 @@ class TestFinetuneIntegration:
         assert state.global_step == 1
         assert "loss" in state.metrics
 
-    @patch("trainlib.recipes.base.apply_lora")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.apply_lora")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_finetune_lora_applies_peft(
         self, mock_load_model, mock_load_dataset, mock_apply_lora, mock_model_result, mock_dataset
     ):
@@ -147,7 +151,7 @@ class TestFinetuneIntegration:
             trainer=TrainerConfig(batch_size=2, num_epochs=1, max_steps=1),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         mock_apply_lora.assert_called_once()
         call_kwargs = mock_apply_lora.call_args.kwargs
@@ -159,8 +163,8 @@ class TestFinetuneIntegration:
 class TestPretrainIntegration:
     """Test pretrain recipe end-to-end with mocked model/data."""
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_pretrain_returns_train_state(
         self, mock_load_model, mock_load_dataset, mock_model_result, mock_dataset
     ):
@@ -174,14 +178,14 @@ class TestPretrainIntegration:
             trainer=TrainerConfig(batch_size=1, num_epochs=1, max_steps=1),
         )
 
-        state = trainlib.pretrain(config=config)
+        state = xaytune.pretrain(config=config)
 
         assert isinstance(state, TrainState)
         assert state.global_step == 1
         mock_load_model.assert_called_once()
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_pretrain_with_kwargs(
         self, mock_load_model, mock_load_dataset, mock_model_result, mock_dataset
     ):
@@ -190,7 +194,7 @@ class TestPretrainIntegration:
         large_dataset = mock_dataset * 5  # 10 samples
         mock_load_dataset.return_value = large_dataset
 
-        state = trainlib.pretrain(
+        state = xaytune.pretrain(
             model="gpt2",
             dataset="corpus/",
             format="text",
@@ -207,8 +211,8 @@ class TestPretrainIntegration:
 class TestAlignIntegration:
     """Test align recipe end-to-end with mocked model/data."""
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_align_dpo_returns_train_state(
         self, mock_load_model, mock_load_dataset, mock_model_result, mock_dataset
     ):
@@ -223,20 +227,20 @@ class TestAlignIntegration:
             trainer=TrainerConfig(batch_size=2, num_epochs=1, max_steps=1),
         )
 
-        state = trainlib.align(config=config)
+        state = xaytune.align(config=config)
 
         assert isinstance(state, TrainState)
         assert state.global_step == 1
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_align_with_kwargs(
         self, mock_load_model, mock_load_dataset, mock_model_result, mock_dataset
     ):
         mock_load_model.return_value = mock_model_result
         mock_load_dataset.return_value = mock_dataset
 
-        state = trainlib.align(
+        state = xaytune.align(
             model="test-model",
             dataset="prefs.jsonl",
             method="dpo",
@@ -257,8 +261,8 @@ class TestAlignIntegration:
 class TestDataLoaderIntegration:
     """Test that DataLoader integration works correctly."""
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_dataloader_created_with_correct_batch_size(
         self, mock_load_model, mock_load_dataset, mock_model_result
     ):
@@ -275,7 +279,7 @@ class TestDataLoaderIntegration:
         ]
         mock_load_dataset.return_value = dataset
 
-        state = trainlib.finetune(
+        state = xaytune.finetune(
             model="test-model",
             dataset="fake.jsonl",
             batch_size=5,
@@ -286,8 +290,8 @@ class TestDataLoaderIntegration:
         # With 10 samples and batch_size=5, we should have 2 steps
         assert state.global_step == 2
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_eval_split_creates_eval_dataloader(
         self, mock_load_model, mock_load_dataset, mock_model_result
     ):
@@ -317,7 +321,7 @@ class TestDataLoaderIntegration:
             trainer=TrainerConfig(batch_size=1, num_epochs=1, max_steps=1),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         # Should complete without error
         assert isinstance(state, TrainState)
@@ -327,7 +331,7 @@ class TestConfigIntegration:
     """Test config loading and validation end-to-end."""
 
     def test_load_and_validate_lora_finetune_config(self, tmp_path):
-        defaults_dir = Path(__file__).resolve().parent.parent / "trainlib" / "config" / "defaults"
+        defaults_dir = Path(__file__).resolve().parent.parent / "xaytune" / "config" / "defaults"
         config_yaml = tmp_path / "train.yaml"
         config_yaml.write_text(
             f"base: {defaults_dir / 'lora.yaml'}\n"
@@ -344,7 +348,7 @@ class TestConfigIntegration:
         assert config.trainer.learning_rate == 2e-4
 
     def test_config_with_overrides(self, tmp_path):
-        defaults_dir = Path(__file__).resolve().parent.parent / "trainlib" / "config" / "defaults"
+        defaults_dir = Path(__file__).resolve().parent.parent / "xaytune" / "config" / "defaults"
         config_yaml = tmp_path / "train.yaml"
         config_yaml.write_text(
             f"base: {defaults_dir / 'lora.yaml'}\n"
@@ -400,8 +404,8 @@ class TestConfigIntegration:
 class TestEarlyStoppingIntegration:
     """Test early stopping via max_steps."""
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_max_steps_stops_training_early(
         self, mock_load_model, mock_load_dataset, mock_model_result
     ):
@@ -418,7 +422,7 @@ class TestEarlyStoppingIntegration:
         ]
         mock_load_dataset.return_value = dataset
 
-        state = trainlib.finetune(
+        state = xaytune.finetune(
             model="test-model",
             dataset="fake.jsonl",
             batch_size=1,
@@ -433,8 +437,8 @@ class TestEarlyStoppingIntegration:
 class TestGradientAccumulationIntegration:
     """Test gradient accumulation in training pipeline."""
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_gradient_accumulation_reduces_optimizer_steps(
         self, mock_load_model, mock_load_dataset, mock_model_result
     ):
@@ -462,7 +466,7 @@ class TestGradientAccumulationIntegration:
 
         mock_model_result.model.__call__ = track_backward
 
-        state = trainlib.finetune(
+        state = xaytune.finetune(
             model="test-model",
             dataset="fake.jsonl",
             batch_size=2,

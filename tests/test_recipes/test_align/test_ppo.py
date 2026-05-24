@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.ppo import ppo_clip_loss, reinforce_loss
+from xaytune.recipes.align.ppo import ppo_clip_loss, reinforce_loss
 
 
 class TestPPOClipLoss:
@@ -108,7 +108,7 @@ class TestPPOClipLoss:
         assert loss.ndim == 0
 
     def test_value_loss(self):
-        from trainlib.recipes.align.ppo import ppo_value_loss
+        from xaytune.recipes.align.ppo import ppo_value_loss
 
         values = torch.tensor([1.0, 2.0, 3.0])
         returns = torch.tensor([1.5, 2.5, 2.0])

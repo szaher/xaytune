@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.orpo import orpo_loss
+from xaytune.recipes.align.orpo import orpo_loss
 
 
 class TestORPOLoss:

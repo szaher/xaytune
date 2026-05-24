@@ -1,6 +1,6 @@
 import pytest
 
-from trainlib.eval.metrics import metric_registry, register_metric
+from xaytune.eval.metrics import metric_registry, register_metric
 
 
 class TestMetricRegistry:

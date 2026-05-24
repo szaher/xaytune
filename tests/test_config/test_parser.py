@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from trainlib.config.parser import apply_overrides, load_config, merge_dicts
+from xaytune.config.parser import apply_overrides, load_config, merge_dicts
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

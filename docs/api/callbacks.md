@@ -1,13 +1,13 @@
 # Callbacks
 
-trainlib provides an event-driven callback system for hooking into the training loop. You can log custom metrics, implement early stopping, send notifications, or run any arbitrary code at specific training events.
+xaytune provides an event-driven callback system for hooking into the training loop. You can log custom metrics, implement early stopping, send notifications, or run any arbitrary code at specific training events.
 
 ## TrainState
 
 `TrainState` is a dataclass that tracks the current state of training. It is passed to every callback and returned by recipe functions.
 
 ```python
-from trainlib.trainer.callbacks import TrainState
+from xaytune.trainer.callbacks import TrainState
 ```
 
 | Field | Type | Default | Description |
@@ -37,7 +37,7 @@ def early_stop(state):
 `CallbackManager` manages callback registration and event firing. Use its `on()` decorator to register callbacks.
 
 ```python
-from trainlib.trainer.callbacks import CallbackManager
+from xaytune.trainer.callbacks import CallbackManager
 
 callbacks = CallbackManager()
 
@@ -107,6 +107,6 @@ def handle_error(state):
 
 ## Full API Reference
 
-::: trainlib.trainer.callbacks.TrainState
+::: xaytune.trainer.callbacks.TrainState
 
-::: trainlib.trainer.callbacks.CallbackManager
+::: xaytune.trainer.callbacks.CallbackManager

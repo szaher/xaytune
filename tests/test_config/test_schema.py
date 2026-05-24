@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from trainlib.config.schema import (
+from xaytune.config.schema import (
     DataConfig,
     DeepSpeedConfig,
     EvalConfig,

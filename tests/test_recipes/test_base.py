@@ -5,11 +5,11 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-from trainlib.config.schema import DataConfig, ModelConfig, OutputConfig, TrainConfig, TrainerConfig
-from trainlib.models.loader import ModelResult
-from trainlib.recipes.base import TrainingComponents, setup_training
-from trainlib.trainer.callbacks import TrainState
-from trainlib.trainer.distributed import DistributedContext
+from xaytune.config.schema import DataConfig, ModelConfig, OutputConfig, TrainConfig, TrainerConfig
+from xaytune.models.loader import ModelResult
+from xaytune.recipes.base import TrainingComponents, setup_training
+from xaytune.trainer.callbacks import TrainState
+from xaytune.trainer.distributed import DistributedContext
 
 
 class TestTrainingComponents:
@@ -69,7 +69,7 @@ class TestTrainingComponents:
         assert "resume_state" in fields
 
 
-@patch("trainlib.recipes.base.validate_dataset_sample")
+@patch("xaytune.recipes.base.validate_dataset_sample")
 class TestSetupTraining:
     def _make_config(self, method="full", **trainer_kwargs):
         return TrainConfig(
@@ -80,9 +80,9 @@ class TestSetupTraining:
             trainer=TrainerConfig(**trainer_kwargs),
         )
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.DataLoader")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.DataLoader")
     def test_full_finetune_setup(self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate):
         mock_model_result = MagicMock()
         mock_model_result.model = MagicMock()
@@ -104,10 +104,10 @@ class TestSetupTraining:
         assert components.tokenizer is mock_model_result.tokenizer
         assert components.trainer is not None
 
-    @patch("trainlib.recipes.base.apply_lora")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.DataLoader")
+    @patch("xaytune.recipes.base.apply_lora")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.DataLoader")
     def test_lora_setup_applies_peft(
         self, mock_dl_cls, mock_load_ds, mock_load_model, mock_apply_lora, mock_validate
     ):
@@ -130,9 +130,9 @@ class TestSetupTraining:
         mock_apply_lora.assert_called_once()
         assert components.model is lora_result.model
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.DataLoader")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.DataLoader")
     def test_qlora_uses_4bit_quantization(
         self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate
     ):
@@ -144,7 +144,7 @@ class TestSetupTraining:
         mock_dl_cls.return_value = MagicMock()
 
         config = self._make_config(method="qlora")
-        with patch("trainlib.recipes.base.apply_lora") as mock_apply_lora:
+        with patch("xaytune.recipes.base.apply_lora") as mock_apply_lora:
             mock_apply_lora.return_value = mock_model_result
             setup_training(config)
 
@@ -155,9 +155,9 @@ class TestSetupTraining:
             trust_remote_code=False,
         )
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.DataLoader")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.DataLoader")
     def test_eval_split_creates_eval_dataloader(
         self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate
     ):
@@ -180,9 +180,9 @@ class TestSetupTraining:
         assert mock_dl_cls.call_count == 2
         assert components.eval_dataloader is not None
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.DataLoader")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.DataLoader")
     def test_no_eval_split_no_eval_dataloader(
         self, mock_dl_cls, mock_load_ds, mock_load_model, mock_validate
     ):
@@ -237,13 +237,11 @@ def _make_config(**trainer_kwargs: Any) -> TrainConfig:
 
 
 class TestSetupTrainingDistributed:
-    @patch("trainlib.recipes.base.wrap_model_distributed")
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_single_gpu_no_wrapping(
-        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
-    ):
+    @patch("xaytune.recipes.base.wrap_model_distributed")
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_single_gpu_no_wrapping(self, mock_load_model, mock_load_dataset, mock_init, mock_wrap):
         """Single GPU: no model wrapping, no DistributedSampler."""
         mock_init.return_value = DistributedContext()  # default: not distributed
         mock_load_model.return_value = _mock_model_result()
@@ -256,10 +254,10 @@ class TestSetupTrainingDistributed:
         assert components.distributed_ctx is not None
         assert not components.distributed_ctx.is_distributed
 
-    @patch("trainlib.recipes.base.wrap_model_distributed")
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.wrap_model_distributed")
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_distributed_wraps_model(
         self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
     ):
@@ -276,10 +274,10 @@ class TestSetupTrainingDistributed:
         mock_wrap.assert_called_once()
         assert components.distributed_ctx.is_distributed
 
-    @patch("trainlib.recipes.base.wrap_model_distributed", return_value=MagicMock())
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.wrap_model_distributed", return_value=MagicMock())
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_distributed_uses_distributed_sampler(
         self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
     ):
@@ -296,10 +294,10 @@ class TestSetupTrainingDistributed:
 
         assert isinstance(components.train_dataloader.sampler, DistributedSampler)
 
-    @patch("trainlib.recipes.base.wrap_model_distributed", return_value=MagicMock())
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.wrap_model_distributed", return_value=MagicMock())
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_distributed_eval_dataloader_uses_distributed_sampler(
         self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
     ):
@@ -322,12 +320,10 @@ class TestSetupTrainingDistributed:
         assert components.eval_dataloader is not None
         assert isinstance(components.eval_dataloader.sampler, DistributedSampler)
 
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_single_gpu_no_distributed_sampler(
-        self, mock_load_model, mock_load_dataset, mock_init
-    ):
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_single_gpu_no_distributed_sampler(self, mock_load_model, mock_load_dataset, mock_init):
         """Single GPU: DataLoader should NOT use DistributedSampler."""
         mock_init.return_value = DistributedContext()
         mock_load_model.return_value = _mock_model_result()
@@ -340,11 +336,11 @@ class TestSetupTrainingDistributed:
 
         assert not isinstance(components.train_dataloader.sampler, DistributedSampler)
 
-    @patch("trainlib.recipes.base.cleanup_distributed")
-    @patch("trainlib.recipes.base.wrap_model_distributed", return_value=MagicMock())
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.cleanup_distributed")
+    @patch("xaytune.recipes.base.wrap_model_distributed", return_value=MagicMock())
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_cleanup_registered_on_train_end(
         self, mock_load_model, mock_load_dataset, mock_init, mock_wrap, mock_cleanup
     ):
@@ -358,17 +354,17 @@ class TestSetupTrainingDistributed:
         components = setup_training(config)
 
         # Fire train_end to trigger cleanup
-        from trainlib.trainer.callbacks import TrainState
+        from xaytune.trainer.callbacks import TrainState
 
         state = TrainState()
         components.trainer.callback_manager.fire("train_end", state)
 
         mock_cleanup.assert_called_once_with(ctx)
 
-    @patch("trainlib.recipes.base.cleanup_distributed")
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.cleanup_distributed")
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_no_cleanup_registered_for_single_gpu(
         self, mock_load_model, mock_load_dataset, mock_init, mock_cleanup
     ):
@@ -380,20 +376,18 @@ class TestSetupTrainingDistributed:
         config = _make_config()
         components = setup_training(config)
 
-        from trainlib.trainer.callbacks import TrainState
+        from xaytune.trainer.callbacks import TrainState
 
         state = TrainState()
         components.trainer.callback_manager.fire("train_end", state)
 
         mock_cleanup.assert_not_called()
 
-    @patch("trainlib.recipes.base.wrap_model_distributed")
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_model_moved_to_device(
-        self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
-    ):
+    @patch("xaytune.recipes.base.wrap_model_distributed")
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_model_moved_to_device(self, mock_load_model, mock_load_dataset, mock_init, mock_wrap):
         """Model should be moved to the distributed context device."""
         ctx = DistributedContext()
         mock_init.return_value = ctx
@@ -406,10 +400,10 @@ class TestSetupTrainingDistributed:
 
         mr.model.to.assert_called_once_with(ctx.device)
 
-    @patch("trainlib.recipes.base.wrap_model_distributed")
-    @patch("trainlib.recipes.base.init_distributed")
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.wrap_model_distributed")
+    @patch("xaytune.recipes.base.init_distributed")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_wrap_called_with_correct_args(
         self, mock_load_model, mock_load_dataset, mock_init, mock_wrap
     ):
@@ -433,12 +427,10 @@ class TestSetupTrainingDistributed:
 
 
 class TestSetupTrainingCheckpointCallbacks:
-    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_checkpoint_callbacks_registered(
-        self, mock_load_ds, mock_load_model, mock_register
-    ):
+    @patch("xaytune.recipes.base.register_checkpoint_callbacks")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_checkpoint_callbacks_registered(self, mock_load_ds, mock_load_model, mock_register):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
 
@@ -452,9 +444,9 @@ class TestSetupTrainingCheckpointCallbacks:
         assert call_kwargs["output_dir"] == config.output.dir
         assert call_kwargs["is_main_process"] is True
 
-    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.register_checkpoint_callbacks")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_checkpoint_callbacks_use_default_config(
         self, mock_load_ds, mock_load_model, mock_register
     ):
@@ -474,12 +466,10 @@ class TestSetupTrainingCheckpointCallbacks:
 
 
 class TestSetupTrainingResume:
-    @patch("trainlib.recipes.base.load_checkpoint")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_resume_loads_model_weights(
-        self, mock_load_ds, mock_load_model, mock_load_ckpt
-    ):
+    @patch("xaytune.recipes.base.load_checkpoint")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_resume_loads_model_weights(self, mock_load_ds, mock_load_model, mock_load_ckpt):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
         mock_load_ckpt.return_value = TrainState(global_step=50, epoch=1, step=10)
@@ -492,11 +482,9 @@ class TestSetupTrainingResume:
         assert components.resume_state.global_step == 50
         assert components.resume_state.epoch == 1
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_no_resume_state_when_not_requested(
-        self, mock_load_ds, mock_load_model
-    ):
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_no_resume_state_when_not_requested(self, mock_load_ds, mock_load_model):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
 
@@ -507,9 +495,9 @@ class TestSetupTrainingResume:
 
 
 class TestSeedSetting:
-    @patch("trainlib.recipes.base.seed_all")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.seed_all")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_seed_applied(self, mock_load_ds, mock_load_model, mock_seed_all):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
@@ -522,11 +510,9 @@ class TestSeedSetting:
 
 
 class TestActivationCheckpointing:
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_enabled_calls_gradient_checkpointing(
-        self, mock_load_ds, mock_load_model
-    ):
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_enabled_calls_gradient_checkpointing(self, mock_load_ds, mock_load_model):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
 
@@ -537,11 +523,9 @@ class TestActivationCheckpointing:
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_disabled_skips_gradient_checkpointing(
-        self, mock_load_ds, mock_load_model
-    ):
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_disabled_skips_gradient_checkpointing(self, mock_load_ds, mock_load_model):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
 
@@ -552,15 +536,15 @@ class TestActivationCheckpointing:
 
 
 class TestMergeOnComplete:
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_merge_called_for_lora(self, mock_load_ds, mock_load_model):
         mr = _mock_model_result()
         merged_model = MagicMock()
         mr.model.merge_and_unload.return_value = merged_model
         mock_load_model.return_value = mr
 
-        with patch("trainlib.recipes.base.apply_lora") as mock_apply_lora:
+        with patch("xaytune.recipes.base.apply_lora") as mock_apply_lora:
             lora_result = MagicMock()
             lora_result.model = mr.model
             lora_result.tokenizer = mr.tokenizer
@@ -573,7 +557,10 @@ class TestMergeOnComplete:
                 model=ModelConfig(name="test-model"),
                 data=DataConfig(path="fake.jsonl", format="alpaca"),
                 trainer=TrainerConfig(
-                    batch_size=2, num_epochs=1, max_steps=1, save_last=False,
+                    batch_size=2,
+                    num_epochs=1,
+                    max_steps=1,
+                    save_last=False,
                 ),
                 output=OutputConfig(dir="/tmp/test-merge", merge_on_complete=True),
             )
@@ -586,8 +573,8 @@ class TestMergeOnComplete:
         merged_model.save_pretrained.assert_called_once_with("/tmp/test-merge/merged")
         mr.tokenizer.save_pretrained.assert_called_once_with("/tmp/test-merge/merged")
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_merge_not_called_for_full_finetune(self, mock_load_ds, mock_load_model):
         mr = _mock_model_result()
         mock_load_model.return_value = mr
@@ -599,7 +586,10 @@ class TestMergeOnComplete:
             model=ModelConfig(name="test-model"),
             data=DataConfig(path="fake.jsonl", format="alpaca"),
             trainer=TrainerConfig(
-                batch_size=2, num_epochs=1, max_steps=1, save_last=False,
+                batch_size=2,
+                num_epochs=1,
+                max_steps=1,
+                save_last=False,
             ),
             output=OutputConfig(dir="/tmp/test-merge", merge_on_complete=True),
         )
@@ -610,14 +600,14 @@ class TestMergeOnComplete:
 
         mr.model.merge_and_unload.assert_not_called()
 
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_merge_not_called_when_disabled(self, mock_load_ds, mock_load_model):
         mr = _mock_model_result()
         mock_load_model.return_value = mr
         mock_load_ds.return_value = _mock_dataset()
 
-        with patch("trainlib.recipes.base.apply_lora") as mock_apply_lora:
+        with patch("xaytune.recipes.base.apply_lora") as mock_apply_lora:
             lora_result = MagicMock()
             lora_result.model = mr.model
             lora_result.tokenizer = mr.tokenizer
@@ -629,7 +619,10 @@ class TestMergeOnComplete:
                 model=ModelConfig(name="test-model"),
                 data=DataConfig(path="fake.jsonl", format="alpaca"),
                 trainer=TrainerConfig(
-                    batch_size=2, num_epochs=1, max_steps=1, save_last=False,
+                    batch_size=2,
+                    num_epochs=1,
+                    max_steps=1,
+                    save_last=False,
                 ),
                 output=OutputConfig(dir="/tmp/test-merge", merge_on_complete=False),
             )
@@ -641,11 +634,11 @@ class TestMergeOnComplete:
         mr.model.merge_and_unload.assert_not_called()
 
 
-@patch("trainlib.recipes.base.validate_dataset_sample")
+@patch("xaytune.recipes.base.validate_dataset_sample")
 class TestDataPacking:
-    @patch("trainlib.recipes.base.pack_sequences")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.pack_sequences")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_packing_called_when_enabled(
         self, mock_load_ds, mock_load_model, mock_pack, mock_validate
     ):
@@ -667,9 +660,9 @@ class TestDataPacking:
         call_kwargs = mock_pack.call_args.kwargs
         assert call_kwargs["max_seq_length"] == 2048
 
-    @patch("trainlib.recipes.base.pack_sequences")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.pack_sequences")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_packing_skipped_when_disabled(
         self, mock_load_ds, mock_load_model, mock_pack, mock_validate
     ):
@@ -684,9 +677,9 @@ class TestDataPacking:
 
         mock_pack.assert_not_called()
 
-    @patch("trainlib.recipes.base.pack_sequences")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.pack_sequences")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
     def test_packing_skipped_for_tensor_data(
         self, mock_load_ds, mock_load_model, mock_pack, mock_validate
     ):
@@ -701,12 +694,10 @@ class TestDataPacking:
 
 
 class TestAsyncCheckpointWiring:
-    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_async_saver_created_when_enabled(
-        self, mock_load_ds, mock_load_model, mock_register
-    ):
+    @patch("xaytune.recipes.base.register_checkpoint_callbacks")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_async_saver_created_when_enabled(self, mock_load_ds, mock_load_model, mock_register):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
 
@@ -716,12 +707,10 @@ class TestAsyncCheckpointWiring:
         call_kwargs = mock_register.call_args.kwargs
         assert call_kwargs["async_saver"] is not None
 
-    @patch("trainlib.recipes.base.register_checkpoint_callbacks")
-    @patch("trainlib.recipes.base.load_model")
-    @patch("trainlib.recipes.base.load_dataset")
-    def test_no_async_saver_when_disabled(
-        self, mock_load_ds, mock_load_model, mock_register
-    ):
+    @patch("xaytune.recipes.base.register_checkpoint_callbacks")
+    @patch("xaytune.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    def test_no_async_saver_when_disabled(self, mock_load_ds, mock_load_model, mock_register):
         mock_load_model.return_value = _mock_model_result()
         mock_load_ds.return_value = _mock_dataset()
 

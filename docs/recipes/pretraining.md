@@ -5,9 +5,9 @@ The `pretrain` recipe trains a language model from scratch (or continues pre-tra
 ## Python API
 
 ```python
-import trainlib
+import xaytune
 
-state = trainlib.pretrain(
+state = xaytune.pretrain(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/corpus.jsonl",
     format="text",
@@ -95,7 +95,7 @@ Pre-training typically uses the `text` format, where each sample has a `text` (o
 
 ### Sequence Packing
 
-By default, trainlib packs multiple short sequences into a single training example up to `max_seq_length` to improve GPU utilization. Disable this with `packing: false` if your data already contains full-length sequences.
+By default, xaytune packs multiple short sequences into a single training example up to `max_seq_length` to improve GPU utilization. Disable this with `packing: false` if your data already contains full-length sequences.
 
 ### Streaming
 
@@ -115,4 +115,4 @@ trainer:
 | `auto` | Automatically selects based on available hardware |
 | `ddp` | Distributed Data Parallel -- replicates model on each GPU |
 | `fsdp` | Fully Sharded Data Parallel -- shards model across GPUs |
-| `deepspeed` | DeepSpeed ZeRO optimization (requires `pip install trainlib[deepspeed]`) |
+| `deepspeed` | DeepSpeed ZeRO optimization (requires `pip install xaytune[deepspeed]`) |

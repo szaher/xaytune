@@ -16,19 +16,19 @@ def mock_wandb_module():
     # Clean up after each test
     if "wandb" in sys.modules:
         del sys.modules["wandb"]
-    if "trainlib.logging.wandb" in sys.modules:
-        del sys.modules["trainlib.logging.wandb"]
+    if "xaytune.logging.wandb" in sys.modules:
+        del sys.modules["xaytune.logging.wandb"]
 
 
 class TestWandbBackend:
     def test_init_calls_wandb_init(self, mock_wandb_module):
-        from trainlib.logging.wandb import WandbBackend
+        from xaytune.logging.wandb import WandbBackend
 
         WandbBackend(project="my-project", run_name="run-1")
         mock_wandb_module.init.assert_called_once_with(project="my-project", name="run-1")
 
     def test_log_scalar(self, mock_wandb_module):
-        from trainlib.logging.wandb import WandbBackend
+        from xaytune.logging.wandb import WandbBackend
 
         backend = WandbBackend(project="test")
         backend.log_scalar("loss", 0.5, 10)
@@ -36,7 +36,7 @@ class TestWandbBackend:
         mock_wandb_module.log.assert_called_once_with({"loss": 0.5}, step=10)
 
     def test_log_config(self, mock_wandb_module):
-        from trainlib.logging.wandb import WandbBackend
+        from xaytune.logging.wandb import WandbBackend
 
         mock_wandb_module.config = MagicMock()
         backend = WandbBackend(project="test")
@@ -45,7 +45,7 @@ class TestWandbBackend:
         mock_wandb_module.config.update.assert_called_once_with({"lr": 0.001, "epochs": 3})
 
     def test_close_calls_finish(self, mock_wandb_module):
-        from trainlib.logging.wandb import WandbBackend
+        from xaytune.logging.wandb import WandbBackend
 
         backend = WandbBackend(project="test")
         backend.close()
@@ -53,14 +53,14 @@ class TestWandbBackend:
         mock_wandb_module.finish.assert_called_once()
 
     def test_is_logging_backend(self, mock_wandb_module):
-        from trainlib.logging.base import LoggingBackend
-        from trainlib.logging.wandb import WandbBackend
+        from xaytune.logging.base import LoggingBackend
+        from xaytune.logging.wandb import WandbBackend
 
         backend = WandbBackend(project="test")
         assert isinstance(backend, LoggingBackend)
 
     def test_default_project(self, mock_wandb_module):
-        from trainlib.logging.wandb import WandbBackend
+        from xaytune.logging.wandb import WandbBackend
 
         WandbBackend()
-        mock_wandb_module.init.assert_called_once_with(project="trainlib", name=None)
+        mock_wandb_module.init.assert_called_once_with(project="xaytune", name=None)

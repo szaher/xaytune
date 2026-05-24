@@ -1,5 +1,5 @@
-import trainlib
-from trainlib.recipes.align import (
+import xaytune
+from xaytune.recipes.align import (
     align,
     dpo_loss,
     grpo_loss,
@@ -45,14 +45,14 @@ class TestAlignPublicAPI:
         assert callable(reinforce_loss)
 
     def test_align_in_recipe_registry(self):
-        from trainlib.recipes import recipe_registry
+        from xaytune.recipes import recipe_registry
 
         assert recipe_registry.has("align")
 
     def test_top_level_align(self):
-        assert callable(trainlib.align)
+        assert callable(xaytune.align)
 
     def test_top_level_align_is_recipe(self):
-        from trainlib.recipes.align.align import align as align_fn
+        from xaytune.recipes.align.align import align as align_fn
 
-        assert trainlib.align is align_fn
+        assert xaytune.align is align_fn

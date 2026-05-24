@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from trainlib.trainer.distributed import (
+from xaytune.trainer.distributed import (
     DistributedContext,
     cleanup_distributed,
     get_strategy,
@@ -31,22 +31,22 @@ class TestDistributedContext:
 class TestDistributedContextDevice:
     def test_device_cpu_when_no_gpu(self):
         ctx = DistributedContext()
-        with patch("trainlib.trainer.device.get_device_type", return_value="cpu"):
+        with patch("xaytune.trainer.device.get_device_type", return_value="cpu"):
             assert ctx.device == torch.device("cpu")
 
     def test_device_cuda_when_available_single_gpu(self):
         ctx = DistributedContext()
-        with patch("trainlib.trainer.device.get_device_type", return_value="cuda"):
+        with patch("xaytune.trainer.device.get_device_type", return_value="cuda"):
             assert ctx.device == torch.device("cuda:0")
 
     def test_device_cuda_local_rank_when_distributed(self):
         ctx = DistributedContext(rank=2, world_size=4, local_rank=2)
-        with patch("trainlib.trainer.device.get_device_type", return_value="cuda"):
+        with patch("xaytune.trainer.device.get_device_type", return_value="cuda"):
             assert ctx.device == torch.device("cuda:2")
 
     def test_device_mps_when_available(self):
         ctx = DistributedContext()
-        with patch("trainlib.trainer.device.get_device_type", return_value="mps"):
+        with patch("xaytune.trainer.device.get_device_type", return_value="mps"):
             assert ctx.device == torch.device("mps")
 
 
@@ -78,9 +78,7 @@ class TestInitDistributed:
     @patch("torch.cuda.set_device")
     @patch("torch.distributed.is_initialized", return_value=False)
     @patch("torch.distributed.init_process_group")
-    def test_multi_gpu_initializes_process_group(
-        self, mock_init, mock_is_init, mock_set_device
-    ):
+    def test_multi_gpu_initializes_process_group(self, mock_init, mock_is_init, mock_set_device):
         env = {"RANK": "1", "WORLD_SIZE": "4", "LOCAL_RANK": "1"}
         with patch.dict(os.environ, env, clear=True):
             ctx = init_distributed()
@@ -94,9 +92,7 @@ class TestInitDistributed:
     @patch("torch.cuda.set_device")
     @patch("torch.distributed.is_initialized", return_value=True)
     @patch("torch.distributed.init_process_group")
-    def test_skips_init_if_already_initialized(
-        self, mock_init, mock_is_init, mock_set_device
-    ):
+    def test_skips_init_if_already_initialized(self, mock_init, mock_is_init, mock_set_device):
         env = {"RANK": "0", "WORLD_SIZE": "2", "LOCAL_RANK": "0"}
         with patch.dict(os.environ, env, clear=True):
             init_distributed()
@@ -149,7 +145,7 @@ class TestWrapModelDistributed:
 class TestWrapModelFSDP:
     @patch("torch.distributed.fsdp.FullyShardedDataParallel")
     def test_fsdp_with_full_shard(self, mock_fsdp):
-        from trainlib.config.schema import FSDPConfig
+        from xaytune.config.schema import FSDPConfig
 
         mock_fsdp.return_value = MagicMock()
         model = MagicMock()
@@ -164,7 +160,7 @@ class TestWrapModelFSDP:
 
     @patch("torch.distributed.fsdp.FullyShardedDataParallel")
     def test_fsdp_with_cpu_offload(self, mock_fsdp):
-        from trainlib.config.schema import FSDPConfig
+        from xaytune.config.schema import FSDPConfig
 
         mock_fsdp.return_value = MagicMock()
         model = MagicMock()
@@ -178,7 +174,7 @@ class TestWrapModelFSDP:
 
     @patch("torch.distributed.fsdp.FullyShardedDataParallel")
     def test_fsdp_with_shard_grad_op(self, mock_fsdp):
-        from trainlib.config.schema import FSDPConfig
+        from xaytune.config.schema import FSDPConfig
 
         mock_fsdp.return_value = MagicMock()
         model = MagicMock()
@@ -190,7 +186,7 @@ class TestWrapModelFSDP:
 
     @patch("torch.distributed.fsdp.FullyShardedDataParallel")
     def test_fsdp_with_mixed_precision(self, mock_fsdp):
-        from trainlib.config.schema import FSDPConfig
+        from xaytune.config.schema import FSDPConfig
 
         mock_fsdp.return_value = MagicMock()
         model = MagicMock()
@@ -216,7 +212,7 @@ class TestWrapModelFSDP:
 
 class TestWrapModelDeepSpeed:
     def test_deepspeed_initializes_engine(self):
-        from trainlib.config.schema import DeepSpeedConfig
+        from xaytune.config.schema import DeepSpeedConfig
 
         model = MagicMock()
         ctx = DistributedContext(rank=0, world_size=2, local_rank=0)

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import torch
 
-from trainlib.data.tokenizer import (
+from xaytune.data.tokenizer import (
     collate_preference,
     collate_tokenized,
     tokenize_dataset,
@@ -14,7 +14,12 @@ from trainlib.data.tokenizer import (
 
 def _make_tokenizer(vocab_size: int = 100, max_length: int = 512) -> MagicMock:
     def _tokenize(
-        text, *, truncation=True, max_length=512, padding=False, return_attention_mask=True,
+        text,
+        *,
+        truncation=True,
+        max_length=512,
+        padding=False,
+        return_attention_mask=True,
     ):
         ids = list(range(1, min(len(text.split()) + 1, max_length + 1)))
         return {"input_ids": ids, "attention_mask": [1] * len(ids)}
@@ -42,8 +47,13 @@ class TestTokenizeDataset:
 
     def test_tokenize_respects_max_seq_length(self):
         def _tokenize(
-        text, *, truncation=True, max_length=512, padding=False, return_attention_mask=True,
-    ):
+            text,
+            *,
+            truncation=True,
+            max_length=512,
+            padding=False,
+            return_attention_mask=True,
+        ):
             ids = list(range(1, min(11, max_length + 1)))
             return {"input_ids": ids, "attention_mask": [1] * len(ids)}
 
@@ -74,8 +84,13 @@ class TestTokenizeDataset:
         call_args = {}
 
         def _tokenize(
-        text, *, truncation=True, max_length=512, padding=False, return_attention_mask=True,
-    ):
+            text,
+            *,
+            truncation=True,
+            max_length=512,
+            padding=False,
+            return_attention_mask=True,
+        ):
             call_args["max_length"] = max_length
             ids = list(range(1, 4))
             return {"input_ids": ids, "attention_mask": [1] * len(ids)}
@@ -87,8 +102,13 @@ class TestTokenizeDataset:
 
     def test_tokenize_filters_empty_encoding(self):
         def _tokenize(
-        text, *, truncation=True, max_length=512, padding=False, return_attention_mask=True,
-    ):
+            text,
+            *,
+            truncation=True,
+            max_length=512,
+            padding=False,
+            return_attention_mask=True,
+        ):
             return {"input_ids": [], "attention_mask": []}
 
         tok = MagicMock(side_effect=_tokenize)
@@ -171,7 +191,11 @@ class TestTokenizePreferenceDataset:
         call_texts = []
 
         def _tokenize(
-            text, *, truncation=True, max_length=512, padding=False,
+            text,
+            *,
+            truncation=True,
+            max_length=512,
+            padding=False,
             return_attention_mask=True,
         ):
             call_texts.append(text)
@@ -206,7 +230,11 @@ class TestTokenizePreferenceDataset:
         call_texts = []
 
         def _tokenize(
-            text, *, truncation=True, max_length=512, padding=False,
+            text,
+            *,
+            truncation=True,
+            max_length=512,
+            padding=False,
             return_attention_mask=True,
         ):
             call_texts.append(text)
@@ -306,6 +334,8 @@ class TestCollatePreference:
         ]
         result = collate_preference(batch)
         assert set(result.keys()) == {
-            "chosen_input_ids", "chosen_attention_mask",
-            "rejected_input_ids", "rejected_attention_mask",
+            "chosen_input_ids",
+            "chosen_attention_mask",
+            "rejected_input_ids",
+            "rejected_attention_mask",
         }

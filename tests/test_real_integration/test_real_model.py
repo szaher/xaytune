@@ -6,15 +6,15 @@ import math
 import pytest
 import torch
 
-from trainlib.config.schema import TrainerConfig
-from trainlib.data.formats import format_alpaca
-from trainlib.data.tokenizer import (
+from xaytune.config.schema import TrainerConfig
+from xaytune.data.formats import format_alpaca
+from xaytune.data.tokenizer import (
     collate_preference,
     collate_tokenized,
     tokenize_dataset,
     tokenize_preference_dataset,
 )
-from trainlib.trainer.callbacks import CallbackManager
+from xaytune.trainer.callbacks import CallbackManager
 
 pytestmark = pytest.mark.slow
 
@@ -123,7 +123,7 @@ class TestRealModelPipeline:
 class TestFullPipelineIntegration:
     def test_load_format_tokenize_train(self, tiny_model_and_tokenizer, alpaca_jsonl):
         model, tokenizer = tiny_model_and_tokenizer
-        from trainlib.data import load_dataset
+        from xaytune.data import load_dataset
 
         data = load_dataset(alpaca_jsonl, format="alpaca")
         assert all("text" in s for s in data)
@@ -151,8 +151,8 @@ class TestFullPipelineIntegration:
 
     def test_trainer_loop_integration(self, tiny_model_and_tokenizer, alpaca_jsonl):
         model, tokenizer = tiny_model_and_tokenizer
-        from trainlib.data import load_dataset
-        from trainlib.trainer import Trainer
+        from xaytune.data import load_dataset
+        from xaytune.trainer import Trainer
 
         data = load_dataset(alpaca_jsonl, format="alpaca")
         tokenized = tokenize_dataset(data, tokenizer, max_seq_length=64)
@@ -184,9 +184,9 @@ class TestFullPipelineIntegration:
 
     def test_eval_during_training(self, tiny_model_and_tokenizer, alpaca_jsonl):
         model, tokenizer = tiny_model_and_tokenizer
-        from trainlib.data import load_dataset
-        from trainlib.trainer import Trainer
-        from trainlib.trainer.eval_callback import register_eval_callbacks
+        from xaytune.data import load_dataset
+        from xaytune.trainer import Trainer
+        from xaytune.trainer.eval_callback import register_eval_callbacks
 
         data = load_dataset(alpaca_jsonl, format="alpaca")
         tokenized = tokenize_dataset(data, tokenizer, max_seq_length=64)
@@ -248,11 +248,15 @@ class TestPreferenceDataPipeline:
         return str(path)
 
     def test_tokenize_preference_and_collate(
-        self, tiny_model_and_tokenizer, preference_samples,
+        self,
+        tiny_model_and_tokenizer,
+        preference_samples,
     ):
         _, tokenizer = tiny_model_and_tokenizer
         tokenized = tokenize_preference_dataset(
-            preference_samples, tokenizer, max_seq_length=64,
+            preference_samples,
+            tokenizer,
+            max_seq_length=64,
         )
         assert len(tokenized) == len(preference_samples)
         assert all("chosen_input_ids" in s for s in tokenized)
@@ -264,11 +268,13 @@ class TestPreferenceDataPipeline:
         assert batch["chosen_input_ids"].dtype == torch.long
 
     def test_dpo_loss_end_to_end(
-        self, tiny_model_and_tokenizer, preference_samples,
+        self,
+        tiny_model_and_tokenizer,
+        preference_samples,
     ):
         import copy
 
-        from trainlib.recipes.align.loss_dispatch import create_alignment_loss_fn
+        from xaytune.recipes.align.loss_dispatch import create_alignment_loss_fn
 
         model, tokenizer = tiny_model_and_tokenizer
         ref_model = copy.deepcopy(model)
@@ -277,7 +283,9 @@ class TestPreferenceDataPipeline:
             p.requires_grad = False
 
         tokenized = tokenize_preference_dataset(
-            preference_samples, tokenizer, max_seq_length=64,
+            preference_samples,
+            tokenizer,
+            max_seq_length=64,
         )
         batch = collate_preference(tokenized[:2], pad_token_id=tokenizer.pad_token_id)
 
@@ -289,18 +297,18 @@ class TestPreferenceDataPipeline:
         assert math.isfinite(loss.item())
 
         loss.backward()
-        has_grad = any(
-            p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters()
-        )
+        has_grad = any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
         assert has_grad, "No gradients from DPO loss"
 
     def test_dpo_training_loop(
-        self, tiny_model_and_tokenizer, preference_samples,
+        self,
+        tiny_model_and_tokenizer,
+        preference_samples,
     ):
         import copy
 
-        from trainlib.recipes.align.loss_dispatch import create_alignment_loss_fn
-        from trainlib.trainer import Trainer
+        from xaytune.recipes.align.loss_dispatch import create_alignment_loss_fn
+        from xaytune.trainer import Trainer
 
         model, tokenizer = tiny_model_and_tokenizer
         ref_model = copy.deepcopy(model)
@@ -309,7 +317,9 @@ class TestPreferenceDataPipeline:
             p.requires_grad = False
 
         tokenized = tokenize_preference_dataset(
-            preference_samples, tokenizer, max_seq_length=64,
+            preference_samples,
+            tokenizer,
+            max_seq_length=64,
         )
 
         from torch.utils.data import DataLoader
@@ -333,7 +343,9 @@ class TestPreferenceDataPipeline:
 
         model.train()
         state = trainer.train(
-            model=model, train_dataloader=loader, loss_fn=loss_fn,
+            model=model,
+            train_dataloader=loader,
+            loss_fn=loss_fn,
         )
 
         assert state.global_step >= 1

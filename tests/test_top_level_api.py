@@ -1,22 +1,22 @@
-import trainlib
-from trainlib import export
+import xaytune
+from xaytune import export
 
 
 class TestTopLevelAPI:
     def test_version(self):
-        assert trainlib.__version__ == "0.6.0"
+        assert xaytune.__version__ == "0.6.0"
 
     def test_finetune_importable(self):
-        assert callable(trainlib.finetune)
+        assert callable(xaytune.finetune)
 
     def test_pretrain_importable(self):
-        assert callable(trainlib.pretrain)
+        assert callable(xaytune.pretrain)
 
     def test_align_importable(self):
-        assert callable(trainlib.align)
+        assert callable(xaytune.align)
 
     def test_evaluate_importable(self):
-        assert callable(trainlib.evaluate)
+        assert callable(xaytune.evaluate)
 
     def test_export_module(self):
         assert callable(export.merge)
@@ -24,21 +24,21 @@ class TestTopLevelAPI:
         assert callable(export.push_to_hub)
 
     def test_finetune_is_recipe(self):
-        from trainlib.recipes.finetune import finetune
+        from xaytune.recipes.finetune import finetune
 
-        assert trainlib.finetune is finetune
+        assert xaytune.finetune is finetune
 
     def test_pretrain_is_recipe(self):
-        from trainlib.recipes.pretrain import pretrain
+        from xaytune.recipes.pretrain import pretrain
 
-        assert trainlib.pretrain is pretrain
+        assert xaytune.pretrain is pretrain
 
     def test_align_is_recipe(self):
-        from trainlib.recipes.align.align import align
+        from xaytune.recipes.align.align import align
 
-        assert trainlib.align is align
+        assert xaytune.align is align
 
     def test_evaluate_is_eval(self):
-        from trainlib.eval.evaluate import evaluate
+        from xaytune.eval.evaluate import evaluate
 
-        assert trainlib.evaluate is evaluate
+        assert xaytune.evaluate is evaluate

@@ -1,13 +1,13 @@
 from unittest.mock import MagicMock
 
-from trainlib.data.formats import (
+from xaytune.data.formats import (
     apply_chat_template,
     format_alpaca,
     format_chat,
     format_sharegpt,
     format_text,
 )
-from trainlib.data.registry import format_registry
+from xaytune.data.registry import format_registry
 
 
 class TestAlpacaFormat:
@@ -102,7 +102,9 @@ class TestApplyChatTemplate:
         }
         result = apply_chat_template(sample, tokenizer, format="chat")
         tokenizer.apply_chat_template.assert_called_once_with(
-            sample["messages"], tokenize=False, add_generation_prompt=False,
+            sample["messages"],
+            tokenize=False,
+            add_generation_prompt=False,
         )
         assert result["text"] == "<s>[INST] Hi [/INST] Hello!</s>"
 

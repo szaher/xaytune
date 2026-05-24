@@ -1,6 +1,6 @@
 # Alignment
 
-The `align` recipe aligns a language model with human preferences using reinforcement learning from human feedback (RLHF) and related methods. trainlib supports six alignment algorithms.
+The `align` recipe aligns a language model with human preferences using reinforcement learning from human feedback (RLHF) and related methods. xaytune supports six alignment algorithms.
 
 ## Methods
 
@@ -16,10 +16,10 @@ The `align` recipe aligns a language model with human preferences using reinforc
 ## Python API
 
 ```python
-import trainlib
+import xaytune
 
 # DPO alignment
-state = trainlib.align(
+state = xaytune.align(
     model="meta-llama/Llama-3.1-8B-Instruct",
     dataset="data/preferences.jsonl",
     method="dpo",
@@ -29,7 +29,7 @@ state = trainlib.align(
 )
 
 # GRPO alignment
-state = trainlib.align(
+state = xaytune.align(
     model="meta-llama/Llama-3.1-8B-Instruct",
     dataset="data/prompts.jsonl",
     method="grpo",
@@ -155,7 +155,7 @@ For online methods (GRPO, PPO, REINFORCE), provide prompts. The model generates 
 Register custom reward functions for online alignment methods:
 
 ```python
-from trainlib.recipes.align.rewards import reward_registry
+from xaytune.recipes.align.rewards import reward_registry
 
 @reward_registry.register("length_reward")
 def length_reward(prompt: str, response: str) -> float:
@@ -174,7 +174,7 @@ def format_reward(prompt: str, response: str) -> float:
 ```
 
 !!! info "Default reward"
-    trainlib includes a `default` reward function (returns 0.0). You should register your own reward function for meaningful alignment results.
+    xaytune includes a `default` reward function (returns 0.0). You should register your own reward function for meaningful alignment results.
 
 ## Choosing an Alignment Method
 

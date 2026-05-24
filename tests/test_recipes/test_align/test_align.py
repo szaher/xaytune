@@ -3,11 +3,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig
-from trainlib.recipes.align.align import align
-from trainlib.trainer.callbacks import TrainState
+from xaytune.config.schema import DataConfig, ModelConfig, TrainConfig
+from xaytune.recipes.align.align import align
+from xaytune.trainer.callbacks import TrainState
 
-_SETUP = "trainlib.recipes.base.setup_training"
+_SETUP = "xaytune.recipes.base.setup_training"
 
 
 class TestAlign:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from trainlib.trainer.callbacks import CallbackManager, TrainState
-from trainlib.trainer.early_stopping import register_early_stopping_callbacks
+from xaytune.trainer.callbacks import CallbackManager, TrainState
+from xaytune.trainer.early_stopping import register_early_stopping_callbacks
 
 
 class TestEarlyStopping:

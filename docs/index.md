@@ -1,8 +1,8 @@
-# trainlib
+# xaytune
 
 **An opinionated LLM training and fine-tuning library.**
 
-trainlib provides a recipe-based approach to LLM training built on PyTorch and Hugging Face Transformers. It covers the full lifecycle from pre-training through fine-tuning to alignment, with a clean Python API and a YAML-driven CLI.
+xaytune provides a recipe-based approach to LLM training built on PyTorch and Hugging Face Transformers. It covers the full lifecycle from pre-training through fine-tuning to alignment, with a clean Python API and a YAML-driven CLI.
 
 ---
 
@@ -23,10 +23,10 @@ trainlib provides a recipe-based approach to LLM training built on PyTorch and H
 ## Quick Example
 
 ```python
-import trainlib
+import xaytune
 
 # Fine-tune with LoRA in one call
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="lora",
@@ -38,7 +38,7 @@ state = trainlib.finetune(
 Or drive the same workflow from the CLI:
 
 ```bash
-trainlib train --config configs/examples/lora_finetune.yaml
+xaytune train --config configs/examples/lora_finetune.yaml
 ```
 
 ---
@@ -47,7 +47,7 @@ trainlib train --config configs/examples/lora_finetune.yaml
 
 1. **Choose a recipe** -- `finetune`, `pretrain`, or `align`
 2. **Configure** -- pass keyword arguments in Python, or write a YAML config
-3. **Train** -- trainlib loads the model, prepares data, runs the training loop, and returns a `TrainState`
+3. **Train** -- xaytune loads the model, prepares data, runs the training loop, and returns a `TrainState`
 4. **Export** -- merge adapters, push to Hub, or convert to GGUF for local inference
 
 ---

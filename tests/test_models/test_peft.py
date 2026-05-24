@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
-from trainlib.models.loader import ModelResult
-from trainlib.models.peft import apply_lora, get_target_modules
+from xaytune.models.loader import ModelResult
+from xaytune.models.peft import apply_lora, get_target_modules
 
 
 class TestGetTargetModules:
@@ -26,8 +26,8 @@ class TestGetTargetModules:
 
 
 class TestApplyLora:
-    @patch("trainlib.models.peft.get_peft_model")
-    @patch("trainlib.models.peft.LoraConfig")
+    @patch("xaytune.models.peft.get_peft_model")
+    @patch("xaytune.models.peft.LoraConfig")
     def test_apply_lora_basic(self, mock_lora_config_cls, mock_get_peft):
         mock_model = MagicMock()
         mock_model.config.model_type = "llama"
@@ -40,8 +40,8 @@ class TestApplyLora:
         assert result.model is mock_peft_model
         assert result.peft_applied is True
 
-    @patch("trainlib.models.peft.get_peft_model")
-    @patch("trainlib.models.peft.LoraConfig")
+    @patch("xaytune.models.peft.get_peft_model")
+    @patch("xaytune.models.peft.LoraConfig")
     def test_apply_lora_custom_target_modules(self, mock_lora_config_cls, mock_get_peft):
         mock_model = MagicMock()
         mock_model.config.model_type = "llama"
@@ -51,8 +51,8 @@ class TestApplyLora:
         call_kwargs = mock_lora_config_cls.call_args[1]
         assert call_kwargs["target_modules"] == ["q_proj", "k_proj"]
 
-    @patch("trainlib.models.peft.get_peft_model")
-    @patch("trainlib.models.peft.LoraConfig")
+    @patch("xaytune.models.peft.get_peft_model")
+    @patch("xaytune.models.peft.LoraConfig")
     def test_apply_lora_sets_rank_and_alpha(self, mock_lora_config_cls, mock_get_peft):
         mock_model = MagicMock()
         mock_model.config.model_type = "llama"
@@ -64,8 +64,8 @@ class TestApplyLora:
         assert call_kwargs["lora_alpha"] == 128
         assert call_kwargs["lora_dropout"] == 0.1
 
-    @patch("trainlib.models.peft.get_peft_model")
-    @patch("trainlib.models.peft.LoraConfig")
+    @patch("xaytune.models.peft.get_peft_model")
+    @patch("xaytune.models.peft.LoraConfig")
     def test_apply_lora_preserves_tokenizer(self, mock_lora_config_cls, mock_get_peft):
         mock_model = MagicMock()
         mock_model.config.model_type = "llama"

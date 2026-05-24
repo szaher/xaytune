@@ -1,14 +1,14 @@
 # Recipes
 
-trainlib organizes training workflows into **recipes** -- high-level functions that encapsulate the full training pipeline for a specific task. Each recipe handles model loading, data preparation, training loop execution, and state management.
+xaytune organizes training workflows into **recipes** -- high-level functions that encapsulate the full training pipeline for a specific task. Each recipe handles model loading, data preparation, training loop execution, and state management.
 
 ## Available Recipes
 
 | Recipe | Function | Methods | Use Case |
 |--------|----------|---------|----------|
-| **Fine-tune** | `trainlib.finetune()` | `full`, `lora`, `qlora` | Adapt a pre-trained model to a specific task or domain |
-| **Pre-train** | `trainlib.pretrain()` | `full` | Train a model from scratch on a large text corpus |
-| **Align** | `trainlib.align()` | `dpo`, `grpo`, `orpo`, `simpo`, `ppo`, `reinforce` | Align a model with human preferences |
+| **Fine-tune** | `xaytune.finetune()` | `full`, `lora`, `qlora` | Adapt a pre-trained model to a specific task or domain |
+| **Pre-train** | `xaytune.pretrain()` | `full` | Train a model from scratch on a large text corpus |
+| **Align** | `xaytune.align()` | `dpo`, `grpo`, `orpo`, `simpo`, `ppo`, `reinforce` | Align a model with human preferences |
 
 ## How Recipes Work
 
@@ -20,12 +20,12 @@ Every recipe follows the same pattern:
 4. **Return a `TrainState`** -- final metrics, step count, and training status
 
 ```python
-import trainlib
+import xaytune
 
 # All recipes share the same calling convention:
-state = trainlib.finetune(model="...", dataset="...", method="lora")
-state = trainlib.pretrain(model="...", dataset="...", format="text")
-state = trainlib.align(model="...", dataset="...", method="dpo")
+state = xaytune.finetune(model="...", dataset="...", method="lora")
+state = xaytune.pretrain(model="...", dataset="...", format="text")
+state = xaytune.align(model="...", dataset="...", method="dpo")
 ```
 
 ## Python API vs. Config
@@ -35,7 +35,7 @@ Each recipe can be called in two ways:
 === "Keyword arguments"
 
     ```python
-    state = trainlib.finetune(
+    state = xaytune.finetune(
         model="meta-llama/Llama-3.1-8B",
         dataset="data/train.jsonl",
         method="lora",
@@ -47,7 +47,7 @@ Each recipe can be called in two ways:
 === "TrainConfig object"
 
     ```python
-    from trainlib.config.schema import TrainConfig, ModelConfig, DataConfig
+    from xaytune.config.schema import TrainConfig, ModelConfig, DataConfig
 
     config = TrainConfig(
         recipe="finetune",
@@ -55,7 +55,7 @@ Each recipe can be called in two ways:
         model=ModelConfig(name="meta-llama/Llama-3.1-8B"),
         data=DataConfig(path="data/train.jsonl", format="alpaca"),
     )
-    state = trainlib.finetune(config=config)
+    state = xaytune.finetune(config=config)
     ```
 
 === "YAML + CLI"
@@ -71,7 +71,7 @@ Each recipe can be called in two ways:
     ```
 
     ```bash
-    trainlib train --config config.yaml
+    xaytune train --config config.yaml
     ```
 
 ## Recipe Registry
@@ -79,7 +79,7 @@ Each recipe can be called in two ways:
 Recipes are registered in a global `recipe_registry`. You can list them:
 
 ```python
-from trainlib.recipes import recipe_registry
+from xaytune.recipes import recipe_registry
 
 print(recipe_registry.list())
 # ['align', 'finetune', 'pretrain']
@@ -88,7 +88,7 @@ print(recipe_registry.list())
 Or from the CLI:
 
 ```bash
-trainlib list recipes
+xaytune list recipes
 ```
 
 ## Next Steps

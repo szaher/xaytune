@@ -13,10 +13,10 @@ The `finetune` recipe adapts a pre-trained language model to a specific task or 
 ## Python API
 
 ```python
-import trainlib
+import xaytune
 
 # Full fine-tuning
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="full",
@@ -27,7 +27,7 @@ state = trainlib.finetune(
 )
 
 # LoRA
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="lora",
@@ -35,7 +35,7 @@ state = trainlib.finetune(
 )
 
 # QLoRA (4-bit quantized base + LoRA adapters)
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="qlora",
@@ -162,7 +162,7 @@ output:
 
 ## Data Formats
 
-trainlib has a registry of built-in data formats. Each format function transforms raw samples into the `{"text": "..."}` structure expected by the trainer.
+xaytune has a registry of built-in data formats. Each format function transforms raw samples into the `{"text": "..."}` structure expected by the trainer.
 
 | Format | Fields | Description |
 |--------|--------|-------------|
@@ -176,7 +176,7 @@ trainlib has a registry of built-in data formats. Each format function transform
 Register your own format with the `@format_registry.register()` decorator:
 
 ```python
-from trainlib.data.registry import format_registry
+from xaytune.data.registry import format_registry
 
 @format_registry.register("my_format")
 def format_my_data(sample):
@@ -197,5 +197,5 @@ When using `lora` or `qlora` methods, the `lora` section in the config controls 
 !!! tip "After training with LoRA"
     Merge adapters back into the base model for inference:
     ```bash
-    trainlib export merge --checkpoint output/lora-finetune --output output/merged
+    xaytune export merge --checkpoint output/lora-finetune --output output/merged
     ```

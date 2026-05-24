@@ -2,11 +2,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trainlib.export.hub import push_to_hub
+from xaytune.export.hub import push_to_hub
 
 
 class TestPushToHub:
-    @patch("trainlib.models.load_model")
+    @patch("xaytune.models.load_model")
     def test_push_to_hub_with_path(self, mock_load_model):
         mock_result = MagicMock()
         mock_model = MagicMock()

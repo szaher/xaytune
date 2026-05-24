@@ -5377,96 +5377,6 @@ wheels = [
 ]
 
 [[package]]
-name = "trainlib"
-version = "0.6.0"
-source = { editable = "." }
-dependencies = [
-    { name = "bitsandbytes" },
-    { name = "datasets" },
-    { name = "peft" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "torch" },
-    { name = "transformers" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "deepspeed" },
-    { name = "gradio" },
-    { name = "lm-eval" },
-    { name = "mlflow" },
-    { name = "plotly" },
-    { name = "tensorboard" },
-    { name = "wandb" },
-]
-deepspeed = [
-    { name = "deepspeed" },
-]
-dev = [
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-docs = [
-    { name = "mkdocs-material" },
-    { name = "mkdocstrings", extra = ["python"] },
-]
-eval = [
-    { name = "lm-eval" },
-]
-mlflow = [
-    { name = "mlflow" },
-]
-studio = [
-    { name = "gradio" },
-    { name = "plotly" },
-]
-tensorboard = [
-    { name = "tensorboard" },
-]
-wandb = [
-    { name = "wandb" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bitsandbytes", specifier = ">=0.43" },
-    { name = "datasets", specifier = ">=2.18" },
-    { name = "deepspeed", marker = "extra == 'deepspeed'", specifier = ">=0.14" },
-    { name = "gradio", marker = "extra == 'studio'", specifier = ">=5.0" },
-    { name = "lm-eval", marker = "extra == 'eval'", specifier = ">=0.4" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
-    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.25" },
-    { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=2.10" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "peft", specifier = ">=0.10" },
-    { name = "plotly", marker = "extra == 'studio'", specifier = ">=5.0" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rich", specifier = ">=13.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "tensorboard", marker = "extra == 'tensorboard'", specifier = ">=2.14" },
-    { name = "torch", specifier = ">=2.0" },
-    { name = "trainlib", extras = ["deepspeed"], marker = "extra == 'all'" },
-    { name = "trainlib", extras = ["docs"], marker = "extra == 'dev'" },
-    { name = "trainlib", extras = ["eval"], marker = "extra == 'all'" },
-    { name = "trainlib", extras = ["mlflow"], marker = "extra == 'all'" },
-    { name = "trainlib", extras = ["studio"], marker = "extra == 'all'" },
-    { name = "trainlib", extras = ["tensorboard"], marker = "extra == 'all'" },
-    { name = "trainlib", extras = ["wandb"], marker = "extra == 'all'" },
-    { name = "transformers", specifier = ">=4.40" },
-    { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.16" },
-]
-provides-extras = ["deepspeed", "eval", "wandb", "mlflow", "tensorboard", "studio", "all", "docs", "dev"]
-
-[[package]]
 name = "transformers"
 version = "5.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5691,6 +5601,96 @@ name = "word2number"
 version = "1.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/4a/29/a31940c848521f0725f0df6b25dca8917f13a2025b0e8fcbe5d0457e45e6/word2number-1.1.zip", hash = "sha256:70e27a5d387f67b04c71fbb7621c05930b19bfd26efd6851e6e0f9969dcde7d0", size = 9723, upload-time = "2017-06-02T15:45:14.488Z" }
+
+[[package]]
+name = "xaytune"
+version = "0.6.0"
+source = { editable = "." }
+dependencies = [
+    { name = "bitsandbytes" },
+    { name = "datasets" },
+    { name = "peft" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "torch" },
+    { name = "transformers" },
+]
+
+[package.optional-dependencies]
+all = [
+    { name = "deepspeed" },
+    { name = "gradio" },
+    { name = "lm-eval" },
+    { name = "mlflow" },
+    { name = "plotly" },
+    { name = "tensorboard" },
+    { name = "wandb" },
+]
+deepspeed = [
+    { name = "deepspeed" },
+]
+dev = [
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+docs = [
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings", extra = ["python"] },
+]
+eval = [
+    { name = "lm-eval" },
+]
+mlflow = [
+    { name = "mlflow" },
+]
+studio = [
+    { name = "gradio" },
+    { name = "plotly" },
+]
+tensorboard = [
+    { name = "tensorboard" },
+]
+wandb = [
+    { name = "wandb" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bitsandbytes", specifier = ">=0.43" },
+    { name = "datasets", specifier = ">=2.18" },
+    { name = "deepspeed", marker = "extra == 'deepspeed'", specifier = ">=0.14" },
+    { name = "gradio", marker = "extra == 'studio'", specifier = ">=5.0" },
+    { name = "lm-eval", marker = "extra == 'eval'", specifier = ">=0.4" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
+    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.25" },
+    { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=2.10" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "peft", specifier = ">=0.10" },
+    { name = "plotly", marker = "extra == 'studio'", specifier = ">=5.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "rich", specifier = ">=13.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "tensorboard", marker = "extra == 'tensorboard'", specifier = ">=2.14" },
+    { name = "torch", specifier = ">=2.0" },
+    { name = "transformers", specifier = ">=4.40" },
+    { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.16" },
+    { name = "xaytune", extras = ["deepspeed"], marker = "extra == 'all'" },
+    { name = "xaytune", extras = ["docs"], marker = "extra == 'dev'" },
+    { name = "xaytune", extras = ["eval"], marker = "extra == 'all'" },
+    { name = "xaytune", extras = ["mlflow"], marker = "extra == 'all'" },
+    { name = "xaytune", extras = ["studio"], marker = "extra == 'all'" },
+    { name = "xaytune", extras = ["tensorboard"], marker = "extra == 'all'" },
+    { name = "xaytune", extras = ["wandb"], marker = "extra == 'all'" },
+]
+provides-extras = ["deepspeed", "eval", "wandb", "mlflow", "tensorboard", "studio", "all", "docs", "dev"]
 
 [[package]]
 name = "xxhash"

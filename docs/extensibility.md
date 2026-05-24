@@ -1,6 +1,6 @@
 # Extensibility
 
-trainlib is designed to be extended. You can bring your own models, training logic, recipes, and data formats without modifying the library itself.
+xaytune is designed to be extended. You can bring your own models, training logic, recipes, and data formats without modifying the library itself.
 
 ## Custom Training Step
 
@@ -8,8 +8,8 @@ Subclass `Trainer` and override `training_step()` to implement custom forward/ba
 
 ```python
 import torch
-from trainlib.trainer import Trainer
-from trainlib.config.schema import TrainerConfig
+from xaytune.trainer import Trainer
+from xaytune.config.schema import TrainerConfig
 
 class DistillTrainer(Trainer):
     def __init__(self, config, teacher_model, **kwargs):
@@ -50,9 +50,9 @@ You can also override `move_batch_to_device()` if your batches need custom devic
 All recipe functions (`finetune`, `pretrain`, `align`) accept a model instance directly:
 
 ```python
-import trainlib
+import xaytune
 
-state = trainlib.finetune(
+state = xaytune.finetune(
     model=my_custom_model,      # any nn.Module
     tokenizer=my_tokenizer,     # required with raw models
     dataset="data/train.jsonl",
@@ -64,7 +64,7 @@ state = trainlib.finetune(
 You can also pass a `ModelResult` for more control:
 
 ```python
-from trainlib.models import ModelResult
+from xaytune.models import ModelResult
 
 model_result = ModelResult(
     model=my_model,
@@ -73,7 +73,7 @@ model_result = ModelResult(
     metadata={"custom_key": "value"},
 )
 
-state = trainlib.finetune(
+state = xaytune.finetune(
     model=model_result,
     dataset="data/train.jsonl",
 )
@@ -84,7 +84,7 @@ state = trainlib.finetune(
 Register a custom model loader so it works with YAML config files:
 
 ```python
-from trainlib.models import register_model, ModelResult
+from xaytune.models import register_model, ModelResult
 
 @register_model("my-transformer")
 def load_my_transformer(name_or_path, *, dtype="auto", **kwargs):
@@ -111,8 +111,8 @@ When `load_model("my-transformer")` is called, it checks the model registry firs
 Register a recipe function with the recipe registry:
 
 ```python
-from trainlib.recipes import recipe_registry
-from trainlib.recipes.base import setup_training
+from xaytune.recipes import recipe_registry
+from xaytune.recipes.base import setup_training
 
 @recipe_registry.register("distill")
 def distill(*, config, resume_from=None):
@@ -147,7 +147,7 @@ trainer:
 ```
 
 ```bash
-trainlib train --config distill.yaml
+xaytune train --config distill.yaml
 ```
 
 Custom recipe and method names are accepted by the config system — you are not limited to the built-in `finetune`, `pretrain`, and `align`.
@@ -157,7 +157,7 @@ Custom recipe and method names are accepted by the config system — you are not
 Register a data format function to handle custom dataset structures:
 
 ```python
-from trainlib.data import format_registry
+from xaytune.data import format_registry
 
 @format_registry.register("my_format")
 def format_my_data(sample):
@@ -174,32 +174,32 @@ data:
 
 ## Plugin Discovery
 
-Third-party packages can register recipes, models, formats, and metrics automatically using Python entry points. trainlib discovers them at import time.
+Third-party packages can register recipes, models, formats, and metrics automatically using Python entry points. xaytune discovers them at import time.
 
 In your package's `pyproject.toml`:
 
 ```toml
-[project.entry-points."trainlib.recipes"]
+[project.entry-points."xaytune.recipes"]
 distill = "my_package.recipes:distill"
 
-[project.entry-points."trainlib.models"]
+[project.entry-points."xaytune.models"]
 my-transformer = "my_package.models:load_my_transformer"
 
-[project.entry-points."trainlib.formats"]
+[project.entry-points."xaytune.formats"]
 my-format = "my_package.formats:format_my_data"
 
-[project.entry-points."trainlib.metrics"]
+[project.entry-points."xaytune.metrics"]
 my-metric = "my_package.metrics:my_metric_fn"
 ```
 
-Once the package is installed, its extensions appear in trainlib automatically — no imports or registration code needed. The `trainlib list` command shows all registered items including plugins.
+Once the package is installed, its extensions appear in xaytune automatically — no imports or registration code needed. The `xaytune list` command shows all registered items including plugins.
 
 ## Available Registries
 
 | Registry | Entry Point Group | List Command |
 |----------|-------------------|--------------|
-| Recipes | `trainlib.recipes` | `trainlib list recipes` |
-| Models | `trainlib.models` | `trainlib list models` |
-| Data Formats | `trainlib.formats` | `trainlib list formats` |
-| Metrics | `trainlib.metrics` | `trainlib list metrics` |
-| Rewards | — | `trainlib list rewards` |
+| Recipes | `xaytune.recipes` | `xaytune list recipes` |
+| Models | `xaytune.models` | `xaytune list models` |
+| Data Formats | `xaytune.formats` | `xaytune list formats` |
+| Metrics | `xaytune.metrics` | `xaytune list metrics` |
+| Rewards | — | `xaytune list rewards` |

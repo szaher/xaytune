@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "trainlib"
+name = "xaytune"
 version = "0.6.0"
 description = "An opinionated LLM training and fine-tuning library"
 readme = "README.md"
@@ -35,9 +35,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/szaher/trainlib"
-Repository = "https://github.com/szaher/trainlib"
-Issues = "https://github.com/szaher/trainlib/issues"
+Homepage = "https://github.com/szaher/xaytune"
+Repository = "https://github.com/szaher/xaytune"
+Issues = "https://github.com/szaher/xaytune/issues"
 
 [project.optional-dependencies]
 deepspeed = ["deepspeed>=0.14"]
@@ -47,12 +47,12 @@ mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]
 studio = ["gradio>=5.0", "plotly>=5.0"]
 all = [
-    "trainlib[deepspeed]",
-    "trainlib[eval]",
-    "trainlib[wandb]",
-    "trainlib[mlflow]",
-    "trainlib[tensorboard]",
-    "trainlib[studio]",
+    "xaytune[deepspeed]",
+    "xaytune[eval]",
+    "xaytune[wandb]",
+    "xaytune[mlflow]",
+    "xaytune[tensorboard]",
+    "xaytune[studio]",
 ]
 docs = [
     "mkdocs-material>=9.5",
@@ -63,11 +63,11 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
-    "trainlib[docs]",
+    "xaytune[docs]",
 ]
 
 [project.scripts]
-trainlib = "trainlib.cli:main"
+xaytune = "xaytune.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

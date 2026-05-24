@@ -1,1 +1,1 @@
-# Test package for trainlib.data
+# Test package for xaytune.data

@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from trainlib.data.validation import (
+from xaytune.data.validation import (
     DataValidationError,
     validate_batch,
     validate_dataset_sample,

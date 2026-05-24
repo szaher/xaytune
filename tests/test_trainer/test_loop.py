@@ -2,9 +2,9 @@ from unittest.mock import MagicMock
 
 import torch
 
-from trainlib.config.schema import TrainerConfig
-from trainlib.trainer.callbacks import CallbackManager, TrainState
-from trainlib.trainer.loop import Trainer
+from xaytune.config.schema import TrainerConfig
+from xaytune.trainer.callbacks import CallbackManager, TrainState
+from xaytune.trainer.loop import Trainer
 
 
 class TestTrainer:
@@ -169,9 +169,7 @@ class TestMixedPrecision:
             trainer = Trainer(config=config)
             model, dl = self._make_model_and_dataloader()
             # Add a second batch so max_steps=2 is reachable
-            dl.append(
-                {"input_ids": torch.tensor([4, 5, 6]), "labels": torch.tensor([4, 5, 6])}
-            )
+            dl.append({"input_ids": torch.tensor([4, 5, 6]), "labels": torch.tensor([4, 5, 6])})
             state = trainer.train(model=model, train_dataloader=dl)
             assert state.global_step == 2, f"Failed for {mode}"
 
@@ -281,9 +279,7 @@ class TestSchedulerIntegration:
         return model, dataloader
 
     def test_scheduler_created_from_config(self):
-        config = TrainerConfig(
-            num_epochs=1, max_steps=2, batch_size=1, scheduler="cosine"
-        )
+        config = TrainerConfig(num_epochs=1, max_steps=2, batch_size=1, scheduler="cosine")
         trainer = Trainer(config=config)
         model, dl = self._make_model_and_dataloader()
         trainer.train(model=model, train_dataloader=dl)
@@ -295,9 +291,7 @@ class TestSchedulerIntegration:
         model, dl = self._make_model_and_dataloader(5)
 
         mock_scheduler = MagicMock()
-        trainer.train(
-            model=model, train_dataloader=dl, scheduler=mock_scheduler
-        )
+        trainer.train(model=model, train_dataloader=dl, scheduler=mock_scheduler)
         assert mock_scheduler.step.call_count == 3
 
     def test_external_scheduler_used_when_provided(self):
@@ -306,15 +300,16 @@ class TestSchedulerIntegration:
         model, dl = self._make_model_and_dataloader()
 
         ext_scheduler = MagicMock()
-        trainer.train(
-            model=model, train_dataloader=dl, scheduler=ext_scheduler
-        )
+        trainer.train(model=model, train_dataloader=dl, scheduler=ext_scheduler)
         assert trainer._scheduler is ext_scheduler
 
     def test_scheduler_with_warmup_steps(self):
         config = TrainerConfig(
-            num_epochs=1, max_steps=4, batch_size=1,
-            scheduler="cosine", warmup_steps=2,
+            num_epochs=1,
+            max_steps=4,
+            batch_size=1,
+            scheduler="cosine",
+            warmup_steps=2,
         )
         trainer = Trainer(config=config)
         model, dl = self._make_model_and_dataloader(6)
@@ -324,16 +319,17 @@ class TestSchedulerIntegration:
 
     def test_scheduler_with_gradient_accumulation(self):
         config = TrainerConfig(
-            num_epochs=1, max_steps=4, batch_size=1,
-            gradient_accumulation=1, scheduler="linear",
+            num_epochs=1,
+            max_steps=4,
+            batch_size=1,
+            gradient_accumulation=1,
+            scheduler="linear",
         )
         trainer = Trainer(config=config)
         model, dl = self._make_model_and_dataloader(6)
 
         mock_scheduler = MagicMock()
-        trainer.train(
-            model=model, train_dataloader=dl, scheduler=mock_scheduler
-        )
+        trainer.train(model=model, train_dataloader=dl, scheduler=mock_scheduler)
         assert mock_scheduler.step.call_count == 4
 
 
@@ -342,15 +338,11 @@ class TestCustomLossFn:
         config = TrainerConfig(num_epochs=1, max_steps=2)
         trainer = Trainer(config=config)
 
-        custom_loss = MagicMock(
-            return_value=torch.tensor(0.42, requires_grad=True)
-        )
+        custom_loss = MagicMock(return_value=torch.tensor(0.42, requires_grad=True))
 
         mock_model = MagicMock()
         mock_model.return_value = MagicMock()
-        mock_model.return_value.loss = torch.tensor(
-            999.0, requires_grad=True
-        )
+        mock_model.return_value.loss = torch.tensor(999.0, requires_grad=True)
 
         mock_optimizer = MagicMock()
         dl = [
@@ -375,9 +367,7 @@ class TestCustomLossFn:
 
         mock_model = MagicMock()
         mock_model.return_value = MagicMock()
-        mock_model.return_value.loss = torch.tensor(
-            1.23, requires_grad=True
-        )
+        mock_model.return_value.loss = torch.tensor(1.23, requires_grad=True)
 
         mock_optimizer = MagicMock()
         dl = [{"input_ids": torch.tensor([[1, 2]])}]
@@ -395,7 +385,9 @@ class TestCustomLossFn:
 class TestGradientAccumulation:
     def test_accum_across_epoch_boundary(self):
         config = TrainerConfig(
-            num_epochs=2, batch_size=1, gradient_accumulation=3,
+            num_epochs=2,
+            batch_size=1,
+            gradient_accumulation=3,
         )
         trainer = Trainer(config=config)
 
@@ -425,7 +417,9 @@ class TestGradientAccumulation:
 
     def test_accum_steps_correctly_within_epoch(self):
         config = TrainerConfig(
-            num_epochs=1, batch_size=1, gradient_accumulation=2,
+            num_epochs=1,
+            batch_size=1,
+            gradient_accumulation=2,
         )
         trainer = Trainer(config=config)
 
@@ -492,8 +486,9 @@ class TestSubclassableTrainer:
 
         trainer = MyTrainer(config=config, callback_manager=cm)
         dl = [{"x": 1}, {"x": 2}]
-        trainer.train(model=MagicMock(), train_dataloader=dl,
-                      optimizer=MagicMock(), scheduler=MagicMock())
+        trainer.train(
+            model=MagicMock(), train_dataloader=dl, optimizer=MagicMock(), scheduler=MagicMock()
+        )
 
         assert "start" in events
         assert "step:1" in events
@@ -514,8 +509,9 @@ class TestSubclassableTrainer:
         mock_opt = MagicMock()
         dl = [{"x": i} for i in range(5)]
 
-        trainer.train(model=MagicMock(), train_dataloader=dl,
-                      optimizer=mock_opt, scheduler=MagicMock())
+        trainer.train(
+            model=MagicMock(), train_dataloader=dl, optimizer=mock_opt, scheduler=MagicMock()
+        )
 
         assert step_count["n"] == 3
         assert mock_opt.step.call_count == 3

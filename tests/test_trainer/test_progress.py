@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from trainlib.trainer.callbacks import CallbackManager, TrainState
-from trainlib.trainer.progress import register_progress_callbacks
+from xaytune.trainer.callbacks import CallbackManager, TrainState
+from xaytune.trainer.progress import register_progress_callbacks
 
 
 class TestProgressCallbacks:
@@ -15,7 +15,8 @@ class TestProgressCallbacks:
             mock_cls.return_value = mock_progress
 
             register_progress_callbacks(
-                callback_manager=cb, total_steps=100,
+                callback_manager=cb,
+                total_steps=100,
             )
             cb.fire("train_start", TrainState())
 
@@ -31,7 +32,8 @@ class TestProgressCallbacks:
             mock_cls.return_value = mock_progress
 
             register_progress_callbacks(
-                callback_manager=cb, total_steps=100,
+                callback_manager=cb,
+                total_steps=100,
             )
             state = TrainState()
             cb.fire("train_start", state)
@@ -55,7 +57,8 @@ class TestProgressCallbacks:
             mock_cls.return_value = mock_progress
 
             register_progress_callbacks(
-                callback_manager=cb, total_steps=100,
+                callback_manager=cb,
+                total_steps=100,
             )
             cb.fire("train_start", TrainState())
             cb.fire("train_end", TrainState())
@@ -82,7 +85,8 @@ class TestProgressCallbacks:
             mock_cls.return_value = mock_progress
 
             register_progress_callbacks(
-                callback_manager=cb, total_steps=50,
+                callback_manager=cb,
+                total_steps=50,
             )
             state = TrainState()
             cb.fire("train_start", state)

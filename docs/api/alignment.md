@@ -1,6 +1,6 @@
 # Alignment Losses
 
-trainlib supports six alignment methods. Each has a dedicated loss function and can be selected via `create_alignment_loss_fn()`.
+xaytune supports six alignment methods. Each has a dedicated loss function and can be selected via `create_alignment_loss_fn()`.
 
 | Method | Function | Paper |
 |--------|----------|-------|
@@ -15,50 +15,50 @@ trainlib supports six alignment methods. Each has a dedicated loss function and 
 
 ## Loss Dispatch
 
-::: trainlib.recipes.align.loss_dispatch.create_alignment_loss_fn
+::: xaytune.recipes.align.loss_dispatch.create_alignment_loss_fn
 
-::: trainlib.recipes.align.loss_dispatch.is_alignment_method
+::: xaytune.recipes.align.loss_dispatch.is_alignment_method
 
 ## DPO
 
-::: trainlib.recipes.align.dpo.dpo_loss
+::: xaytune.recipes.align.dpo.dpo_loss
 
 ## SimPO
 
-::: trainlib.recipes.align.simpo.simpo_loss
+::: xaytune.recipes.align.simpo.simpo_loss
 
 ## ORPO
 
-::: trainlib.recipes.align.orpo.orpo_loss
+::: xaytune.recipes.align.orpo.orpo_loss
 
 ## GRPO
 
-::: trainlib.recipes.align.grpo.grpo_loss
+::: xaytune.recipes.align.grpo.grpo_loss
 
-::: trainlib.recipes.align.grpo.compute_group_advantages
+::: xaytune.recipes.align.grpo.compute_group_advantages
 
 ## PPO / REINFORCE
 
-::: trainlib.recipes.align.ppo.ppo_clip_loss
+::: xaytune.recipes.align.ppo.ppo_clip_loss
 
-::: trainlib.recipes.align.ppo.ppo_value_loss
+::: xaytune.recipes.align.ppo.ppo_value_loss
 
-::: trainlib.recipes.align.ppo.reinforce_loss
+::: xaytune.recipes.align.ppo.reinforce_loss
 
 ## Log-Probabilities
 
-::: trainlib.recipes.align.logprobs.get_per_token_logps
+::: xaytune.recipes.align.logprobs.get_per_token_logps
 
-::: trainlib.recipes.align.logprobs.get_sequence_logps
+::: xaytune.recipes.align.logprobs.get_sequence_logps
 
-::: trainlib.recipes.align.logprobs.get_model_logps
+::: xaytune.recipes.align.logprobs.get_model_logps
 
 ## Rewards
 
-::: trainlib.recipes.align.rewards.default_reward
+::: xaytune.recipes.align.rewards.default_reward
 
-::: trainlib.recipes.align.rewards.length_penalty_reward
+::: xaytune.recipes.align.rewards.length_penalty_reward
 
-::: trainlib.recipes.align.rewards.format_check_reward
+::: xaytune.recipes.align.rewards.format_check_reward
 
-::: trainlib.recipes.align.rewards.composite_reward
+::: xaytune.recipes.align.rewards.composite_reward

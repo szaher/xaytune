@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.dpo import dpo_loss
+from xaytune.recipes.align.dpo import dpo_loss
 
 
 class TestDPOLoss:

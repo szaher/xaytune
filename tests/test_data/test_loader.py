@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from trainlib.data import load_dataset, register_format
-from trainlib.data.registry import format_registry
+from xaytune.data import load_dataset, register_format
+from xaytune.data.registry import format_registry
 
 
 class TestFormatRegistry:
@@ -132,10 +132,14 @@ class TestLoadDatasetHuggingFace:
     @patch("datasets.load_dataset")
     def test_hf_source_loads_from_hub(self, mock_hf_load):
         mock_ds = MagicMock()
-        mock_ds.__iter__ = MagicMock(return_value=iter([
-            {"text": "hello"},
-            {"text": "world"},
-        ]))
+        mock_ds.__iter__ = MagicMock(
+            return_value=iter(
+                [
+                    {"text": "hello"},
+                    {"text": "world"},
+                ]
+            )
+        )
         mock_ds.__len__ = MagicMock(return_value=2)
         mock_hf_load.return_value = mock_ds
 
@@ -159,7 +163,10 @@ class TestLoadDatasetHuggingFace:
         mock_hf_load.return_value = mock_raw
 
         train, val = load_dataset(
-            "org/dataset", format="text", source="huggingface", eval_split=0.2,
+            "org/dataset",
+            format="text",
+            source="huggingface",
+            eval_split=0.2,
         )
 
         mock_raw.train_test_split.assert_called_once_with(test_size=0.2)
@@ -173,10 +180,15 @@ class TestLoadDatasetHuggingFace:
         mock_hf_load.return_value = mock_ds
 
         load_dataset(
-            "org/dataset", format="text", source="huggingface", streaming=True,
+            "org/dataset",
+            format="text",
+            source="huggingface",
+            streaming=True,
         )
 
         mock_hf_load.assert_called_once_with(
-            "org/dataset", split="train", streaming=True,
+            "org/dataset",
+            split="train",
+            streaming=True,
         )
         mock_ds.map.assert_called_once()

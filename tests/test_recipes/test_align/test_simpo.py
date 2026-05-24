@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.simpo import simpo_loss
+from xaytune.recipes.align.simpo import simpo_loss
 
 
 class TestSimPOLoss:

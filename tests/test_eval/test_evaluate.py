@@ -1,10 +1,10 @@
 from unittest.mock import MagicMock, patch
 
-from trainlib.eval.evaluate import evaluate
+from xaytune.eval.evaluate import evaluate
 
 
 class TestEvaluate:
-    @patch("trainlib.models.load_model")
+    @patch("xaytune.models.load_model")
     def test_evaluate_with_model_path(self, mock_load_model):
         mock_result = MagicMock()
         mock_model = MagicMock()

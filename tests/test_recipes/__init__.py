@@ -1,1 +1,1 @@
-# Test suite for trainlib recipes
+# Test suite for xaytune recipes

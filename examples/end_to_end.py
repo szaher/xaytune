@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-trainlib — End-to-End Demo
+xaytune — End-to-End Demo
 ==========================
 
-A self-contained script that exercises every major trainlib feature using a tiny
+A self-contained script that exercises every major xaytune feature using a tiny
 GPT-2 model (~500 KB). No GPU required — runs on CPU in under a minute.
 
 Features demonstrated:
@@ -21,7 +21,7 @@ Features demonstrated:
  12. Custom model      — register_model + finetune with injected nn.Module
 
 Usage:
-    cd trainlib/
+    cd xaytune/
     uv run python examples/end_to_end.py
 """
 
@@ -38,8 +38,8 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-import trainlib
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config.schema import (
     DataConfig,
     EvalConfig,
     ModelConfig,
@@ -47,32 +47,32 @@ from trainlib.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.data import load_dataset
-from trainlib.data.tokenizer import (
+from xaytune.data import load_dataset
+from xaytune.data.tokenizer import (
     collate_preference,
     collate_tokenized,
     tokenize_dataset,
     tokenize_preference_dataset,
 )
-from trainlib.eval import evaluate
-from trainlib.export import save
-from trainlib.recipes.align.loss_dispatch import create_alignment_loss_fn
-from trainlib.recipes.base import setup_training
-from trainlib.trainer import CallbackManager
-from trainlib.trainer.callbacks import TrainState
-from trainlib.trainer.checkpointing import load_checkpoint, save_checkpoint
-from trainlib.trainer.lr_finder import lr_find
+from xaytune.eval import evaluate
+from xaytune.export import save
+from xaytune.recipes.align.loss_dispatch import create_alignment_loss_fn
+from xaytune.recipes.base import setup_training
+from xaytune.trainer import CallbackManager
+from xaytune.trainer.callbacks import TrainState
+from xaytune.trainer.checkpointing import load_checkpoint, save_checkpoint
+from xaytune.trainer.lr_finder import lr_find
 
 # ---------------------------------------------------------------------------
 # 0. Setup — tiny model + sample data
 # ---------------------------------------------------------------------------
 TINY_MODEL = "sshleifer/tiny-gpt2"
 print("=" * 60)
-print("trainlib end-to-end demo")
+print("xaytune end-to-end demo")
 print("=" * 60)
 
 # Create temporary workspace
-work_dir = Path(tempfile.mkdtemp(prefix="trainlib_demo_"))
+work_dir = Path(tempfile.mkdtemp(prefix="xaytune_demo_"))
 data_dir = work_dir / "data"
 output_dir = work_dir / "output"
 data_dir.mkdir()
@@ -148,7 +148,7 @@ print("2. FINE-TUNING (finetune one-liner)")
 print("-" * 60)
 
 ft_output = str(output_dir / "finetuned")
-state = trainlib.finetune(
+state = xaytune.finetune(
     model=TINY_MODEL,
     dataset=str(alpaca_path),
     method="full",
@@ -170,7 +170,7 @@ print("\n" + "-" * 60)
 print("3. PRE-TRAINING (pretrain one-liner)")
 print("-" * 60)
 
-state = trainlib.pretrain(
+state = xaytune.pretrain(
     model=TINY_MODEL,
     dataset=str(text_path),
     format="text",
@@ -441,14 +441,14 @@ save(
     metadata={
         "base_model": TINY_MODEL,
         "training_steps": 3,
-        "framework": "trainlib",
+        "framework": "xaytune",
     },
 )
 
 exported_files = list(Path(export_dir).iterdir())
 print(f"   Exported to: {export_dir}")
 print(f"   Files: {[f.name for f in exported_files]}")
-assert Path(export_dir, "trainlib_metadata.json").exists()
+assert Path(export_dir, "xaytune_metadata.json").exists()
 print("   OK")
 
 # ---------------------------------------------------------------------------
@@ -458,8 +458,8 @@ print("\n" + "-" * 60)
 print("11. CUSTOM TRAINING STEP")
 print("-" * 60)
 
-from trainlib.trainer import Trainer
-from trainlib.config.schema import TrainerConfig as _TrainerConfig
+from xaytune.trainer import Trainer
+from xaytune.config.schema import TrainerConfig as _TrainerConfig
 
 
 class DistillTrainer(Trainer):
@@ -513,7 +513,7 @@ print("\n" + "-" * 60)
 print("12. CUSTOM MODEL")
 print("-" * 60)
 
-from trainlib.models import register_model, ModelResult
+from xaytune.models import register_model, ModelResult
 
 custom_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
 custom_tokenizer = AutoTokenizer.from_pretrained(TINY_MODEL)
@@ -521,7 +521,7 @@ if custom_tokenizer.pad_token is None:
     custom_tokenizer.pad_token = custom_tokenizer.eos_token
 
 # 12a. Finetune with an injected nn.Module
-state = trainlib.finetune(
+state = xaytune.finetune(
     model=custom_model,
     tokenizer=custom_tokenizer,
     dataset=str(alpaca_path),
@@ -544,7 +544,7 @@ def load_demo_model(name_or_path, **kwargs):
         t.pad_token = t.eos_token
     return ModelResult(model=m, tokenizer=t, name=name_or_path)
 
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="demo-tiny-gpt2",
     dataset=str(alpaca_path),
     format="alpaca",

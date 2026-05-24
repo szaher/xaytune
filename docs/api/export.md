@@ -1,13 +1,13 @@
 # Export
 
-trainlib provides utilities for saving, merging, and converting models after training.
+xaytune provides utilities for saving, merging, and converting models after training.
 
 ## merge()
 
 Merge LoRA/QLoRA adapters back into the base model, producing a standalone model that can be used without PEFT.
 
 ```python
-from trainlib.export.merge import merge
+from xaytune.export.merge import merge
 
 merge("output/lora-finetune", save_to="output/merged")
 ```
@@ -35,7 +35,7 @@ The merged model and tokenizer are saved in Hugging Face format, ready for infer
 Save a model and tokenizer to disk with optional metadata.
 
 ```python
-from trainlib.export.merge import save
+from xaytune.export.merge import save
 
 save(
     model,
@@ -62,7 +62,7 @@ def save(
 | `model` | model object | The model to save |
 | `tokenizer` | tokenizer object | The tokenizer to save |
 | `output_dir` | `str` | Output directory |
-| `metadata` | `dict` \| `None` | Optional metadata written to `trainlib_metadata.json` |
+| `metadata` | `dict` \| `None` | Optional metadata written to `xaytune_metadata.json` |
 
 ---
 
@@ -71,7 +71,7 @@ def save(
 Push a model and tokenizer to the Hugging Face Hub.
 
 ```python
-from trainlib.export.hub import push_to_hub
+from xaytune.export.hub import push_to_hub
 
 # From a saved directory
 push_to_hub("output/merged", repo="username/my-model")
@@ -107,7 +107,7 @@ def push_to_hub(
 Convert a model to GGUF format for use with llama.cpp and compatible inference engines.
 
 ```python
-from trainlib.export.gguf import to_gguf
+from xaytune.export.gguf import to_gguf
 
 to_gguf(
     "output/merged",
@@ -139,17 +139,17 @@ Common quantization types: `Q4_0`, `Q4_K_M`, `Q5_K_M`, `Q8_0`, `F16`.
 
 ## CLI Usage
 
-All export operations are available through the `trainlib export` subcommand:
+All export operations are available through the `xaytune export` subcommand:
 
 ```bash
 # Merge LoRA adapters
-trainlib export merge --checkpoint output/lora-finetune --output output/merged
+xaytune export merge --checkpoint output/lora-finetune --output output/merged
 
 # Convert to GGUF
-trainlib export gguf --model output/merged --output model.gguf --quant Q4_K_M
+xaytune export gguf --model output/merged --output model.gguf --quant Q4_K_M
 
 # Push to Hugging Face Hub
-trainlib export push --model output/merged --repo username/my-model
+xaytune export push --model output/merged --repo username/my-model
 ```
 
 ---
@@ -160,26 +160,26 @@ A common post-training workflow:
 
 ```bash
 # 1. Train with LoRA
-trainlib train --config configs/examples/lora_finetune.yaml
+xaytune train --config configs/examples/lora_finetune.yaml
 
 # 2. Merge adapters into base model
-trainlib export merge --checkpoint output/lora-finetune --output output/merged
+xaytune export merge --checkpoint output/lora-finetune --output output/merged
 
 # 3a. Push to Hub for cloud inference
-trainlib export push --model output/merged --repo username/my-model
+xaytune export push --model output/merged --repo username/my-model
 
 # 3b. Or convert to GGUF for local inference
-trainlib export gguf --model output/merged --output model.gguf
+xaytune export gguf --model output/merged --output model.gguf
 ```
 
 ---
 
 ## Full API Reference
 
-::: trainlib.export.merge.merge
+::: xaytune.export.merge.merge
 
-::: trainlib.export.merge.save
+::: xaytune.export.merge.save
 
-::: trainlib.export.hub.push_to_hub
+::: xaytune.export.hub.push_to_hub
 
-::: trainlib.export.gguf.to_gguf
+::: xaytune.export.gguf.to_gguf

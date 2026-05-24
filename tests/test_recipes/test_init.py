@@ -1,4 +1,4 @@
-from trainlib.recipes import finetune, pretrain, recipe_registry
+from xaytune.recipes import finetune, pretrain, recipe_registry
 
 
 class TestRecipesPublicAPI:

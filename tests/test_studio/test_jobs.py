@@ -3,11 +3,11 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-from trainlib.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
-from trainlib.studio.events import EventBus
-from trainlib.studio.jobs import JobInfo, JobManager, JobStatus
-from trainlib.trainer.callbacks import CallbackManager
-from trainlib.trainer.loop import Trainer
+from xaytune.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
+from xaytune.studio.events import EventBus
+from xaytune.studio.jobs import JobInfo, JobManager, JobStatus
+from xaytune.trainer.callbacks import CallbackManager
+from xaytune.trainer.loop import Trainer
 
 
 def _make_config():
@@ -31,12 +31,9 @@ def _mock_setup(config, callback_manager=None, resume_from=None):
     mock_model.return_value = mock_output
     mock_model.parameters.return_value = [torch.randn(10, requires_grad=True)]
 
-    dataloader = [
-        {"input_ids": torch.tensor([i]), "labels": torch.tensor([i])}
-        for i in range(5)
-    ]
+    dataloader = [{"input_ids": torch.tensor([i]), "labels": torch.tensor([i])} for i in range(5)]
 
-    from trainlib.recipes.base import TrainingComponents
+    from xaytune.recipes.base import TrainingComponents
 
     return TrainingComponents(
         model=mock_model,
@@ -83,21 +80,21 @@ class TestJobInfo:
 
 
 class TestJobManager:
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_submit_returns_job_id(self, mock_setup):
         manager = JobManager()
         job_id = manager.submit(_make_config())
         assert isinstance(job_id, str)
         assert len(job_id) > 0
 
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_job_completes(self, mock_setup):
         manager = JobManager()
         job_id = manager.submit(_make_config())
         job = _wait_for_status(manager, job_id, JobStatus.COMPLETED)
         assert job.status == JobStatus.COMPLETED
 
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_job_captures_final_state(self, mock_setup):
         manager = JobManager()
         job_id = manager.submit(_make_config())
@@ -107,7 +104,7 @@ class TestJobManager:
         assert job.state["global_step"] == 3
 
     @patch(
-        "trainlib.studio.jobs.setup_training",
+        "xaytune.studio.jobs.setup_training",
         side_effect=RuntimeError("model load failed"),
     )
     def test_job_failure_captured(self, mock_setup):
@@ -117,7 +114,7 @@ class TestJobManager:
         assert job.status == JobStatus.FAILED
         assert "model load failed" in job.error
 
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_cancel_stops_training(self, mock_setup):
         config = _make_config()
         config.trainer.max_steps = 10000
@@ -130,7 +127,7 @@ class TestJobManager:
         job = _wait_for_status(manager, job_id, JobStatus.CANCELLED, timeout=5.0)
         assert job.status == JobStatus.CANCELLED
 
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_list_jobs(self, mock_setup):
         manager = JobManager()
         id1 = manager.submit(_make_config())
@@ -148,7 +145,7 @@ class TestJobManager:
         except KeyError:
             pass
 
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_event_bus_receives_events(self, mock_setup):
         bus = EventBus()
         manager = JobManager(event_bus=bus)
@@ -162,7 +159,7 @@ class TestJobManager:
         assert "train_start" in event_types or "step_end" in event_types
         assert all(e.job_id == job_id for e in events)
 
-    @patch("trainlib.studio.jobs.setup_training", side_effect=_mock_setup)
+    @patch("xaytune.studio.jobs.setup_training", side_effect=_mock_setup)
     def test_concurrent_jobs(self, mock_setup):
         manager = JobManager()
         id1 = manager.submit(_make_config())

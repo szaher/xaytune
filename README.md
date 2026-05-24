@@ -1,8 +1,13 @@
-# trainlib
+<p align="center">
+  <img src="docs/assets/logo.png" alt="xaytune" width="400">
+</p>
 
-An opinionated LLM training and fine-tuning library built on PyTorch. Recipe-based architecture with a layered API: simple one-liners for beginners, full control for experts.
+<p align="center">
+  An opinionated LLM training and fine-tuning library built on PyTorch.<br>
+  Recipe-based architecture with a layered API: simple one-liners for beginners, full control for experts.
+</p>
 
-**[Documentation](https://szaher.github.io/trainlib/)** | **[Examples](https://szaher.github.io/trainlib/examples/)** | **[API Reference](https://szaher.github.io/trainlib/api/)**
+**[Documentation](https://szaher.github.io/xaytune/)** | **[Examples](https://szaher.github.io/xaytune/examples/)** | **[API Reference](https://szaher.github.io/xaytune/api/)**
 
 ## Features
 
@@ -10,7 +15,7 @@ An opinionated LLM training and fine-tuning library built on PyTorch. Recipe-bas
 - **4 data formats** — Alpaca, ShareGPT, chat template, raw text, plus preference pairs
 - **Automatic tokenization** — text data is tokenized and collated automatically; pre-tokenized data passes through unchanged
 - **Sequence packing** — pack short sequences to maximize GPU utilization
-- **Distributed training** — DDP, FSDP, DeepSpeed via `trainlib launch`
+- **Distributed training** — DDP, FSDP, DeepSpeed via `xaytune launch`
 - **4 logging backends** — console, TensorBoard, W&B, MLflow
 - **LR finder** — automatic learning rate range test
 - **Callbacks** — event-driven hooks for early stopping, checkpointing, progress, custom logic
@@ -23,19 +28,19 @@ An opinionated LLM training and fine-tuning library built on PyTorch. Recipe-bas
 ## Install
 
 ```bash
-pip install trainlib
+pip install xaytune
 ```
 
 Optional extras:
 
 ```bash
-pip install trainlib[wandb]       # Weights & Biases logging
-pip install trainlib[mlflow]      # MLflow logging
-pip install trainlib[deepspeed]   # DeepSpeed distributed training
-pip install trainlib[eval]        # lm-eval-harness benchmarks
-pip install trainlib[studio]      # Training Studio web UI
-pip install trainlib[docs]        # MkDocs documentation site
-pip install trainlib[all]         # Everything
+pip install xaytune[wandb]       # Weights & Biases logging
+pip install xaytune[mlflow]      # MLflow logging
+pip install xaytune[deepspeed]   # DeepSpeed distributed training
+pip install xaytune[eval]        # lm-eval-harness benchmarks
+pip install xaytune[studio]      # Training Studio web UI
+pip install xaytune[docs]        # MkDocs documentation site
+pip install xaytune[all]         # Everything
 ```
 
 ## Quickstart
@@ -43,10 +48,10 @@ pip install trainlib[all]         # Everything
 ### Python API
 
 ```python
-import trainlib
+import xaytune
 
 # LoRA fine-tuning
-trainlib.finetune(
+xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="lora",
@@ -55,14 +60,14 @@ trainlib.finetune(
 )
 
 # Pre-training
-trainlib.pretrain(
+xaytune.pretrain(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/corpus.jsonl",
     format="text",
 )
 
 # DPO alignment
-trainlib.align(
+xaytune.align(
     model="output/sft-model",
     dataset="data/preferences.jsonl",
     method="dpo",
@@ -70,7 +75,7 @@ trainlib.align(
 )
 
 # Evaluation
-results = trainlib.evaluate(
+results = xaytune.evaluate(
     model="output/my-model",
     dataset=[{"input_ids": [1, 2], "labels": [1, 2]}],
     metrics=["loss", "perplexity"],
@@ -81,35 +86,35 @@ results = trainlib.evaluate(
 
 ```bash
 # Train
-trainlib train --config configs/lora_finetune.yaml
-trainlib train --config configs/lora_finetune.yaml --override model.name=mistralai/Mistral-7B-v0.3
-trainlib train --config configs/lora_finetune.yaml --dry-run
+xaytune train --config configs/lora_finetune.yaml
+xaytune train --config configs/lora_finetune.yaml --override model.name=mistralai/Mistral-7B-v0.3
+xaytune train --config configs/lora_finetune.yaml --dry-run
 
 # Evaluate
-trainlib eval --model output/my-model --benchmarks mmlu,gsm8k --num-fewshot 5
-trainlib eval --model output/my-model --dataset data/eval.jsonl --metrics loss,perplexity
+xaytune eval --model output/my-model --benchmarks mmlu,gsm8k --num-fewshot 5
+xaytune eval --model output/my-model --dataset data/eval.jsonl --metrics loss,perplexity
 
 # Compare models
-trainlib compare model-a/ model-b/ --benchmarks mmlu,gsm8k
+xaytune compare model-a/ model-b/ --benchmarks mmlu,gsm8k
 
 # Export
-trainlib export merge --checkpoint output/lora-ckpt --output output/merged
-trainlib export gguf --model output/merged --output model.gguf --quant Q4_K_M
-trainlib export push --model output/merged --repo username/my-model
+xaytune export merge --checkpoint output/lora-ckpt --output output/merged
+xaytune export gguf --model output/merged --output model.gguf --quant Q4_K_M
+xaytune export push --model output/merged --repo username/my-model
 
 # LR finder
-trainlib lr-find --config configs/lora_finetune.yaml
+xaytune lr-find --config configs/lora_finetune.yaml
 
 # Distributed training
-trainlib launch --config configs/lora_finetune.yaml --nproc-per-node 4
+xaytune launch --config configs/lora_finetune.yaml --nproc-per-node 4
 
 # Training Studio
-trainlib studio --port 7860
+xaytune studio --port 7860
 
 # List components
-trainlib list recipes
-trainlib list formats
-trainlib list metrics
+xaytune list recipes
+xaytune list formats
+xaytune list metrics
 ```
 
 ### Config file
@@ -160,10 +165,10 @@ logging:
 Register custom components with decorators:
 
 ```python
-from trainlib.data import register_format
-from trainlib.eval import register_metric
-from trainlib.recipes.align import register_reward
-from trainlib.trainer import on
+from xaytune.data import register_format
+from xaytune.eval import register_metric
+from xaytune.recipes.align import register_reward
+from xaytune.trainer import on
 
 @register_format("my-format")
 def parse_my_data(sample):
@@ -185,7 +190,7 @@ def log_memory(state):
 ## Export
 
 ```python
-from trainlib import export
+from xaytune import export
 
 # Merge LoRA adapters into base model
 export.merge("output/lora-checkpoint", save_to="output/merged")
@@ -197,7 +202,7 @@ export.save(model, tokenizer, output_dir="output/final", metadata={"recipe": "fi
 export.push_to_hub("output/merged", repo="username/my-model")
 
 # Convert to GGUF for local inference
-from trainlib.export import to_gguf
+from xaytune.export import to_gguf
 to_gguf("output/merged", output="model.gguf", quantization="Q4_K_M")
 ```
 

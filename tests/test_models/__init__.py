@@ -1,1 +1,1 @@
-# Test module for trainlib.models
+# Test module for xaytune.models

@@ -7,15 +7,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-import trainlib
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config.schema import (
     DataConfig,
     ModelConfig,
     OutputConfig,
     TrainConfig,
     TrainerConfig,
 )
-from trainlib.trainer.checkpointing import save_checkpoint
+from xaytune.trainer.checkpointing import save_checkpoint
 
 
 def _mock_model():
@@ -34,7 +34,7 @@ def _mock_model():
 
 
 def _mock_model_result(model=None):
-    from trainlib.models.loader import ModelResult
+    from xaytune.models.loader import ModelResult
 
     return ModelResult(
         model=model or _mock_model(),
@@ -57,13 +57,13 @@ def _make_dataset(n=10):
 @pytest.fixture()
 def real_checkpoint_io():
     """Override conftest's autouse _no_checkpoint_io to allow real saves."""
-    with patch("trainlib.trainer.checkpoint_callback.save_checkpoint", save_checkpoint):
+    with patch("xaytune.trainer.checkpoint_callback.save_checkpoint", save_checkpoint):
         yield
 
 
 class TestActivationCheckpointingIntegration:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_activation_checkpointing_calls_enable(
         self, mock_load_model, mock_load_dataset, tmp_path
     ):
@@ -85,15 +85,15 @@ class TestActivationCheckpointingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         model.gradient_checkpointing_enable.assert_called_once_with(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_training_completes_without_activation_checkpointing(
         self, mock_load_model, mock_load_dataset, tmp_path
     ):
@@ -114,13 +114,13 @@ class TestActivationCheckpointingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
         assert state.global_step == 4
 
 
 class TestAsyncCheckpointIntegration:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_async_checkpoint_writes_files(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -144,7 +144,7 @@ class TestAsyncCheckpointIntegration:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         ckpt_2 = Path(output_dir) / "checkpoint-2"
@@ -157,8 +157,8 @@ class TestAsyncCheckpointIntegration:
         meta = json.loads((ckpt_2 / "metadata.json").read_text())
         assert meta["global_step"] == 2
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_async_save_last_writes_final(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -182,7 +182,7 @@ class TestAsyncCheckpointIntegration:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 3
         ckpt_final = Path(output_dir) / "checkpoint-3"
@@ -190,8 +190,8 @@ class TestAsyncCheckpointIntegration:
 
 
 class TestBothFeaturesIntegration:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
     def test_both_features_together(
         self, mock_load_model, mock_load_dataset, tmp_path, real_checkpoint_io
     ):
@@ -217,7 +217,7 @@ class TestBothFeaturesIntegration:
             output=OutputConfig(dir=output_dir),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         model.gradient_checkpointing_enable.assert_called_once()

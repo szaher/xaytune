@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from trainlib.trainer.scheduler import create_scheduler, resolve_warmup_steps
+from xaytune.trainer.scheduler import create_scheduler, resolve_warmup_steps
 
 
 def _make_optimizer(lr: float = 1.0) -> torch.optim.Optimizer:

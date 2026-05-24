@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock
 
-# Mock mlflow before any trainlib imports
+# Mock mlflow before any xaytune imports
 mock_mlflow = MagicMock()
 mock_mlflow.__spec__ = MagicMock()
 sys.modules["mlflow"] = mock_mlflow
@@ -13,7 +13,7 @@ class TestMLflowBackend:
     def test_init_starts_run(self):
         import mlflow
 
-        from trainlib.logging.mlflow import MLflowBackend
+        from xaytune.logging.mlflow import MLflowBackend
 
         mlflow.reset_mock()
         MLflowBackend(run_name="test-run")
@@ -22,7 +22,7 @@ class TestMLflowBackend:
     def test_log_scalar(self):
         import mlflow
 
-        from trainlib.logging.mlflow import MLflowBackend
+        from xaytune.logging.mlflow import MLflowBackend
 
         mlflow.reset_mock()
         backend = MLflowBackend()
@@ -33,7 +33,7 @@ class TestMLflowBackend:
     def test_log_config(self):
         import mlflow
 
-        from trainlib.logging.mlflow import MLflowBackend
+        from xaytune.logging.mlflow import MLflowBackend
 
         mlflow.reset_mock()
         backend = MLflowBackend()
@@ -44,7 +44,7 @@ class TestMLflowBackend:
     def test_close_ends_run(self):
         import mlflow
 
-        from trainlib.logging.mlflow import MLflowBackend
+        from xaytune.logging.mlflow import MLflowBackend
 
         mlflow.reset_mock()
         backend = MLflowBackend()
@@ -53,8 +53,8 @@ class TestMLflowBackend:
         mlflow.end_run.assert_called_once()
 
     def test_is_logging_backend(self):
-        from trainlib.logging.base import LoggingBackend
-        from trainlib.logging.mlflow import MLflowBackend
+        from xaytune.logging.base import LoggingBackend
+        from xaytune.logging.mlflow import MLflowBackend
 
         backend = MLflowBackend()
         assert isinstance(backend, LoggingBackend)
@@ -62,7 +62,7 @@ class TestMLflowBackend:
     def test_default_run_name(self):
         import mlflow
 
-        from trainlib.logging.mlflow import MLflowBackend
+        from xaytune.logging.mlflow import MLflowBackend
 
         mlflow.reset_mock()
         MLflowBackend()

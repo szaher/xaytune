@@ -1,4 +1,4 @@
-from trainlib.trainer import (
+from xaytune.trainer import (
     DistributedContext,
     Trainer,
     TrainerConfig,

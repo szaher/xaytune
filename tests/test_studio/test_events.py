@@ -1,7 +1,7 @@
 import time
 
-from trainlib.studio.events import EventBus, TrainingEvent, register_event_callbacks
-from trainlib.trainer.callbacks import CallbackManager, TrainState
+from xaytune.studio.events import EventBus, TrainingEvent, register_event_callbacks
+from xaytune.trainer.callbacks import CallbackManager, TrainState
 
 
 def _make_event(job_id="job-1", event_type="step_end"):
@@ -82,9 +82,7 @@ class TestRegisterEventCallbacks:
         cm = CallbackManager()
         q = bus.subscribe()
 
-        register_event_callbacks(
-            callback_manager=cm, event_bus=bus, job_id="test-job"
-        )
+        register_event_callbacks(callback_manager=cm, event_bus=bus, job_id="test-job")
 
         state = TrainState(global_step=5, metrics={"loss": 0.5})
         cm.fire("step_end", state)
@@ -99,9 +97,7 @@ class TestRegisterEventCallbacks:
         cm = CallbackManager()
         q = bus.subscribe()
 
-        register_event_callbacks(
-            callback_manager=cm, event_bus=bus, job_id="j1"
-        )
+        register_event_callbacks(callback_manager=cm, event_bus=bus, job_id="j1")
 
         cm.fire("train_start", TrainState())
         evt = q.get_nowait()

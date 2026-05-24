@@ -1,33 +1,33 @@
 # Recipes
 
-trainlib's three top-level recipe functions are the primary entry points for training. Each recipe calls `setup_training()` internally, builds a `Trainer`, and runs the loop.
+xaytune's three top-level recipe functions are the primary entry points for training. Each recipe calls `setup_training()` internally, builds a `Trainer`, and runs the loop.
 
 ```python
-import trainlib
+import xaytune
 
-state = trainlib.finetune("config.yaml")
-state = trainlib.pretrain("config.yaml")
-state = trainlib.align("config.yaml")
+state = xaytune.finetune("config.yaml")
+state = xaytune.pretrain("config.yaml")
+state = xaytune.align("config.yaml")
 ```
 
 ---
 
 ## finetune
 
-::: trainlib.recipes.finetune.finetune
+::: xaytune.recipes.finetune.finetune
 
 ## pretrain
 
-::: trainlib.recipes.pretrain.pretrain
+::: xaytune.recipes.pretrain.pretrain
 
 ## align
 
-::: trainlib.recipes.align.align
+::: xaytune.recipes.align.align
 
 ## setup_training
 
-::: trainlib.recipes.base.setup_training
+::: xaytune.recipes.base.setup_training
 
 ## TrainingComponents
 
-::: trainlib.recipes.base.TrainingComponents
+::: xaytune.recipes.base.TrainingComponents

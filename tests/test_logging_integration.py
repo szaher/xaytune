@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-import trainlib
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config.schema import (
     DataConfig,
     LoggingConfig,
     ModelConfig,
@@ -31,7 +31,7 @@ def _mock_model():
 
 
 def _mock_model_result(model=None):
-    from trainlib.models.loader import ModelResult
+    from xaytune.models.loader import ModelResult
 
     return ModelResult(
         model=model or _mock_model(),
@@ -52,11 +52,9 @@ def _make_dataset(n=10):
 
 
 class TestLoggingIntegration:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_training_completes_with_logging(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_training_completes_with_logging(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(4)
 
@@ -74,14 +72,12 @@ class TestLoggingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
         assert state.global_step == 4
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_log_scalar_called_with_loss(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_log_scalar_called_with_loss(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(4)
 
@@ -99,18 +95,16 @@ class TestLoggingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        with patch("trainlib.logging.base.LoggingManager.log_scalar") as mock_log:
-            state = trainlib.finetune(config=config)
+        with patch("xaytune.logging.base.LoggingManager.log_scalar") as mock_log:
+            state = xaytune.finetune(config=config)
 
             assert state.global_step == 4
             logged_keys = [call.args[0] for call in mock_log.call_args_list]
             assert "loss" in logged_keys
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_log_config_called_at_train_start(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_log_config_called_at_train_start(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(2)
 
@@ -127,19 +121,17 @@ class TestLoggingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        with patch("trainlib.logging.base.LoggingManager.log_config") as mock_cfg:
-            trainlib.finetune(config=config)
+        with patch("xaytune.logging.base.LoggingManager.log_config") as mock_cfg:
+            xaytune.finetune(config=config)
 
             mock_cfg.assert_called_once()
             logged_config = mock_cfg.call_args[0][0]
             assert "recipe" in logged_config
             assert logged_config["recipe"] == "finetune"
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_learning_rate_in_metrics(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_learning_rate_in_metrics(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(4)
 
@@ -157,17 +149,15 @@ class TestLoggingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         assert "learning_rate" in state.metrics
         assert isinstance(state.metrics["learning_rate"], float)
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_close_called_at_train_end(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_close_called_at_train_end(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(2)
 
@@ -184,6 +174,6 @@ class TestLoggingIntegration:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        with patch("trainlib.logging.base.LoggingManager.close") as mock_close:
-            trainlib.finetune(config=config)
+        with patch("xaytune.logging.base.LoggingManager.close") as mock_close:
+            xaytune.finetune(config=config)
             mock_close.assert_called_once()

@@ -1,6 +1,6 @@
 import torch
 
-from trainlib.recipes.align.grpo import compute_group_advantages, grpo_loss
+from xaytune.recipes.align.grpo import compute_group_advantages, grpo_loss
 
 
 class TestComputeGroupAdvantages:

@@ -1,6 +1,6 @@
 # Examples
 
-trainlib includes Jupyter notebooks and YAML config files to help you get started quickly.
+xaytune includes Jupyter notebooks and YAML config files to help you get started quickly.
 
 ## Jupyter Notebooks
 
@@ -8,12 +8,12 @@ The `examples/` directory contains step-by-step notebooks:
 
 | Notebook | Description |
 |----------|-------------|
-| [01_quickstart.ipynb](https://github.com/szaher/trainlib/blob/main/examples/01_quickstart.ipynb) | Your first training run -- LoRA fine-tuning in a few lines |
-| [02_finetuning.ipynb](https://github.com/szaher/trainlib/blob/main/examples/02_finetuning.ipynb) | Full, LoRA, and QLoRA fine-tuning compared |
-| [03_pretraining.ipynb](https://github.com/szaher/trainlib/blob/main/examples/03_pretraining.ipynb) | Pre-training on a text corpus |
-| [04_alignment.ipynb](https://github.com/szaher/trainlib/blob/main/examples/04_alignment.ipynb) | Alignment with DPO, GRPO, and other methods |
-| [05_evaluation.ipynb](https://github.com/szaher/trainlib/blob/main/examples/05_evaluation.ipynb) | Evaluating models with metrics and benchmarks |
-| [06_advanced.ipynb](https://github.com/szaher/trainlib/blob/main/examples/06_advanced.ipynb) | Custom formats, metrics, rewards, callbacks, and distributed training |
+| [01_quickstart.ipynb](https://github.com/szaher/xaytune/blob/main/examples/01_quickstart.ipynb) | Your first training run -- LoRA fine-tuning in a few lines |
+| [02_finetuning.ipynb](https://github.com/szaher/xaytune/blob/main/examples/02_finetuning.ipynb) | Full, LoRA, and QLoRA fine-tuning compared |
+| [03_pretraining.ipynb](https://github.com/szaher/xaytune/blob/main/examples/03_pretraining.ipynb) | Pre-training on a text corpus |
+| [04_alignment.ipynb](https://github.com/szaher/xaytune/blob/main/examples/04_alignment.ipynb) | Alignment with DPO, GRPO, and other methods |
+| [05_evaluation.ipynb](https://github.com/szaher/xaytune/blob/main/examples/05_evaluation.ipynb) | Evaluating models with metrics and benchmarks |
+| [06_advanced.ipynb](https://github.com/szaher/xaytune/blob/main/examples/06_advanced.ipynb) | Custom formats, metrics, rewards, callbacks, and distributed training |
 
 ## Example Configs
 
@@ -23,41 +23,41 @@ The `configs/examples/` directory contains ready-to-use YAML config files for ev
 
 ```bash
 # Full fine-tuning
-trainlib train --config configs/examples/full_finetune.yaml
+xaytune train --config configs/examples/full_finetune.yaml
 
 # LoRA fine-tuning
-trainlib train --config configs/examples/lora_finetune.yaml
+xaytune train --config configs/examples/lora_finetune.yaml
 
 # QLoRA fine-tuning
-trainlib train --config configs/examples/qlora_finetune.yaml
+xaytune train --config configs/examples/qlora_finetune.yaml
 ```
 
 ### Pre-training
 
 ```bash
-trainlib train --config configs/examples/pretrain.yaml
+xaytune train --config configs/examples/pretrain.yaml
 ```
 
 ### Alignment
 
 ```bash
 # DPO
-trainlib train --config configs/examples/dpo_align.yaml
+xaytune train --config configs/examples/dpo_align.yaml
 
 # GRPO
-trainlib train --config configs/examples/grpo_align.yaml
+xaytune train --config configs/examples/grpo_align.yaml
 
 # ORPO
-trainlib train --config configs/examples/orpo_align.yaml
+xaytune train --config configs/examples/orpo_align.yaml
 
 # SimPO
-trainlib train --config configs/examples/simpo_align.yaml
+xaytune train --config configs/examples/simpo_align.yaml
 
 # PPO
-trainlib train --config configs/examples/ppo_align.yaml
+xaytune train --config configs/examples/ppo_align.yaml
 
 # REINFORCE
-trainlib train --config configs/examples/reinforce_align.yaml
+xaytune train --config configs/examples/reinforce_align.yaml
 ```
 
 ## Quick Recipes
@@ -65,9 +65,9 @@ trainlib train --config configs/examples/reinforce_align.yaml
 ### Fine-tune Llama 3.1 with LoRA
 
 ```python
-import trainlib
+import xaytune
 
-state = trainlib.finetune(
+state = xaytune.finetune(
     model="meta-llama/Llama-3.1-8B",
     dataset="data/train.jsonl",
     method="lora",
@@ -80,9 +80,9 @@ state = trainlib.finetune(
 ### Align with DPO
 
 ```python
-import trainlib
+import xaytune
 
-state = trainlib.align(
+state = xaytune.align(
     model="meta-llama/Llama-3.1-8B-Instruct",
     dataset="data/preferences.jsonl",
     method="dpo",
@@ -93,7 +93,7 @@ state = trainlib.align(
 ### Evaluate and Compare
 
 ```python
-from trainlib.eval.benchmarks import benchmark_evaluate
+from xaytune.eval.benchmarks import benchmark_evaluate
 
 results = benchmark_evaluate(
     model="output/my-model",
@@ -105,9 +105,9 @@ results = benchmark_evaluate(
 ### Export Pipeline
 
 ```python
-from trainlib.export.merge import merge
-from trainlib.export.hub import push_to_hub
-from trainlib.export.gguf import to_gguf
+from xaytune.export.merge import merge
+from xaytune.export.hub import push_to_hub
+from xaytune.export.gguf import to_gguf
 
 # Merge LoRA adapters
 merge("output/lora-finetune", save_to="output/merged")

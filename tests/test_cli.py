@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import trainlib
-from trainlib.cli import main
+import xaytune
+from xaytune.cli import main
 
 FIXTURES = Path(__file__).parent / "test_config" / "fixtures"
 
@@ -14,7 +14,7 @@ FIXTURES = Path(__file__).parent / "test_config" / "fixtures"
 class TestCLI:
     def _run(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, "-m", "trainlib.cli", *args],
+            [sys.executable, "-m", "xaytune.cli", *args],
             capture_output=True,
             text=True,
         )
@@ -54,13 +54,13 @@ class TestCLI:
 
     def test_version(self):
         result = self._run("--version")
-        assert trainlib.__version__ in result.stdout
+        assert xaytune.__version__ in result.stdout
 
 
 class TestTrainCommand:
-    @patch("trainlib.cli.load_config")
-    @patch("trainlib.cli.validate_config")
-    @patch("trainlib.cli.recipe_registry")
+    @patch("xaytune.cli.load_config")
+    @patch("xaytune.cli.validate_config")
+    @patch("xaytune.cli.recipe_registry")
     def test_train_runs_recipe(self, mock_registry, mock_validate, mock_load):
         mock_config = MagicMock()
         mock_config.recipe = "finetune"
@@ -75,10 +75,10 @@ class TestTrainCommand:
         mock_recipe.assert_called_once_with(config=mock_config, resume_from=None)
         assert result == 0
 
-    @patch("trainlib.trainer.checkpointing.find_latest_checkpoint")
-    @patch("trainlib.cli.load_config")
-    @patch("trainlib.cli.validate_config")
-    @patch("trainlib.cli.recipe_registry")
+    @patch("xaytune.trainer.checkpointing.find_latest_checkpoint")
+    @patch("xaytune.cli.load_config")
+    @patch("xaytune.cli.validate_config")
+    @patch("xaytune.cli.recipe_registry")
     def test_train_resume_passes_checkpoint_dir(
         self, mock_registry, mock_validate, mock_load, mock_find
     ):
@@ -93,17 +93,13 @@ class TestTrainCommand:
         result = main(["train", "--config", "test.yaml", "--resume"])
 
         mock_find.assert_called_once_with("output")
-        mock_recipe.assert_called_once_with(
-            config=mock_config, resume_from="output/checkpoint-100"
-        )
+        mock_recipe.assert_called_once_with(config=mock_config, resume_from="output/checkpoint-100")
         assert result == 0
 
-    @patch("trainlib.trainer.checkpointing.find_latest_checkpoint")
-    @patch("trainlib.cli.load_config")
-    @patch("trainlib.cli.validate_config")
-    def test_train_resume_no_checkpoint_returns_error(
-        self, mock_validate, mock_load, mock_find
-    ):
+    @patch("xaytune.trainer.checkpointing.find_latest_checkpoint")
+    @patch("xaytune.cli.load_config")
+    @patch("xaytune.cli.validate_config")
+    def test_train_resume_no_checkpoint_returns_error(self, mock_validate, mock_load, mock_find):
         mock_config = MagicMock()
         mock_config.recipe = "finetune"
         mock_config.output.dir = "output"
@@ -150,7 +146,7 @@ class TestListCommand:
 
 class TestEvalCommand:
     def test_eval_parser_exists(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["eval", "--model", "test-model", "--benchmarks", "mmlu"])
@@ -159,7 +155,7 @@ class TestEvalCommand:
         assert args.benchmarks == "mmlu"
 
     def test_eval_with_metrics(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(
@@ -179,9 +175,9 @@ class TestEvalCommand:
     def test_eval_benchmarks_calls_benchmark_evaluate(self):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
-        with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
+        with patch("xaytune.eval.benchmarks.benchmark_evaluate") as mock_bench:
             mock_bench.return_value = {"mmlu": {"acc,none": 0.65}}
             result = main(["eval", "--model", "test-model", "--benchmarks", "mmlu,gsm8k"])
 
@@ -195,9 +191,9 @@ class TestEvalCommand:
     def test_eval_num_fewshot(self):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
-        with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
+        with patch("xaytune.eval.benchmarks.benchmark_evaluate") as mock_bench:
             mock_bench.return_value = {}
             main(["eval", "--model", "m", "--benchmarks", "mmlu", "--num-fewshot", "5"])
 
@@ -205,7 +201,7 @@ class TestEvalCommand:
         assert call_kwargs["num_fewshot"] == 5
 
     def test_eval_requires_model(self):
-        from trainlib.cli import main
+        from xaytune.cli import main
 
         with pytest.raises(SystemExit) as exc_info:
             main(["eval"])
@@ -214,9 +210,9 @@ class TestEvalCommand:
     def test_eval_prints_results(self, capsys):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
-        with patch("trainlib.eval.benchmarks.benchmark_evaluate") as mock_bench:
+        with patch("xaytune.eval.benchmarks.benchmark_evaluate") as mock_bench:
             mock_bench.return_value = {"mmlu": {"acc,none": 0.65}}
             main(["eval", "--model", "m", "--benchmarks", "mmlu"])
 
@@ -226,7 +222,7 @@ class TestEvalCommand:
 
 class TestExportCommand:
     def test_export_merge_parser(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["export", "merge", "--checkpoint", "ckpt/", "--output", "out/"])
@@ -236,7 +232,7 @@ class TestExportCommand:
         assert args.output == "out/"
 
     def test_export_gguf_parser(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["export", "gguf", "--model", "model/", "--output", "out.gguf"])
@@ -245,14 +241,14 @@ class TestExportCommand:
         assert args.model == "model/"
 
     def test_export_gguf_default_quant(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["export", "gguf", "--model", "m/", "--output", "o.gguf"])
         assert args.quant == "Q4_K_M"
 
     def test_export_push_parser(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["export", "push", "--model", "model/", "--repo", "user/repo"])
@@ -265,11 +261,11 @@ class TestExportCommand:
         import sys
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
         # Force-load the module (export.__init__ shadows the name with the function)
-        importlib.import_module("trainlib.export.merge")
-        merge_mod = sys.modules["trainlib.export.merge"]
+        importlib.import_module("xaytune.export.merge")
+        merge_mod = sys.modules["xaytune.export.merge"]
         with patch.object(merge_mod, "merge") as mock_merge:
             result = main(["export", "merge", "--checkpoint", "ckpt/", "--output", "out/"])
 
@@ -279,9 +275,9 @@ class TestExportCommand:
     def test_export_gguf_calls_to_gguf(self):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
-        with patch("trainlib.export.gguf.to_gguf") as mock_gguf:
+        with patch("xaytune.export.gguf.to_gguf") as mock_gguf:
             result = main(
                 ["export", "gguf", "--model", "m/", "--output", "o.gguf", "--quant", "Q8_0"]
             )
@@ -292,16 +288,16 @@ class TestExportCommand:
     def test_export_push_calls_push_to_hub(self):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
-        with patch("trainlib.export.hub.push_to_hub") as mock_push:
+        with patch("xaytune.export.hub.push_to_hub") as mock_push:
             result = main(["export", "push", "--model", "m/", "--repo", "user/repo"])
 
         assert result == 0
         mock_push.assert_called_once_with("m/", repo="user/repo")
 
     def test_export_no_subcommand_shows_help(self, capsys):
-        from trainlib.cli import main
+        from xaytune.cli import main
 
         result = main(["export"])
         assert result == 1
@@ -309,7 +305,7 @@ class TestExportCommand:
 
 class TestCompareCommand:
     def test_compare_parser(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu,gsm8k"])
@@ -320,13 +316,13 @@ class TestCompareCommand:
     def test_compare_calls_benchmark_evaluate_twice(self):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
         results_a = {"mmlu": {"acc,none": 0.65}}
         results_b = {"mmlu": {"acc,none": 0.70}}
 
         with patch(
-            "trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]
+            "xaytune.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]
         ) as mock_bench:
             result = main(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu"])
 
@@ -336,13 +332,13 @@ class TestCompareCommand:
     def test_compare_prints_table(self, capsys):
         from unittest.mock import patch
 
-        from trainlib.cli import main
+        from xaytune.cli import main
 
         results_a = {"mmlu": {"acc,none": 0.65}}
         results_b = {"mmlu": {"acc,none": 0.70}}
 
         with patch(
-            "trainlib.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]
+            "xaytune.eval.benchmarks.benchmark_evaluate", side_effect=[results_a, results_b]
         ):
             main(["compare", "model-a/", "model-b/", "--benchmarks", "mmlu"])
 
@@ -352,7 +348,7 @@ class TestCompareCommand:
         assert "mmlu" in captured.out
 
     def test_compare_requires_two_models(self):
-        from trainlib.cli import main
+        from xaytune.cli import main
 
         result = main(["compare", "model-a/", "--benchmarks", "mmlu"])
         assert result != 0
@@ -378,10 +374,17 @@ class TestLaunchCommand:
     @patch("subprocess.run")
     def test_launch_forwards_overrides(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
-        main([
-            "launch", "--nproc-per-node", "1", "--config", "c.yaml",
-            "--override", "trainer.lr=1e-4",
-        ])
+        main(
+            [
+                "launch",
+                "--nproc-per-node",
+                "1",
+                "--config",
+                "c.yaml",
+                "--override",
+                "trainer.lr=1e-4",
+            ]
+        )
         cmd = mock_run.call_args[0][0]
         assert "--override" in cmd
         assert "trainer.lr=1e-4" in cmd
@@ -422,7 +425,7 @@ class TestLaunchCommand:
 
 class TestLRFindCommand:
     def test_lr_find_parser_exists(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
         args = parser.parse_args(["lr-find", "--config", "foo.yaml"])
@@ -433,28 +436,37 @@ class TestLRFindCommand:
         assert args.num_iterations == 100
 
     def test_lr_find_parser_custom_args(self):
-        from trainlib.cli import _build_parser
+        from xaytune.cli import _build_parser
 
         parser = _build_parser()
-        args = parser.parse_args([
-            "lr-find", "--config", "c.yaml",
-            "--start-lr", "1e-5", "--end-lr", "0.1",
-            "--num-iterations", "50", "--smoothing-factor", "0.1",
-            "--output", "results.json",
-        ])
+        args = parser.parse_args(
+            [
+                "lr-find",
+                "--config",
+                "c.yaml",
+                "--start-lr",
+                "1e-5",
+                "--end-lr",
+                "0.1",
+                "--num-iterations",
+                "50",
+                "--smoothing-factor",
+                "0.1",
+                "--output",
+                "results.json",
+            ]
+        )
         assert args.start_lr == 1e-5
         assert args.end_lr == 0.1
         assert args.num_iterations == 50
         assert args.smoothing_factor == 0.1
         assert args.output == "results.json"
 
-    @patch("trainlib.cli.load_config")
-    @patch("trainlib.recipes.base.setup_training")
-    @patch("trainlib.trainer.lr_finder.lr_find")
-    def test_lr_find_handler_called(
-        self, mock_lr_find, mock_setup, mock_load
-    ):
-        from trainlib.trainer.lr_finder import LRFinderResult
+    @patch("xaytune.cli.load_config")
+    @patch("xaytune.recipes.base.setup_training")
+    @patch("xaytune.trainer.lr_finder.lr_find")
+    def test_lr_find_handler_called(self, mock_lr_find, mock_setup, mock_load):
+        from xaytune.trainer.lr_finder import LRFinderResult
 
         mock_config = MagicMock()
         mock_load.return_value = mock_config

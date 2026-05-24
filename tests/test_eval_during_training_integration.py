@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
-import trainlib
-from trainlib.config.schema import (
+import xaytune
+from xaytune.config.schema import (
     DataConfig,
     EvalConfig,
     ModelConfig,
@@ -33,7 +33,7 @@ def _mock_model():
 
 
 def _mock_model_result(model=None):
-    from trainlib.models.loader import ModelResult
+    from xaytune.models.loader import ModelResult
 
     return ModelResult(
         model=model or _mock_model(),
@@ -54,11 +54,9 @@ def _make_dataset(n=10):
 
 
 class TestEvalDuringTraining:
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_eval_metrics_appear_in_state(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_eval_metrics_appear_in_state(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         train_data = _make_dataset(6)
         eval_data = _make_dataset(3)
@@ -78,18 +76,16 @@ class TestEvalDuringTraining:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         assert "eval_loss" in state.metrics
         assert "eval_perplexity" in state.metrics
         assert state.metrics["eval_loss"] > 0
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_no_eval_without_eval_split(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_no_eval_without_eval_split(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         mock_load_dataset.return_value = _make_dataset(4)
 
@@ -107,16 +103,14 @@ class TestEvalDuringTraining:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert state.global_step == 4
         assert "eval_loss" not in state.metrics
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_custom_metrics_list(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_custom_metrics_list(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         train_data = _make_dataset(4)
         eval_data = _make_dataset(2)
@@ -136,22 +130,20 @@ class TestEvalDuringTraining:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        state = trainlib.finetune(config=config)
+        state = xaytune.finetune(config=config)
 
         assert "eval_loss" in state.metrics
         assert "eval_perplexity" not in state.metrics
 
-    @patch("trainlib.recipes.base.load_dataset")
-    @patch("trainlib.recipes.base.load_model")
-    def test_eval_callbacks_fire_correct_count(
-        self, mock_load_model, mock_load_dataset, tmp_path
-    ):
+    @patch("xaytune.recipes.base.load_dataset")
+    @patch("xaytune.recipes.base.load_model")
+    def test_eval_callbacks_fire_correct_count(self, mock_load_model, mock_load_dataset, tmp_path):
         mock_load_model.return_value = _mock_model_result()
         train_data = _make_dataset(6)
         eval_data = _make_dataset(2)
         mock_load_dataset.return_value = (train_data, eval_data)
 
-        from trainlib.trainer.callbacks import CallbackManager
+        from xaytune.trainer.callbacks import CallbackManager
 
         cb = CallbackManager()
         eval_events = []
@@ -178,7 +170,7 @@ class TestEvalDuringTraining:
             output=OutputConfig(dir=str(tmp_path / "output")),
         )
 
-        from trainlib.recipes import base as _base
+        from xaytune.recipes import base as _base
 
         components = _base.setup_training(config, callback_manager=cb)
         state = components.trainer.train(

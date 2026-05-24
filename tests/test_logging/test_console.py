@@ -1,4 +1,4 @@
-from trainlib.logging.console import ConsoleBackend
+from xaytune.logging.console import ConsoleBackend
 
 
 class TestConsoleBackend:
@@ -30,7 +30,7 @@ class TestConsoleBackend:
         assert "lr" in captured.out
 
     def test_is_logging_backend(self):
-        from trainlib.logging.base import LoggingBackend
+        from xaytune.logging.base import LoggingBackend
 
         backend = ConsoleBackend()
         assert isinstance(backend, LoggingBackend)

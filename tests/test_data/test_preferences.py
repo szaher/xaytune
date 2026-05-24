@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from trainlib.data.preferences import load_preference_dataset
-from trainlib.data.registry import format_registry
+from xaytune.data.preferences import load_preference_dataset
+from xaytune.data.registry import format_registry
 
 
 class TestPreferenceDataset:

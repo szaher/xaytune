@@ -16,7 +16,10 @@ from xaytune.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from xaytune.studio.jobs import JobManager
+from xaytune.studio.data_preview import preview_dataset
+from xaytune.studio.gpu_metrics import get_gpu_metrics
+from xaytune.studio.hub_browser import search_models
+from xaytune.studio.jobs import JobManager, JobStatus
 
 RECIPE_METHODS: dict[str, list[str]] = {
     "finetune": ["full", "lora", "qlora"],
@@ -263,6 +266,39 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                         info="Allow custom code from model repo. Required by some models.",
                     )
 
+                with gr.Accordion("Model Search (HuggingFace Hub)", open=False):
+                    model_search_query = gr.Textbox(
+                        label="Search",
+                        placeholder="llama, mistral, phi...",
+                        info="Search HuggingFace Hub for text-generation models.",
+                    )
+                    model_search_btn = gr.Button("Search Models", size="sm")
+                    model_search_results = gr.Dataframe(
+                        headers=["Model ID", "Downloads", "Likes"],
+                        label="Results",
+                        interactive=False,
+                    )
+
+                    def _search_models(query: str):
+                        if not query or not query.strip():
+                            return []
+                        results = search_models(query.strip())
+                        return [[r["model_id"], r["downloads"], r["likes"]] for r in results]
+
+                    model_search_btn.click(
+                        fn=_search_models,
+                        inputs=[model_search_query],
+                        outputs=[model_search_results],
+                    )
+
+                    def _select_model(evt: gr.SelectData):
+                        return evt.value
+
+                    model_search_results.select(
+                        fn=_select_model,
+                        outputs=[model_name],
+                    )
+
                 def _on_recipe_change(r: str):
                     methods = RECIPE_METHODS.get(r, ["full"])
                     return gr.update(choices=methods, value=methods[0])
@@ -333,6 +369,38 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                         label="Streaming",
                         info="Stream data instead of loading all into memory.",
                     )
+
+            with gr.Accordion("Data Preview", open=False):
+                preview_btn = gr.Button("Preview Data", size="sm")
+                preview_table = gr.Dataframe(
+                    label="Sample Data",
+                    interactive=False,
+                )
+
+                def _preview_data(path: str, fmt: str, src: str):
+                    if not path or not path.strip():
+                        return []
+                    samples = preview_dataset(path.strip(), format=fmt, source=src, num_samples=5)
+                    if not samples:
+                        return []
+                    headers = list(samples[0].keys())
+                    rows = []
+                    for s in samples:
+                        row = []
+                        for h in headers:
+                            val = s.get(h, "")
+                            text = str(val)
+                            if len(text) > 200:
+                                text = text[:200] + "..."
+                            row.append(text)
+                        rows.append(row)
+                    return rows
+
+                preview_btn.click(
+                    fn=_preview_data,
+                    inputs=[data_path, data_format, source],
+                    outputs=[preview_table],
+                )
 
             with gr.Accordion(
                 "LoRA", open=True, visible=False, elem_id="lora_accordion"
@@ -842,6 +910,7 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                     info="Select a running or completed job to monitor.",
                 )
                 refresh_jobs_btn = gr.Button("Refresh Jobs", size="sm")
+                cancel_btn = gr.Button("Cancel Job", variant="stop", size="sm", visible=False)
 
             def _refresh_job_list():
                 jobs = mgr.list_jobs()
@@ -852,9 +921,26 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
 
             refresh_jobs_btn.click(fn=_refresh_job_list, outputs=[job_dropdown])
 
+            def _cancel_job(job_id: str | None):
+                if not job_id:
+                    return "No job selected."
+                try:
+                    mgr.cancel(job_id)
+                    return f"Cancelled job `{job_id[:8]}...`"
+                except KeyError:
+                    return f"Unknown job: {job_id}"
+
+            cancel_btn.click(
+                fn=_cancel_job,
+                inputs=[job_dropdown],
+                outputs=[gr.Markdown()],
+            )
+
             monitor_status = gr.Markdown("Select a job to monitor.")
             loss_plot = gr.Plot(label="Training Loss")
             metrics_display = gr.Markdown("")
+            gpu_display = gr.Markdown("")
+            log_output = gr.Code(label="Training Logs", language=None, lines=12)
             history_state = gr.State([])
 
             timer = gr.Timer(value=2, active=False)
@@ -862,7 +948,15 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
             timer.tick(
                 fn=lambda job_id, history: _poll(mgr, job_id, history),
                 inputs=[job_dropdown, history_state],
-                outputs=[monitor_status, loss_plot, metrics_display, history_state],
+                outputs=[
+                    monitor_status,
+                    loss_plot,
+                    metrics_display,
+                    history_state,
+                    cancel_btn,
+                    gpu_display,
+                    log_output,
+                ],
             )
 
             job_dropdown.change(
@@ -875,12 +969,36 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
         with gr.Tab("History"):
             refresh_history_btn = gr.Button("Refresh", size="sm")
             history_table = gr.Dataframe(
-                headers=["Job ID", "Recipe", "Status", "Created", "Completed", "Final Loss"],
+                headers=[
+                    "Job ID",
+                    "Recipe",
+                    "Status",
+                    "Created",
+                    "Completed",
+                    "Final Loss",
+                    "Tags",
+                ],
                 label="Training Jobs",
             )
 
+            with gr.Row():
+                tag_job_dropdown = gr.Dropdown(
+                    choices=[],
+                    label="Job",
+                    allow_custom_value=True,
+                )
+                tag_input = gr.Textbox(
+                    label="Tag",
+                    placeholder="experiment-v1",
+                )
+                add_tag_btn = gr.Button("Add Tag", size="sm")
+                remove_tag_btn = gr.Button("Remove Tag", size="sm")
+
             def _refresh_history():
                 jobs = mgr.list_jobs()
+                ids = [j.job_id[:8] + "..." for j in jobs]
+                full_ids = [j.job_id for j in jobs]
+                choices = list(zip(ids, full_ids)) if ids else []
                 rows = []
                 for j in jobs:
                     loss = "-"
@@ -896,27 +1014,186 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                             _format_time(j.created_at),
                             _format_time(j.completed_at),
                             loss,
+                            ", ".join(j.tags),
                         ]
                     )
-                return rows
+                return rows, gr.update(choices=choices)
 
-            refresh_history_btn.click(fn=_refresh_history, outputs=[history_table])
+            refresh_history_btn.click(
+                fn=_refresh_history,
+                outputs=[history_table, tag_job_dropdown],
+            )
+
+            def _add_tag(job_id: str | None, tag: str):
+                if job_id and tag and tag.strip():
+                    try:
+                        mgr.add_tag(job_id, tag.strip())
+                    except KeyError:
+                        pass
+
+            def _remove_tag(job_id: str | None, tag: str):
+                if job_id and tag and tag.strip():
+                    try:
+                        mgr.remove_tag(job_id, tag.strip())
+                    except KeyError:
+                        pass
+
+            add_tag_btn.click(
+                fn=_add_tag,
+                inputs=[tag_job_dropdown, tag_input],
+            )
+            remove_tag_btn.click(
+                fn=_remove_tag,
+                inputs=[tag_job_dropdown, tag_input],
+            )
+
+        # ── Compare Tab ───────────────────────────────────────────
+        with gr.Tab("Compare"):
+            compare_refresh_btn = gr.Button("Refresh Jobs", size="sm")
+            compare_jobs = gr.Dropdown(
+                choices=[],
+                label="Select Jobs to Compare",
+                multiselect=True,
+                allow_custom_value=True,
+                info="Select two or more jobs to compare their training curves.",
+            )
+
+            def _refresh_compare_list():
+                jobs = mgr.list_jobs()
+                ids = [j.job_id[:8] + "..." for j in jobs]
+                full_ids = [j.job_id for j in jobs]
+                choices = list(zip(ids, full_ids)) if ids else []
+                return gr.update(choices=choices)
+
+            compare_refresh_btn.click(
+                fn=_refresh_compare_list,
+                outputs=[compare_jobs],
+            )
+
+            compare_btn = gr.Button("Compare", variant="primary")
+            compare_plot = gr.Plot(label="Loss Comparison")
+            compare_table = gr.Dataframe(
+                headers=["Job ID", "Recipe", "Method", "Steps", "Final Loss", "Tags"],
+                label="Metrics Comparison",
+                interactive=False,
+            )
+
+            def _compare(job_ids: list[str] | None):
+                if not job_ids or len(job_ids) < 2:
+                    return _empty_plot(), []
+
+                colors = [
+                    "#4f46e5",
+                    "#dc2626",
+                    "#16a34a",
+                    "#d97706",
+                    "#7c3aed",
+                    "#0891b2",
+                    "#be185d",
+                    "#65a30d",
+                ]
+
+                fig = go.Figure()
+                table_rows = []
+                for i, jid in enumerate(job_ids):
+                    try:
+                        job = mgr.get_status(jid)
+                    except KeyError:
+                        continue
+
+                    hist = job.metrics_history
+                    if hist:
+                        steps = [h["step"] for h in hist]
+                        losses = [h.get("loss", 0) for h in hist]
+                        color = colors[i % len(colors)]
+                        fig.add_trace(
+                            go.Scatter(
+                                x=steps,
+                                y=losses,
+                                mode="lines+markers",
+                                name=jid[:8],
+                                line={"color": color, "width": 2},
+                                marker={"size": 3},
+                            )
+                        )
+
+                    final_loss = "-"
+                    if job.state and "metrics" in job.state:
+                        loss_val = job.state["metrics"].get("loss")
+                        if isinstance(loss_val, (int, float)):
+                            final_loss = f"{loss_val:.4f}"
+
+                    total_steps = 0
+                    if job.state and "global_step" in job.state:
+                        total_steps = job.state["global_step"]
+
+                    table_rows.append(
+                        [
+                            jid[:8],
+                            job.recipe,
+                            job.state.get("method", "-") if job.state else "-",
+                            total_steps,
+                            final_loss,
+                            ", ".join(job.tags),
+                        ]
+                    )
+
+                fig.update_layout(
+                    title="Training Loss Comparison",
+                    xaxis_title="Step",
+                    yaxis_title="Loss",
+                    template="plotly_white",
+                    margin={"l": 40, "r": 20, "t": 40, "b": 40},
+                )
+
+                return fig, table_rows
+
+            compare_btn.click(
+                fn=_compare,
+                inputs=[compare_jobs],
+                outputs=[compare_plot, compare_table],
+            )
 
     return app  # type: ignore[no-any-return]
+
+
+_PollResult = tuple[str, go.Figure, str, list[dict[str, Any]], Any, str, str]
 
 
 def _poll(
     mgr: JobManager,
     job_id: str | None,
     history: list[dict[str, Any]],
-) -> tuple[str, go.Figure, str, list[dict[str, Any]]]:
+) -> _PollResult:
+    import gradio as gr
+
+    empty: _PollResult = (
+        "Select a job to monitor.",
+        _empty_plot(),
+        "",
+        history,
+        gr.update(visible=False),
+        "",
+        "",
+    )
     if not job_id:
-        return "Select a job to monitor.", _empty_plot(), "", history
+        return empty
 
     try:
         job = mgr.get_status(job_id)
     except KeyError:
-        return f"Unknown job: {job_id}", _empty_plot(), "", history
+        return (
+            f"Unknown job: {job_id}",
+            _empty_plot(),
+            "",
+            history,
+            gr.update(visible=False),
+            "",
+            "",
+        )
+
+    is_running = job.status == JobStatus.RUNNING
+    cancel_update = gr.update(visible=is_running)
 
     badge = _status_badge(job.status.value)
     status_md = f"### {badge}"
@@ -928,7 +1205,7 @@ def _poll(
             f"{job.error}</div>"
         )
 
-    if job.started_at and job.status.value == "running":
+    if job.started_at and is_running:
         elapsed = time.time() - job.started_at
         mins, secs = divmod(int(elapsed), 60)
         status_md += f"\n\nElapsed: **{mins}m {secs}s**"
@@ -947,6 +1224,13 @@ def _poll(
                 metrics_lines.append(f"**{k}:** {v:.4f}")
             else:
                 metrics_lines.append(f"**{k}:** {v}")
+
+        if job.metrics_history:
+            last = job.metrics_history[-1]
+            sps = last.get("samples_per_sec")
+            if sps is not None:
+                metrics_lines.append(f"**samples/sec:** {sps:.1f}")
+
         metrics_md = " | ".join(metrics_lines)
     else:
         metrics_md = ""
@@ -973,7 +1257,20 @@ def _poll(
     else:
         fig = _empty_plot()
 
-    return status_md, fig, metrics_md, history
+    gpu = get_gpu_metrics()
+    if gpu:
+        gpu_md = (
+            f"**GPU Memory:** {gpu['gpu_memory_allocated_mb']:.0f} MB allocated"
+            f" / {gpu['gpu_memory_reserved_mb']:.0f} MB reserved"
+            f" / {gpu['gpu_memory_peak_mb']:.0f} MB peak"
+        )
+    else:
+        gpu_md = ""
+
+    log_lines = job.log_buffer.get_all()
+    log_text = "\n".join(log_lines[-200:]) if log_lines else ""
+
+    return status_md, fig, metrics_md, history, cancel_update, gpu_md, log_text
 
 
 def _empty_plot() -> go.Figure:

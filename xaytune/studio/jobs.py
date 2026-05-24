@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
 import enum
+import logging
 import threading
 import time
 import uuid
@@ -21,6 +23,46 @@ class JobStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class LogBuffer:
+    """Thread-safe ring buffer for training log lines."""
+
+    def __init__(self, maxlen: int = 5000) -> None:
+        self._buffer: collections.deque[str] = collections.deque(maxlen=maxlen)
+        self._lock = threading.Lock()
+
+    def append(self, line: str) -> None:
+        with self._lock:
+            self._buffer.append(line)
+
+    def get_all(self) -> list[str]:
+        with self._lock:
+            return list(self._buffer)
+
+    def get_since(self, offset: int) -> list[str]:
+        with self._lock:
+            buf = list(self._buffer)
+        return buf[offset:]
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._buffer)
+
+
+class _LogBufferHandler(logging.Handler):
+    """Logging handler that writes records to a LogBuffer."""
+
+    def __init__(self, log_buffer: LogBuffer) -> None:
+        super().__init__()
+        self._log_buffer = log_buffer
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            self._log_buffer.append(msg)
+        except Exception:
+            self.handleError(record)
+
+
 @dataclasses.dataclass
 class JobInfo:
     job_id: str
@@ -31,6 +73,9 @@ class JobInfo:
     completed_at: float | None = None
     error: str | None = None
     state: dict[str, Any] | None = None
+    tags: list[str] = dataclasses.field(default_factory=list)
+    log_buffer: LogBuffer = dataclasses.field(default_factory=LogBuffer)
+    metrics_history: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +87,7 @@ class JobInfo:
             "completed_at": self.completed_at,
             "error": self.error,
             "state": self.state,
+            "tags": self.tags,
         }
 
 
@@ -94,6 +140,28 @@ class JobManager:
                 raise KeyError(f"Unknown job: {job_id}")
             self._jobs[job_id].status = JobStatus.CANCELLED
 
+    def add_tag(self, job_id: str, tag: str) -> None:
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(f"Unknown job: {job_id}")
+            if tag not in self._jobs[job_id].tags:
+                self._jobs[job_id].tags.append(tag)
+
+    def remove_tag(self, job_id: str, tag: str) -> None:
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(f"Unknown job: {job_id}")
+            try:
+                self._jobs[job_id].tags.remove(tag)
+            except ValueError:
+                pass
+
+    def get_metrics_history(self, job_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(f"Unknown job: {job_id}")
+            return list(self._jobs[job_id].metrics_history)
+
     def _run_job(
         self,
         job_id: str,
@@ -103,12 +171,31 @@ class JobManager:
         job = self._jobs[job_id]
         cb = CallbackManager()
 
+        last_step_time: list[float] = []
+
         @cb.on("step_end")
         def _track_state(state: TrainState) -> None:
+            now = time.time()
             with self._lock:
                 job.state = state.to_dict()
                 if job.status == JobStatus.CANCELLED:
                     state.stop_training()
+
+                metrics = state.to_dict().get("metrics", {})
+                entry: dict[str, Any] = {
+                    "step": state.global_step,
+                    "timestamp": now,
+                    **metrics,
+                }
+                if last_step_time:
+                    dt = now - last_step_time[0]
+                    if dt > 0:
+                        entry["samples_per_sec"] = config.trainer.batch_size / dt
+
+                job.metrics_history.append(entry)
+
+            last_step_time.clear()
+            last_step_time.append(now)
 
         register_event_callbacks(
             callback_manager=cb,
@@ -116,10 +203,17 @@ class JobManager:
             job_id=job_id,
         )
 
+        handler = _LogBufferHandler(job.log_buffer)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+
         try:
             with self._lock:
                 job.status = JobStatus.RUNNING
                 job.started_at = time.time()
+
+            last_step_time.append(time.time())
 
             components = setup_training(config, callback_manager=cb)
             final_state = components.trainer.train(
@@ -140,3 +234,5 @@ class JobManager:
                 job.status = JobStatus.FAILED
                 job.error = str(e)
                 job.completed_at = time.time()
+        finally:
+            root_logger.removeHandler(handler)

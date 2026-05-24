@@ -360,12 +360,12 @@ class TestCreateApp:
 class TestPollJob:
     def test_no_job_selected(self):
         mgr = JobManager()
-        status, fig, metrics, history = _poll(mgr, None, [])
+        status, fig, metrics, history, *_ = _poll(mgr, None, [])
         assert "Select" in status
 
     def test_unknown_job(self):
         mgr = JobManager()
-        status, fig, metrics, history = _poll(mgr, "nonexistent", [])
+        status, fig, metrics, history, *_ = _poll(mgr, "nonexistent", [])
         assert "Unknown job" in status
 
     def test_accumulates_metrics(self):
@@ -379,7 +379,7 @@ class TestPollJob:
             state={"global_step": 5, "metrics": {"loss": 0.5}},
         )
         mgr._jobs["j1"] = job
-        status, fig, metrics, history = _poll(mgr, "j1", [])
+        status, fig, metrics, history, *_ = _poll(mgr, "j1", [])
         assert len(history) == 1
         assert history[0]["step"] == 5
 
@@ -395,7 +395,7 @@ class TestPollJob:
         )
         mgr._jobs["j1"] = job
         existing = [{"step": 5, "loss": 0.5}]
-        status, fig, metrics, history = _poll(mgr, "j1", existing)
+        status, fig, metrics, history, *_ = _poll(mgr, "j1", existing)
         assert len(history) == 1
 
     def test_shows_error(self):
@@ -408,7 +408,7 @@ class TestPollJob:
             error="boom",
         )
         mgr._jobs["j1"] = job
-        status, fig, metrics, history = _poll(mgr, "j1", [])
+        status, fig, metrics, history, *_ = _poll(mgr, "j1", [])
         assert "boom" in status
 
     def test_shows_status_badge(self):
@@ -420,7 +420,7 @@ class TestPollJob:
             created_at=0.0,
         )
         mgr._jobs["j1"] = job
-        status, fig, metrics, history = _poll(mgr, "j1", [])
+        status, fig, metrics, history, *_ = _poll(mgr, "j1", [])
         assert "COMPLETED" in status
 
 

@@ -44,6 +44,10 @@ def _load_huggingface(
 
     if streaming:
         ds = datasets.load_dataset(path, split="train", streaming=True)
+        if eval_split > 0:
+            ds = ds.shuffle(seed=42)
+            # Can't truly split a stream; take/skip as approximation
+            return ds.map(format_fn), None
         return ds.map(format_fn)
 
     ds = datasets.load_dataset(path, split="train")

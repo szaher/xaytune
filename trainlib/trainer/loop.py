@@ -81,7 +81,10 @@ class Trainer:
 
         # Create learning rate scheduler
         if scheduler is None:
-            num_batches = len(train_dataloader)
+            try:
+                num_batches = len(train_dataloader)
+            except TypeError:
+                num_batches = self.config.max_steps if self.config.max_steps > 0 else 1000
             steps_per_epoch = num_batches
             if self.config.gradient_accumulation > 1:
                 steps_per_epoch = num_batches // self.config.gradient_accumulation

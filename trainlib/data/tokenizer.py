@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import torch
+from torch.utils.data import IterableDataset
 
 IGNORE_INDEX = -100
 
@@ -216,3 +218,77 @@ def collate_tokenized(
         "labels": torch.tensor(labels, dtype=torch.long),
         "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
     }
+
+
+def tokenize_sample(
+    sample: dict[str, Any],
+    tokenizer: Any,
+    max_seq_length: int = 0,
+) -> dict[str, list[int]] | None:
+    """Tokenize a single formatted sample.
+
+    Args:
+        sample: A dict with a ``"text"`` key.
+        tokenizer: A HuggingFace tokenizer.
+        max_seq_length: Maximum sequence length (0 = use tokenizer default).
+
+    Returns:
+        Dict with ``input_ids``, ``labels``, ``attention_mask``, or
+        ``None`` if the text is empty or produces no tokens.
+    """
+    if "input_ids" in sample:
+        return sample
+
+    text = sample.get("text", "")
+    if not text:
+        return None
+
+    max_length = max_seq_length if max_seq_length > 0 else getattr(
+        tokenizer, "model_max_length", 1024
+    )
+
+    encoded = tokenizer(
+        text,
+        truncation=True,
+        max_length=max_length,
+        padding=False,
+        return_attention_mask=True,
+    )
+
+    input_ids = encoded["input_ids"]
+    if not input_ids:
+        return None
+
+    return {
+        "input_ids": input_ids,
+        "labels": list(input_ids),
+        "attention_mask": encoded["attention_mask"],
+    }
+
+
+class StreamingTokenizedDataset(IterableDataset):
+    """Wraps a HuggingFace IterableDataset with on-the-fly tokenization.
+
+    Args:
+        dataset: A HuggingFace ``IterableDataset`` yielding formatted samples.
+        tokenizer: A HuggingFace tokenizer.
+        max_seq_length: Maximum sequence length (0 = use tokenizer default).
+    """
+
+    def __init__(
+        self,
+        dataset: Any,
+        tokenizer: Any,
+        max_seq_length: int = 0,
+    ) -> None:
+        self._dataset = dataset
+        self._tokenizer = tokenizer
+        self._max_seq_length = max_seq_length
+
+    def __iter__(self) -> Iterator[dict[str, list[int]]]:
+        for sample in self._dataset:
+            tokenized = tokenize_sample(
+                sample, self._tokenizer, self._max_seq_length,
+            )
+            if tokenized is not None:
+                yield tokenized

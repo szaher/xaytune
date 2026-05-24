@@ -8,6 +8,7 @@ from trainlib.config.schema import TrainConfig
 from trainlib.data import load_dataset
 from trainlib.data.packing import pack_sequences
 from trainlib.data.tokenizer import (
+    StreamingTokenizedDataset,
     collate_preference,
     collate_tokenized,
     tokenize_dataset,
@@ -142,51 +143,71 @@ def setup_training(
         eval_data = None
 
     max_seq = config.data.max_seq_length
-    is_preference = (
-        isinstance(train_data, list) and train_data
-        and "prompt" in train_data[0] and "chosen" in train_data[0]
-    )
 
-    if is_preference:
-        train_data = tokenize_preference_dataset(
+    # Detect streaming (HuggingFace IterableDataset or torch IterableDataset)
+    is_streaming = not isinstance(train_data, list)
+
+    if is_streaming:
+        train_data = StreamingTokenizedDataset(
             train_data, model_result.tokenizer, max_seq,
         )
-        if eval_data is not None and isinstance(eval_data, list) and eval_data:
-            eval_data = tokenize_preference_dataset(
-                eval_data, model_result.tokenizer, max_seq,
-            )
     else:
-        if isinstance(train_data, list) and train_data and "text" in train_data[0]:
-            train_data = tokenize_dataset(train_data, model_result.tokenizer, max_seq)
-        if (eval_data is not None and isinstance(eval_data, list)
-                and eval_data and "text" in eval_data[0]):
-            eval_data = tokenize_dataset(eval_data, model_result.tokenizer, max_seq)
-
-    if (
-        not is_preference
-        and config.data.packing
-        and config.data.max_seq_length > 0
-        and isinstance(train_data, list)
-        and train_data
-        and isinstance(train_data[0], dict)
-        and "input_ids" in train_data[0]
-        and isinstance(train_data[0]["input_ids"], list)
-    ):
-        pad_id = getattr(model_result.tokenizer, "pad_token_id", 0) or 0
-        train_data = pack_sequences(
-            train_data,
-            max_seq_length=config.data.max_seq_length,
-            pad_token_id=pad_id,
+        is_preference = (
+            train_data
+            and "prompt" in train_data[0] and "chosen" in train_data[0]
         )
-        if eval_data is not None:
-            eval_data = pack_sequences(
-                eval_data,
+
+        if is_preference:
+            train_data = tokenize_preference_dataset(
+                train_data, model_result.tokenizer, max_seq,
+            )
+            if eval_data is not None and isinstance(eval_data, list) and eval_data:
+                eval_data = tokenize_preference_dataset(
+                    eval_data, model_result.tokenizer, max_seq,
+                )
+        else:
+            if train_data and "text" in train_data[0]:
+                train_data = tokenize_dataset(
+                    train_data, model_result.tokenizer, max_seq,
+                )
+            if (eval_data is not None and isinstance(eval_data, list)
+                    and eval_data and "text" in eval_data[0]):
+                eval_data = tokenize_dataset(
+                    eval_data, model_result.tokenizer, max_seq,
+                )
+
+        if (
+            not is_preference
+            and config.data.packing
+            and config.data.max_seq_length > 0
+            and isinstance(train_data, list)
+            and train_data
+            and isinstance(train_data[0], dict)
+            and "input_ids" in train_data[0]
+            and isinstance(train_data[0]["input_ids"], list)
+        ):
+            pad_id = getattr(model_result.tokenizer, "pad_token_id", 0) or 0
+            train_data = pack_sequences(
+                train_data,
                 max_seq_length=config.data.max_seq_length,
                 pad_token_id=pad_id,
             )
+            if eval_data is not None:
+                eval_data = pack_sequences(
+                    eval_data,
+                    max_seq_length=config.data.max_seq_length,
+                    pad_token_id=pad_id,
+                )
 
     # Create collate function for tokenized data
     pad_id = getattr(model_result.tokenizer, "pad_token_id", 0) or 0
+
+    is_preference = (
+        not is_streaming
+        and isinstance(train_data, list)
+        and train_data
+        and "chosen_input_ids" in train_data[0]
+    )
 
     if is_preference:
         def collate_fn(batch: list, pid: int = pad_id) -> dict:
@@ -195,10 +216,11 @@ def setup_training(
         def collate_fn(batch: list, pid: int = pad_id) -> dict:
             return collate_tokenized(batch, pad_token_id=pid)
 
-    # Create DataLoaders with DistributedSampler when needed
+    # Create DataLoaders — streaming datasets don't support shuffle/sampler
     sampler: Any = None
-    shuffle = True
-    if ctx.is_distributed:
+    shuffle: bool | None = True if not is_streaming else None
+
+    if ctx.is_distributed and not is_streaming:
         from torch.utils.data.distributed import DistributedSampler
 
         sampler = DistributedSampler(
@@ -207,14 +229,20 @@ def setup_training(
             rank=ctx.rank,
             shuffle=True,
         )
-        shuffle = False
+        shuffle = None
+
+    dl_kwargs: dict[str, Any] = {
+        "batch_size": config.trainer.batch_size,
+        "collate_fn": collate_fn,
+    }
+    if shuffle is not None:
+        dl_kwargs["shuffle"] = shuffle
+    if sampler is not None:
+        dl_kwargs["sampler"] = sampler
 
     train_dataloader: Any = DataLoader(
         train_data,  # type: ignore[arg-type]
-        batch_size=config.trainer.batch_size,
-        shuffle=shuffle,
-        sampler=sampler,
-        collate_fn=collate_fn,
+        **dl_kwargs,
     )
 
     eval_sampler: Any = None
@@ -238,11 +266,12 @@ def setup_training(
             collate_fn=collate_fn,
         )
 
-    # Validate a sample batch before training
-    validate_dataset_sample(
-        train_dataloader,
-        max_seq_length=config.data.max_seq_length,
-    )
+    # Validate a sample batch before training (skip for streaming)
+    if not is_streaming:
+        validate_dataset_sample(
+            train_dataloader,
+            max_seq_length=config.data.max_seq_length,
+        )
 
     cb_manager = callback_manager or CallbackManager()
 
@@ -332,12 +361,15 @@ def setup_training(
                 model_result.tokenizer.save_pretrained(save_dir)
 
     # Register progress bar
-    total_steps = len(train_dataloader)
-    if config.trainer.gradient_accumulation > 1:
-        total_steps = total_steps // config.trainer.gradient_accumulation
-    total_steps *= config.trainer.num_epochs
-    if config.trainer.max_steps > 0:
-        total_steps = min(total_steps, config.trainer.max_steps)
+    try:
+        total_steps = len(train_dataloader)
+        if config.trainer.gradient_accumulation > 1:
+            total_steps = total_steps // config.trainer.gradient_accumulation
+        total_steps *= config.trainer.num_epochs
+        if config.trainer.max_steps > 0:
+            total_steps = min(total_steps, config.trainer.max_steps)
+    except TypeError:
+        total_steps = config.trainer.max_steps if config.trainer.max_steps > 0 else 0
 
     register_progress_callbacks(
         callback_manager=cb_manager,

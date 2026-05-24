@@ -473,9 +473,7 @@ class DistillTrainer(Trainer):
         student_out = model(**batch)
         with torch.no_grad():
             teacher_out = self.teacher(**batch)
-        loss = torch.nn.functional.mse_loss(
-            student_out.logits, teacher_out.logits
-        )
+        loss = torch.nn.functional.mse_loss(student_out.logits, teacher_out.logits)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -532,8 +530,11 @@ state = xaytune.finetune(
     max_steps=3,
     mixed_precision="fp32",
 )
-print(f"   Injected nn.Module — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}")
+print(
+    f"   Injected nn.Module — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}"
+)
 assert state.global_step > 0
+
 
 # 12b. Register a custom model loader
 @register_model("demo-tiny-gpt2")
@@ -543,6 +544,7 @@ def load_demo_model(name_or_path, **kwargs):
     if t.pad_token is None:
         t.pad_token = t.eos_token
     return ModelResult(model=m, tokenizer=t, name=name_or_path)
+
 
 state = xaytune.finetune(
     model="demo-tiny-gpt2",
@@ -554,7 +556,9 @@ state = xaytune.finetune(
     max_steps=3,
     mixed_precision="fp32",
 )
-print(f"   Registered loader  — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}")
+print(
+    f"   Registered loader  — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}"
+)
 assert state.global_step > 0
 print("   OK")
 

@@ -9,7 +9,7 @@ class TestPackageMetadata:
         assert isinstance(trainlib.__version__, str)
 
     def test_version_matches_pyproject(self):
-        assert trainlib.__version__ == "0.5.0"
+        assert trainlib.__version__ == "0.6.0"
 
     def test_all_exports(self):
         expected = {

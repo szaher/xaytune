@@ -17,6 +17,8 @@ Features demonstrated:
   8. Callbacks         — custom step_end callback
   9. Checkpointing     — save & resume from checkpoint
  10. Export            — save model + tokenizer to disk
+ 11. Custom training   — subclass Trainer with custom training_step()
+ 12. Custom model      — register_model + finetune with injected nn.Module
 
 Usage:
     cd trainlib/
@@ -450,10 +452,117 @@ assert Path(export_dir, "trainlib_metadata.json").exists()
 print("   OK")
 
 # ---------------------------------------------------------------------------
+# 11. Custom Training Step — subclass Trainer
+# ---------------------------------------------------------------------------
+print("\n" + "-" * 60)
+print("11. CUSTOM TRAINING STEP")
+print("-" * 60)
+
+from trainlib.trainer import Trainer
+from trainlib.config.schema import TrainerConfig as _TrainerConfig
+
+
+class DistillTrainer(Trainer):
+    """Trainer subclass that uses a custom MSE-based training step."""
+
+    def __init__(self, config, teacher_model, **kwargs):
+        super().__init__(config, **kwargs)
+        self.teacher = teacher_model
+
+    def training_step(self, model, batch, optimizer, state):
+        student_out = model(**batch)
+        with torch.no_grad():
+            teacher_out = self.teacher(**batch)
+        loss = torch.nn.functional.mse_loss(
+            student_out.logits, teacher_out.logits
+        )
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        return loss.item()
+
+
+student = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+teacher = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+teacher.eval()
+for p in teacher.parameters():
+    p.requires_grad = False
+
+distill_config = _TrainerConfig(
+    batch_size=2,
+    learning_rate=1e-4,
+    num_epochs=1,
+    max_steps=4,
+    mixed_precision="fp32",
+)
+distill_trainer = DistillTrainer(config=distill_config, teacher_model=teacher)
+distill_state = distill_trainer.train(
+    model=student,
+    train_dataloader=lr_loader,
+)
+print(f"   Trainer subclass: DistillTrainer")
+print(f"   Final loss:       {distill_state.metrics.get('loss', 'N/A'):.6f}")
+print(f"   Global steps:     {distill_state.global_step}")
+assert distill_state.global_step > 0
+print("   OK")
+
+# ---------------------------------------------------------------------------
+# 12. Custom Model — register_model + finetune with injected nn.Module
+# ---------------------------------------------------------------------------
+print("\n" + "-" * 60)
+print("12. CUSTOM MODEL")
+print("-" * 60)
+
+from trainlib.models import register_model, ModelResult
+
+custom_model = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+custom_tokenizer = AutoTokenizer.from_pretrained(TINY_MODEL)
+if custom_tokenizer.pad_token is None:
+    custom_tokenizer.pad_token = custom_tokenizer.eos_token
+
+# 12a. Finetune with an injected nn.Module
+state = trainlib.finetune(
+    model=custom_model,
+    tokenizer=custom_tokenizer,
+    dataset=str(alpaca_path),
+    format="alpaca",
+    method="full",
+    num_epochs=1,
+    batch_size=2,
+    max_steps=3,
+    mixed_precision="fp32",
+)
+print(f"   Injected nn.Module — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}")
+assert state.global_step > 0
+
+# 12b. Register a custom model loader
+@register_model("demo-tiny-gpt2")
+def load_demo_model(name_or_path, **kwargs):
+    m = AutoModelForCausalLM.from_pretrained(TINY_MODEL)
+    t = AutoTokenizer.from_pretrained(TINY_MODEL)
+    if t.pad_token is None:
+        t.pad_token = t.eos_token
+    return ModelResult(model=m, tokenizer=t, name=name_or_path)
+
+state = trainlib.finetune(
+    model="demo-tiny-gpt2",
+    dataset=str(alpaca_path),
+    format="alpaca",
+    method="full",
+    num_epochs=1,
+    batch_size=2,
+    max_steps=3,
+    mixed_precision="fp32",
+)
+print(f"   Registered loader  — loss: {state.metrics.get('loss', 'N/A'):.4f}, steps: {state.global_step}")
+assert state.global_step > 0
+print("   OK")
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("ALL 10 SECTIONS PASSED")
+print("ALL 12 SECTIONS PASSED")
 print("=" * 60)
 print(f"\nWork directory: {work_dir}")
 print("To clean up:   rm -rf", work_dir)

@@ -164,27 +164,28 @@ def setup_training(
     is_streaming = not isinstance(train_data, list)
 
     if is_streaming:
-        train_data = StreamingTokenizedDataset(
+        train_data = StreamingTokenizedDataset(  # type: ignore[assignment]
             train_data, model_result.tokenizer, max_seq,
         )
     else:
+        samples: list[dict[str, Any]] = train_data  # type: ignore[assignment]
         is_preference = (
-            train_data
-            and "prompt" in train_data[0] and "chosen" in train_data[0]
+            samples
+            and "prompt" in samples[0] and "chosen" in samples[0]
         )
 
         if is_preference:
             train_data = tokenize_preference_dataset(
-                train_data, model_result.tokenizer, max_seq,
+                samples, model_result.tokenizer, max_seq,
             )
             if eval_data is not None and isinstance(eval_data, list) and eval_data:
                 eval_data = tokenize_preference_dataset(
                     eval_data, model_result.tokenizer, max_seq,
                 )
         else:
-            if train_data and "text" in train_data[0]:
+            if samples and "text" in samples[0]:
                 train_data = tokenize_dataset(
-                    train_data, model_result.tokenizer, max_seq,
+                    samples, model_result.tokenizer, max_seq,
                 )
             if (eval_data is not None and isinstance(eval_data, list)
                     and eval_data and "text" in eval_data[0]):
@@ -203,14 +204,14 @@ def setup_training(
             and isinstance(train_data[0]["input_ids"], list)
         ):
             pad_id = getattr(model_result.tokenizer, "pad_token_id", 0) or 0
-            train_data = pack_sequences(
+            train_data = pack_sequences(  # type: ignore[arg-type]
                 train_data,
                 max_seq_length=config.data.max_seq_length,
                 pad_token_id=pad_id,
             )
             if eval_data is not None:
                 eval_data = pack_sequences(
-                    eval_data,
+                    eval_data,  # type: ignore[arg-type]
                     max_seq_length=config.data.max_seq_length,
                     pad_token_id=pad_id,
                 )

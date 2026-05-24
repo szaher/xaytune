@@ -53,13 +53,14 @@ def load_model(
 
     if model_registry.has(name_or_path):
         loader_fn = model_registry.get(name_or_path)
-        return loader_fn(
+        result: ModelResult = loader_fn(
             name_or_path,
             quantization=quantization,
             dtype=dtype,
             trust_remote_code=trust_remote_code,
             device_map=device_map,
         )
+        return result
 
     torch_dtype = _DTYPE_MAP.get(dtype, "auto")
 

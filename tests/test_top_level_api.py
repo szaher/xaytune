@@ -4,7 +4,7 @@ from trainlib import export
 
 class TestTopLevelAPI:
     def test_version(self):
-        assert trainlib.__version__ == "0.5.0"
+        assert trainlib.__version__ == "0.6.0"
 
     def test_finetune_importable(self):
         assert callable(trainlib.finetune)

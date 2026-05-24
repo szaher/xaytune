@@ -196,6 +196,7 @@ class Trainer:
         if self._amp_dtype is not None:
             with torch.amp.autocast(self._device_type, dtype=self._amp_dtype):
                 if skip_forward:
+                    assert self._loss_fn is not None
                     loss = self._loss_fn(model, batch, None)
                 elif isinstance(batch, dict):
                     outputs = model(**batch)
@@ -208,6 +209,7 @@ class Trainer:
                     loss = outputs.loss if hasattr(outputs, "loss") else outputs
         else:
             if skip_forward:
+                assert self._loss_fn is not None
                 loss = self._loss_fn(model, batch, None)
             elif isinstance(batch, dict):
                 outputs = model(**batch)

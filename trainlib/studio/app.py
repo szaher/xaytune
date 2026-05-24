@@ -135,14 +135,14 @@ def build_config(
 ) -> TrainConfig:
     model = ModelConfig(
         name=model_name,
-        quantization=quantization,
+        quantization=quantization,  # type: ignore[arg-type]
         dtype=dtype,
         trust_remote_code=trust_remote_code,
     )
     data = DataConfig(
         path=data_path,
         format=data_format,
-        source=source,
+        source=source,  # type: ignore[arg-type]
         max_seq_length=max_seq_length,
         packing=packing,
         streaming=streaming,
@@ -162,10 +162,10 @@ def build_config(
         max_steps=max_steps,
         warmup_steps=warmup_steps,
         warmup_ratio=warmup_ratio,
-        scheduler=scheduler,
+        scheduler=scheduler,  # type: ignore[arg-type]
         weight_decay=weight_decay,
         max_grad_norm=max_grad_norm,
-        mixed_precision=mixed_precision,
+        mixed_precision=mixed_precision,  # type: ignore[arg-type]
         seed=seed,
         checkpoint_every_n_steps=checkpoint_every_n_steps,
         save_last=save_last,
@@ -283,7 +283,7 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                     quant_update = {}
                     if m == "qlora":
                         quant_update = {"value": "4bit"}
-                    return gr.update(visible=m in ("lora", "qlora")), gr.update(**quant_update)
+                    return gr.update(visible=m in ("lora", "qlora")), gr.update(**quant_update)  # type: ignore[arg-type]
 
             with gr.Accordion("Data", open=True):
                 with gr.Row():
@@ -746,7 +746,7 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
 
             refresh_history_btn.click(fn=_refresh_history, outputs=[history_table])
 
-    return app
+    return app  # type: ignore[no-any-return]
 
 
 def _poll(

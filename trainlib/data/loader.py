@@ -93,7 +93,7 @@ def load_dataset(
         FileNotFoundError: If *source* is ``"local"`` and *path* doesn't exist.
     """
     if source == "huggingface":
-        return _load_huggingface(
+        return _load_huggingface(  # type: ignore[no-any-return]
             path, format=format, streaming=streaming, eval_split=eval_split,
             tokenizer=tokenizer,
         )

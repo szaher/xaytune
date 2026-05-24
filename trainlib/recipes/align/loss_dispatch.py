@@ -52,7 +52,8 @@ def create_alignment_loss_fn(
         outputs: Any,
     ) -> torch.Tensor:
         if not _has_alignment_fields(method, batch):
-            return outputs.loss if hasattr(outputs, "loss") else outputs
+            loss: torch.Tensor = outputs.loss if hasattr(outputs, "loss") else outputs
+            return loss
 
         if method == "dpo":
             return _dpo_step(model, batch, ref_model, beta=beta)

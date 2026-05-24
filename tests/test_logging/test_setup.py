@@ -30,13 +30,13 @@ class TestSetupLogging:
         console_count = sum(1 for b in manager.backends if isinstance(b, ConsoleBackend))
         assert console_count == 1
 
-    @patch("xaytune.logging.TensorBoardBackend")
-    def test_tensorboard_added(self, mock_tb_cls):
-        mock_tb_cls.return_value = MagicMock(spec=LoggingBackend)
+    @patch("xaytune.logging._create_tensorboard_backend")
+    def test_tensorboard_added(self, mock_create_tb):
+        mock_create_tb.return_value = MagicMock(spec=LoggingBackend)
         config = LoggingConfig(backends=["console", "tensorboard"])
         cb = CallbackManager()
         setup_logging(config, cb, output_dir="output/test")
-        mock_tb_cls.assert_called_once_with(log_dir="output/test/runs")
+        mock_create_tb.assert_called_once_with(log_dir="output/test/runs")
 
     @patch("xaytune.logging._create_wandb_backend")
     def test_wandb_added(self, mock_create_wandb):

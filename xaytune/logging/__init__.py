@@ -3,7 +3,6 @@ from __future__ import annotations
 from xaytune.config.schema import LoggingConfig
 from xaytune.logging.base import LoggingBackend, LoggingManager
 from xaytune.logging.console import ConsoleBackend
-from xaytune.logging.tensorboard import TensorBoardBackend
 from xaytune.trainer.callbacks import CallbackManager
 
 _BACKEND_NAMES = {"console", "tensorboard", "wandb", "mlflow"}
@@ -13,6 +12,12 @@ def _create_wandb_backend(project: str, run_name: str | None) -> LoggingBackend:
     from xaytune.logging.wandb import WandbBackend
 
     return WandbBackend(project=project, run_name=run_name)
+
+
+def _create_tensorboard_backend(log_dir: str) -> LoggingBackend:
+    from xaytune.logging.tensorboard import TensorBoardBackend
+
+    return TensorBoardBackend(log_dir=log_dir)
 
 
 def _create_mlflow_backend(run_name: str | None) -> LoggingBackend:
@@ -36,7 +41,7 @@ def setup_logging(
         if name == "console":
             continue
         if name == "tensorboard":
-            manager.add_backend(TensorBoardBackend(log_dir=f"{output_dir}/runs"))
+            manager.add_backend(_create_tensorboard_backend(log_dir=f"{output_dir}/runs"))
         elif name == "wandb":
             manager.add_backend(
                 _create_wandb_backend(
@@ -60,5 +65,4 @@ __all__ = [
     "LoggingBackend",
     "LoggingManager",
     "setup_logging",
-    "TensorBoardBackend",
 ]

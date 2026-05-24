@@ -25,6 +25,45 @@ def finetune(
     resume_from: str | None = None,
     **kwargs: Any,
 ) -> TrainState:
+    """Fine-tune a pretrained language model on a supervised dataset.
+
+    Accepts either a fully specified ``TrainConfig`` or individual arguments
+    for quick one-liner usage.  Extra ``**kwargs`` that match
+    ``TrainerConfig`` fields (e.g. ``max_steps``, ``mixed_precision``) are
+    forwarded automatically.
+
+    Args:
+        config: Complete training configuration. When provided, all other
+            arguments except ``resume_from`` are ignored.
+        model: HuggingFace model name or local path (e.g. ``"meta-llama/Llama-3-8B"``).
+        dataset: Path to a JSONL training file or HuggingFace dataset name.
+        method: Fine-tuning method — ``"full"``, ``"lora"``, or ``"qlora"``.
+        format: Data format — ``"alpaca"``, ``"sharegpt"``, ``"chat"``, or ``"text"``.
+        num_epochs: Number of training epochs.
+        learning_rate: Peak learning rate.
+        batch_size: Per-device batch size.
+        resume_from: Path to a checkpoint directory to resume from.
+        **kwargs: Additional ``TrainerConfig`` fields (``max_steps``,
+            ``mixed_precision``, ``scheduler``, ``warmup_steps``, etc.).
+
+    Returns:
+        Final training state with loss, global step count, and other metrics.
+
+    Raises:
+        ValueError: If neither ``config`` nor both ``model`` and ``dataset``
+            are provided.
+
+    Example::
+
+        state = trainlib.finetune(
+            model="meta-llama/Llama-3-8B",
+            dataset="data/train.jsonl",
+            method="lora",
+            num_epochs=3,
+            max_steps=100,
+        )
+        print(f"Final loss: {state.metrics['loss']:.4f}")
+    """
     if config is None:
         if model is None or dataset is None:
             raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")

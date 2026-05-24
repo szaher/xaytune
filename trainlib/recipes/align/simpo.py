@@ -13,6 +13,7 @@ def simpo_loss(
     beta: float = 2.0,
     gamma: float = 0.5,
 ) -> torch.Tensor:
+    """Compute Simple Preference Optimization loss (Meng et al., 2024)."""
     chosen_avg = policy_chosen_logps / chosen_lengths.float()
     rejected_avg = policy_rejected_logps / rejected_lengths.float()
 

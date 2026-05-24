@@ -7,6 +7,7 @@ from trainlib.data.registry import format_registry
 
 @format_registry.register("alpaca")
 def format_alpaca(sample: dict[str, Any]) -> dict[str, str]:
+    """Format an Alpaca-style sample (instruction/input/output) into ``{"text": ...}``."""
     instruction = sample.get("instruction", "")
     input_text = sample.get("input", "")
     output = sample.get("output", "")
@@ -22,6 +23,7 @@ def format_alpaca(sample: dict[str, Any]) -> dict[str, str]:
 
 @format_registry.register("sharegpt")
 def format_sharegpt(sample: dict[str, Any]) -> dict[str, str]:
+    """Format a ShareGPT-style multi-turn conversation into ``{"text": ...}``."""
     conversations = sample.get("conversations", [])
     parts = []
     for turn in conversations:
@@ -38,6 +40,7 @@ def format_sharegpt(sample: dict[str, Any]) -> dict[str, str]:
 
 @format_registry.register("chat")
 def format_chat(sample: dict[str, Any]) -> dict[str, str]:
+    """Format an OpenAI-style chat messages list into ``{"text": ...}``."""
     messages = sample.get("messages", [])
     parts = []
     for msg in messages:
@@ -49,6 +52,7 @@ def format_chat(sample: dict[str, Any]) -> dict[str, str]:
 
 @format_registry.register("text")
 def format_text(sample: dict[str, Any]) -> dict[str, str]:
+    """Pass through a raw text sample as ``{"text": ...}``."""
     text = sample.get("text", sample.get("content", ""))
     return {"text": text}
 
@@ -59,6 +63,7 @@ def apply_chat_template(
     *,
     format: str = "chat",
 ) -> dict[str, str]:
+    """Apply the tokenizer's chat template to a conversation sample."""
     if format == "sharegpt":
         role_map = {"human": "user", "gpt": "assistant"}
         conversations = sample.get("conversations", [])

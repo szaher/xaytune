@@ -13,6 +13,16 @@ def evaluate(
     dataset: list[dict[str, Any]],
     metrics: list[str] | None = None,
 ) -> dict[str, float]:
+    """Evaluate a model on a list of batches and compute metrics.
+
+    Args:
+        model: A model instance or HuggingFace model name string.
+        dataset: List of batch dicts (each passable to ``model(**batch)``).
+        metrics: Metric names to compute (default: ``["loss", "perplexity"]``).
+
+    Returns:
+        Dict mapping metric names to computed values.
+    """
     if metrics is None:
         metrics = ["loss", "perplexity"]
 

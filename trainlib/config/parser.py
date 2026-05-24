@@ -10,6 +10,7 @@ from trainlib.config.schema import TrainConfig
 
 
 def merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge *override* into *base*, returning a new dict."""
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -38,6 +39,7 @@ def _parse_value(value: str) -> Any:
 
 
 def apply_overrides(data: dict[str, Any], overrides: list[str]) -> dict[str, Any]:
+    """Apply dot-notation CLI overrides (e.g. ``"trainer.lr=1e-4"``) to a config dict."""
     result = copy.deepcopy(data)
     for override in overrides:
         key, _, value = override.partition("=")
@@ -71,6 +73,19 @@ def load_config(
     path: str,
     overrides: list[str] | None = None,
 ) -> TrainConfig:
+    """Load a YAML config file, resolve inheritance, and apply CLI overrides.
+
+    Args:
+        path: Path to a YAML configuration file.
+        overrides: Optional list of ``"key.subkey=value"`` strings.
+
+    Returns:
+        A validated :class:`~trainlib.config.schema.TrainConfig`.
+
+    Raises:
+        FileNotFoundError: If the config file (or a base it inherits from)
+            does not exist.
+    """
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")

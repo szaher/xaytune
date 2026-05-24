@@ -9,6 +9,20 @@ def pack_sequences(
     max_seq_length: int,
     pad_token_id: int,
 ) -> list[dict[str, list[int]]]:
+    """Pack multiple short sequences into fixed-length blocks to reduce padding.
+
+    Concatenates tokenized samples end-to-end and splits at
+    *max_seq_length* boundaries.  Remaining space is padded with
+    *pad_token_id* (labels use ``-100``).
+
+    Args:
+        sequences: Tokenized samples, each with ``"input_ids"`` keys.
+        max_seq_length: Target sequence length for packed blocks.
+        pad_token_id: Token id used for input padding.
+
+    Returns:
+        Packed samples with ``input_ids``, ``attention_mask``, and ``labels``.
+    """
     if not sequences:
         return []
 

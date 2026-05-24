@@ -17,6 +17,7 @@ def register_eval_callbacks(
     metrics: list[str],
     is_main_process: bool = True,
 ) -> None:
+    """Register a ``step_end`` callback that runs evaluation every N steps."""
     @callback_manager.on("step_end")
     def _periodic_eval(state: TrainState) -> None:
         if not is_main_process:

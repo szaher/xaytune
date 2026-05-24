@@ -11,6 +11,17 @@ def to_gguf(
     output: str,
     quantization: str = "Q4_K_M",
 ) -> None:
+    """Convert a HuggingFace model to GGUF format via llama.cpp.
+
+    Args:
+        model_path: Path to a saved HuggingFace model directory.
+        output: Destination path for the ``.gguf`` file.
+        quantization: Quantization scheme (default ``"Q4_K_M"``).
+
+    Raises:
+        FileNotFoundError: If *model_path* does not exist.
+        RuntimeError: If the conversion subprocess fails.
+    """
     model_dir = Path(model_path)
     if not model_dir.exists():
         raise FileNotFoundError(f"Model directory not found: {model_path}")

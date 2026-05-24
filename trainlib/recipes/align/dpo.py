@@ -12,6 +12,7 @@ def dpo_loss(
     ref_rejected_logps: torch.Tensor,
     beta: float = 0.1,
 ) -> torch.Tensor:
+    """Compute Direct Preference Optimization loss (Rafailov et al., 2023)."""
     chosen_rewards = beta * (policy_chosen_logps - ref_chosen_logps)
     rejected_rewards = beta * (policy_rejected_logps - ref_rejected_logps)
 

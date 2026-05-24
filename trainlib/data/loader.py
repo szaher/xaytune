@@ -67,6 +67,27 @@ def load_dataset(
     tokenizer: Any | None = None,
     **kwargs: Any,
 ) -> list[dict] | tuple[list[dict], list[dict]]:
+    """Load and format a dataset from a local JSONL file or HuggingFace Hub.
+
+    Each sample is run through the registered format function (``"alpaca"``,
+    ``"sharegpt"``, ``"chat"``, ``"text"``, ``"preference"``), converting
+    raw fields into a ``{"text": "..."}`` dict ready for tokenization.
+
+    Args:
+        path: Local file path or HuggingFace dataset name.
+        format: Format name registered in the format registry.
+        source: ``"local"`` or ``"huggingface"``.
+        streaming: Stream from HuggingFace instead of downloading.
+        eval_split: Fraction to hold out for evaluation (0 = no split).
+        tokenizer: Optional tokenizer for chat template application.
+
+    Returns:
+        A list of formatted samples, or a ``(train, eval)`` tuple when
+        ``eval_split > 0``.
+
+    Raises:
+        FileNotFoundError: If *source* is ``"local"`` and *path* doesn't exist.
+    """
     if source == "huggingface":
         return _load_huggingface(
             path, format=format, streaming=streaming, eval_split=eval_split,

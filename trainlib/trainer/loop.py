@@ -15,6 +15,13 @@ from trainlib.trainer.scheduler import create_scheduler, resolve_warmup_steps
 
 
 class Trainer:
+    """Core training loop with mixed precision, gradient accumulation, and callbacks.
+
+    Handles optimizer creation, learning rate scheduling, AMP autocast/scaler,
+    gradient clipping, and checkpoint resume.  Fires callback events at each
+    lifecycle point so evaluation, logging, and checkpointing are pluggable.
+    """
+
     def __init__(
         self,
         config: TrainerConfig,

@@ -30,6 +30,47 @@ def align(
     resume_from: str | None = None,
     **kwargs: Any,
 ) -> TrainState:
+    """Align a language model using preference-based or RL methods.
+
+    Supports DPO, SimPO, ORPO, PPO, GRPO, and REINFORCE.  A frozen
+    reference model is created automatically for methods that need one.
+    Method-specific hyperparameters (``beta``, ``kl_coeff``, etc.) are
+    extracted from ``**kwargs`` and forwarded to the loss function.
+
+    Args:
+        config: Complete training configuration. When provided, all other
+            arguments except ``resume_from`` are ignored.
+        model: HuggingFace model name or local path.
+        dataset: Path to a preference JSONL file (each line:
+            ``{"prompt": "...", "chosen": "...", "rejected": "..."}``).
+        method: Alignment method — ``"dpo"``, ``"simpo"``, ``"orpo"``,
+            ``"ppo"``, ``"grpo"``, or ``"reinforce"``.
+        format: Data format — ``"preference"`` for paired data.
+        num_epochs: Number of training epochs.
+        learning_rate: Peak learning rate.
+        batch_size: Per-device batch size.
+        resume_from: Path to a checkpoint directory to resume from.
+        **kwargs: Method hyperparameters (``beta``, ``kl_coeff``,
+            ``lambda_weight``, ``gamma``, ``clip_eps``) and any extra
+            ``TrainerConfig`` fields.
+
+    Returns:
+        Final training state with loss, global step count, and other metrics.
+
+    Raises:
+        ValueError: If neither ``config`` nor both ``model`` and ``dataset``
+            are provided.
+
+    Example::
+
+        state = trainlib.align(
+            model="meta-llama/Llama-3-8B",
+            dataset="data/prefs.jsonl",
+            method="dpo",
+            beta=0.1,
+            max_steps=200,
+        )
+    """
     if config is None:
         if model is None or dataset is None:
             raise ValueError(

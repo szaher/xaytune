@@ -24,6 +24,42 @@ def pretrain(
     resume_from: str | None = None,
     **kwargs: Any,
 ) -> TrainState:
+    """Pre-train a language model on raw text with a causal LM objective.
+
+    Accepts either a fully specified ``TrainConfig`` or individual arguments
+    for quick one-liner usage.  Extra ``**kwargs`` that match
+    ``TrainerConfig`` fields are forwarded automatically.
+
+    Args:
+        config: Complete training configuration. When provided, all other
+            arguments except ``resume_from`` are ignored.
+        model: HuggingFace model name or local path.
+        dataset: Path to a JSONL corpus file (each line: ``{"text": "..."}``)
+            or a HuggingFace dataset name.
+        format: Data format — typically ``"text"`` for pre-training.
+        num_epochs: Number of training epochs.
+        learning_rate: Peak learning rate.
+        batch_size: Per-device batch size.
+        resume_from: Path to a checkpoint directory to resume from.
+        **kwargs: Additional ``TrainerConfig`` fields (``max_steps``,
+            ``mixed_precision``, ``scheduler``, etc.).
+
+    Returns:
+        Final training state with loss, global step count, and other metrics.
+
+    Raises:
+        ValueError: If neither ``config`` nor both ``model`` and ``dataset``
+            are provided.
+
+    Example::
+
+        state = trainlib.pretrain(
+            model="gpt2",
+            dataset="data/corpus.jsonl",
+            num_epochs=1,
+            max_steps=1000,
+        )
+    """
     if config is None:
         if model is None or dataset is None:
             raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")

@@ -31,6 +31,19 @@ from trainlib.trainer.progress import register_progress_callbacks
 
 
 class TrainingComponents(NamedTuple):
+    """Container for all objects created by :func:`setup_training`.
+
+    Attributes:
+        model: The model, potentially wrapped for distributed training.
+        tokenizer: The associated tokenizer.
+        train_dataloader: DataLoader for training data.
+        eval_dataloader: DataLoader for evaluation data, or ``None``.
+        trainer: Configured :class:`~trainlib.trainer.Trainer` instance.
+        distributed_ctx: Distributed context (rank, world size, device).
+        resume_state: Restored :class:`~trainlib.trainer.callbacks.TrainState`
+            when resuming from a checkpoint, otherwise ``None``.
+    """
+
     model: Any
     tokenizer: Any
     train_dataloader: DataLoader
@@ -45,6 +58,23 @@ def setup_training(
     callback_manager: CallbackManager | None = None,
     resume_from: str | None = None,
 ) -> TrainingComponents:
+    """Build the full training pipeline from a configuration object.
+
+    Handles model loading, LoRA/QLoRA application, tokenization, data
+    packing, distributed setup, and callback registration (eval, checkpoints,
+    early stopping, progress bar, logging).  Returns a
+    :class:`TrainingComponents` tuple ready for ``components.trainer.train()``.
+
+    Args:
+        config: Complete training configuration.
+        callback_manager: Optional pre-configured callback manager.
+            A new one is created if not provided.
+        resume_from: Path to a checkpoint directory to resume from.
+
+    Returns:
+        A :class:`TrainingComponents` with the model, data loaders, trainer,
+        and optional resume state.
+    """
     # Set random seeds for reproducibility
     seed_all(config.trainer.seed)
 

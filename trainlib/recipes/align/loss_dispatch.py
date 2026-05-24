@@ -27,6 +27,7 @@ def _has_alignment_fields(method: str, batch: dict[str, Any]) -> bool:
 
 
 def is_alignment_method(method: str) -> bool:
+    """Return whether *method* is a known alignment method."""
     return method in ALIGNMENT_METHODS
 
 
@@ -40,6 +41,11 @@ def create_alignment_loss_fn(
     gamma: float = 0.5,
     clip_eps: float = 0.2,
 ) -> Callable[..., torch.Tensor]:
+    """Create a loss function for the given alignment method.
+
+    Returns a callable ``(model, batch, outputs) -> loss`` that handles
+    forward passes on chosen/rejected pairs and reference model inference.
+    """
     def loss_fn(
         model: Any,
         batch: dict[str, Any],

@@ -6,6 +6,15 @@ from typing import Any
 
 
 def merge(checkpoint_path: str, *, save_to: str) -> None:
+    """Merge LoRA/QLoRA adapter weights into the base model and save.
+
+    Args:
+        checkpoint_path: Path to a PEFT checkpoint directory.
+        save_to: Directory where the merged model and tokenizer are saved.
+
+    Raises:
+        ValueError: If the checkpoint is not a PEFT model.
+    """
     from trainlib.models import load_model
 
     model_result = load_model(checkpoint_path)
@@ -30,6 +39,14 @@ def save(
     output_dir: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    """Save a model, tokenizer, and optional metadata to disk.
+
+    Args:
+        model: A HuggingFace model instance.
+        tokenizer: The associated tokenizer.
+        output_dir: Directory to write files to (created if missing).
+        metadata: Optional dict written as ``trainlib_metadata.json``.
+    """
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
 

@@ -19,6 +19,7 @@ def register_early_stopping_callbacks(
     metric: str,
     min_delta: float = 0.0,
 ) -> None:
+    """Register an ``eval_end`` callback that stops training if *metric* doesn't improve."""
     mode = _infer_mode(metric)
     best: dict[str, Any] = {
         "value": math.inf if mode == "min" else -math.inf,

@@ -8,7 +8,7 @@ from trainlib.config.schema import TrainConfig
 
 
 class ConfigValidationError(Exception):
-    pass
+    """Raised when a :class:`~trainlib.config.schema.TrainConfig` has invalid field combinations."""
 
 
 _FINETUNE_METHODS = {"full", "lora", "qlora"}
@@ -25,6 +25,14 @@ _KNOWN_METHOD_PARAMS: dict[str, set[str]] = {
 
 
 def validate_config(config: TrainConfig) -> None:
+    """Validate cross-field constraints on a training configuration.
+
+    Checks recipe/method compatibility, mutual exclusivity of warmup
+    settings, quantization requirements, and method_params validity.
+
+    Raises:
+        ConfigValidationError: With a list of all detected issues.
+    """
     errors: list[str] = []
 
     if config.method == "qlora" and config.model.quantization != "4bit":
@@ -97,6 +105,15 @@ def validate_config(config: TrainConfig) -> None:
 
 
 def preflight_check(config: TrainConfig) -> list[str]:
+    """Run environment-aware checks before training starts.
+
+    Verifies GPU availability for quantization and mixed precision,
+    checks that data paths exist, and validates output directory
+    write permissions.
+
+    Returns:
+        List of warning/issue strings (empty if everything looks good).
+    """
     issues: list[str] = []
 
     try:

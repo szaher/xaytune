@@ -21,6 +21,18 @@ VALID_EVENTS = {
 
 @dataclass
 class TrainState:
+    """Mutable training state passed to every callback.
+
+    Attributes:
+        step: Current step within the epoch.
+        epoch: Current epoch index.
+        global_step: Total optimizer steps taken across all epochs.
+        num_epochs: Total number of epochs configured.
+        max_steps: Step limit (``-1`` = unlimited).
+        metrics: Dict of latest metrics (``loss``, ``eval_loss``, ``learning_rate``, etc.).
+        should_stop: Set to ``True`` to stop training after the current step.
+    """
+
     step: int = 0
     epoch: int = 0
     global_step: int = 0
@@ -44,6 +56,14 @@ class TrainState:
 
 
 class CallbackManager:
+    """Registry for event-driven training callbacks.
+
+    Register handlers with the :meth:`on` decorator and trigger them
+    with :meth:`fire`.  Supported events: ``train_start``, ``train_end``,
+    ``epoch_start``, ``epoch_end``, ``step_start``, ``step_end``,
+    ``eval_start``, ``eval_end``, ``checkpoint_saved``, ``error``.
+    """
+
     def __init__(self) -> None:
         self._callbacks: dict[str, list[Callable]] = defaultdict(list)
 

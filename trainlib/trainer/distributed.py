@@ -11,6 +11,8 @@ from trainlib.trainer.device import get_device
 
 @dataclass
 class DistributedContext:
+    """Process-level distributed training state (rank, world size, device)."""
+
     rank: int = 0
     world_size: int = 1
     local_rank: int = 0
@@ -29,12 +31,14 @@ class DistributedContext:
 
 
 def get_strategy(strategy: str, world_size: int = 1) -> str:
+    """Resolve ``"auto"`` strategy to ``"fsdp"`` (multi-GPU) or ``"none"`` (single)."""
     if strategy == "auto":
         return "fsdp" if world_size > 1 else "none"
     return strategy
 
 
 def init_distributed() -> DistributedContext:
+    """Initialize distributed training from environment variables (``RANK``, ``WORLD_SIZE``)."""
     rank = int(os.environ.get("RANK", "0"))
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -52,6 +56,7 @@ def init_distributed() -> DistributedContext:
 
 
 def cleanup_distributed(ctx: DistributedContext) -> None:
+    """Destroy the process group if distributed training is active."""
     if not ctx.is_distributed:
         return
     import torch.distributed as dist
@@ -70,6 +75,7 @@ def wrap_model_distributed(
     mixed_precision: str = "bf16",
     **kwargs: Any,
 ) -> Any:
+    """Wrap a model with the chosen distributed strategy (DDP, FSDP, or DeepSpeed)."""
     if strategy == "none":
         return model
 

@@ -17,6 +17,7 @@ def register_checkpoint_callbacks(
     is_main_process: bool = True,
     async_saver: Any | None = None,
 ) -> None:
+    """Register periodic and final checkpoint callbacks on the training loop."""
     last_saved_step: dict[str, int] = {"step": -1}
 
     def _get_optimizer() -> Any:

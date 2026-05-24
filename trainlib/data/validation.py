@@ -6,7 +6,7 @@ import torch
 
 
 class DataValidationError(ValueError):
-    pass
+    """Raised when a data batch fails validation checks."""
 
 
 def validate_batch(
@@ -14,6 +14,10 @@ def validate_batch(
     *,
     max_seq_length: int = 0,
 ) -> list[str]:
+    """Check a single batch dict for common data issues.
+
+    Returns a list of human-readable issue strings (empty = valid).
+    """
     issues: list[str] = []
 
     if not isinstance(batch, dict):
@@ -65,6 +69,11 @@ def validate_dataset_sample(
     *,
     max_seq_length: int = 0,
 ) -> None:
+    """Draw one batch from a dataloader and validate it.
+
+    Raises:
+        DataValidationError: If the dataset is empty or the batch has issues.
+    """
     try:
         batch = next(iter(dataloader))
     except StopIteration:

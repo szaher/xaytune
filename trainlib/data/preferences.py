@@ -11,6 +11,7 @@ _REQUIRED_FIELDS = {"prompt", "chosen", "rejected"}
 
 @format_registry.register("preference")
 def format_preference(sample: dict[str, Any]) -> dict[str, str]:
+    """Extract prompt/chosen/rejected fields from a preference sample."""
     return {
         "prompt": sample["prompt"],
         "chosen": sample["chosen"],
@@ -23,6 +24,20 @@ def load_preference_dataset(
     *,
     eval_split: float = 0.0,
 ) -> list[dict] | tuple[list[dict], list[dict]]:
+    """Load a preference JSONL file with prompt/chosen/rejected fields.
+
+    Args:
+        path: Path to a JSONL file where each line has ``prompt``,
+            ``chosen``, and ``rejected`` fields.
+        eval_split: Fraction to hold out for evaluation.
+
+    Returns:
+        Formatted samples, or a ``(train, eval)`` tuple.
+
+    Raises:
+        FileNotFoundError: If *path* doesn't exist.
+        ValueError: If any row is missing required fields.
+    """
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"Preference dataset not found: {path}")

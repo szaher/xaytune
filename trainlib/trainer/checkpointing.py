@@ -18,6 +18,11 @@ def save_checkpoint(
     scheduler: Any | None = None,
     scaler: Any | None = None,
 ) -> None:
+    """Save model, optimizer, scheduler, and scaler state to *output_dir*.
+
+    Writes ``model.pt``, ``optimizer.pt``, optional ``scheduler.pt`` and
+    ``scaler.pt``, plus a ``metadata.json`` with step/epoch/metrics.
+    """
     ckpt_path = Path(output_dir)
     ckpt_path.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +55,14 @@ def load_checkpoint(
     scheduler: Any | None = None,
     scaler: Any | None = None,
 ) -> TrainState:
+    """Restore model, optimizer, and training state from a checkpoint directory.
+
+    Returns a :class:`~trainlib.trainer.callbacks.TrainState` with the
+    saved step, epoch, and metrics so training can resume.
+
+    Raises:
+        FileNotFoundError: If *checkpoint_dir* doesn't exist.
+    """
     ckpt_path = Path(checkpoint_dir)
     if not ckpt_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_dir}")
@@ -90,6 +103,7 @@ def load_checkpoint(
 
 
 def find_latest_checkpoint(output_dir: str) -> str | None:
+    """Find the checkpoint with the highest global_step in *output_dir*."""
     base = Path(output_dir)
     if not base.exists():
         return None

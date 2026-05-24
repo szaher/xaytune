@@ -4,6 +4,7 @@ import torch
 
 
 def compute_group_advantages(rewards: torch.Tensor) -> torch.Tensor:
+    """Normalize rewards to zero-mean unit-variance advantages."""
     if rewards.numel() <= 1:
         return torch.zeros_like(rewards)
 
@@ -23,6 +24,7 @@ def grpo_loss(
     advantages: torch.Tensor,
     kl_coeff: float = 0.04,
 ) -> torch.Tensor:
+    """Compute Group Relative Policy Optimization loss (Shao et al., 2024)."""
     policy_loss = -(logprobs * advantages).mean()
 
     kl = (logprobs - ref_logprobs).mean()

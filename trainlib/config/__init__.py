@@ -17,6 +17,7 @@ from trainlib.config.validation import ConfigValidationError, preflight_check, v
 
 
 def get_defaults_dir() -> Path:
+    """Return the path to the built-in default YAML config directory."""
     return Path(__file__).parent / "defaults"
 
 

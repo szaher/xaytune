@@ -10,6 +10,8 @@ from trainlib.trainer.checkpointing import save_checkpoint
 
 
 class AsyncCheckpointSaver:
+    """Write checkpoints in a background thread to avoid blocking training."""
+
     def __init__(self) -> None:
         self._thread: threading.Thread | None = None
         self._error: BaseException | None = None

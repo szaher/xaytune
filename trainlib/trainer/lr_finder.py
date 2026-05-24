@@ -10,6 +10,14 @@ import torch
 
 @dataclasses.dataclass
 class LRFinderResult:
+    """Result of an LR range test.
+
+    Attributes:
+        lrs: Learning rates tested.
+        losses: Raw loss values at each LR.
+        suggested_lr: Recommended LR (steepest descent point).
+    """
+
     lrs: list[float]
     losses: list[float]
     suggested_lr: float | None
@@ -49,6 +57,26 @@ def lr_find(
     divergence_threshold: float = 4.0,
     loss_fn: Any | None = None,
 ) -> LRFinderResult:
+    """Run an LR range test to find the optimal learning rate.
+
+    Trains with exponentially increasing LR from *start_lr* to *end_lr*,
+    tracking loss.  Stops early if loss diverges.  Model weights are
+    restored to their original state afterward.
+
+    Args:
+        model: The model to test.
+        train_dataloader: Training data loader.
+        start_lr: Starting learning rate.
+        end_lr: Maximum learning rate to test.
+        num_iterations: Number of training iterations.
+        smoothing_factor: Exponential smoothing for loss curve.
+        divergence_threshold: Stop when smoothed loss exceeds this
+            multiple of the best smoothed loss.
+        loss_fn: Optional custom loss function ``(model, batch, outputs) -> loss``.
+
+    Returns:
+        :class:`LRFinderResult` with tested LRs, losses, and a suggestion.
+    """
     if not train_dataloader:
         raise ValueError("train_dataloader must not be empty")
 

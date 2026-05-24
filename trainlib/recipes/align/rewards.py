@@ -9,6 +9,7 @@ register_reward = reward_registry.register
 
 @register_reward("default")
 def default_reward(prompt: str, response: str) -> float:
+    """Baseline reward that always returns 0."""
     return 0.0
 
 
@@ -20,6 +21,7 @@ def length_penalty_reward(
     target_length: int = 200,
     penalty_scale: float = 0.001,
 ) -> float:
+    """Penalize responses that deviate from *target_length* characters."""
     diff = abs(len(response) - target_length)
     return -penalty_scale * diff
 
@@ -31,6 +33,7 @@ def format_check_reward(
     *,
     required_markers: list[str] | None = None,
 ) -> float:
+    """Reward based on the fraction of *required_markers* present in the response."""
     if required_markers is None:
         required_markers = []
     if not required_markers:
@@ -47,6 +50,7 @@ def composite_reward(
     reward_names: list[str] | None = None,
     weights: list[float] | None = None,
 ) -> float:
+    """Weighted combination of multiple registered reward functions."""
     if not reward_names:
         return 0.0
     if weights is None:

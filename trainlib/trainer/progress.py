@@ -11,6 +11,7 @@ def register_progress_callbacks(
     total_steps: int,
     is_main_process: bool = True,
 ) -> None:
+    """Register callbacks that display a Rich progress bar during training."""
     if not is_main_process:
         return
 

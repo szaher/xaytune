@@ -12,6 +12,20 @@ def tokenize_dataset(
     tokenizer: Any,
     max_seq_length: int = 0,
 ) -> list[dict[str, list[int]]]:
+    """Tokenize formatted samples into input_ids/labels/attention_mask dicts.
+
+    If samples already contain ``"input_ids"``, returns them unchanged.
+    Empty texts and empty encodings are filtered out.
+
+    Args:
+        data: Formatted samples, each with a ``"text"`` key.
+        tokenizer: A HuggingFace tokenizer.
+        max_seq_length: Maximum sequence length (0 = use tokenizer default).
+
+    Returns:
+        List of dicts with ``input_ids``, ``labels``, and ``attention_mask``
+        (all ``list[int]``).
+    """
     if not data:
         return []
 
@@ -54,6 +68,21 @@ def tokenize_preference_dataset(
     tokenizer: Any,
     max_seq_length: int = 0,
 ) -> list[dict[str, list[int]]]:
+    """Tokenize preference pairs into chosen/rejected input_ids and masks.
+
+    Concatenates ``prompt + chosen`` and ``prompt + rejected`` before
+    tokenizing.  If samples already contain ``"chosen_input_ids"``, returns
+    them unchanged.  Pairs with empty chosen or rejected text are skipped.
+
+    Args:
+        data: Preference samples with ``prompt``, ``chosen``, ``rejected``.
+        tokenizer: A HuggingFace tokenizer.
+        max_seq_length: Maximum sequence length (0 = use tokenizer default).
+
+    Returns:
+        List of dicts with ``chosen_input_ids``, ``chosen_attention_mask``,
+        ``rejected_input_ids``, and ``rejected_attention_mask``.
+    """
     if not data:
         return []
 
@@ -107,6 +136,19 @@ def collate_preference(
     batch: list[dict[str, Any]],
     pad_token_id: int = 0,
 ) -> dict[str, torch.Tensor]:
+    """Collate tokenized preference pairs into padded tensors.
+
+    Pads chosen and rejected sequences independently to their respective
+    max lengths within the batch.
+
+    Args:
+        batch: List of tokenized preference dicts.
+        pad_token_id: Token id for input padding (masks use 0).
+
+    Returns:
+        Dict with ``chosen_input_ids``, ``chosen_attention_mask``,
+        ``rejected_input_ids``, and ``rejected_attention_mask`` tensors.
+    """
     result: dict[str, torch.Tensor] = {}
 
     for prefix in ("chosen", "rejected"):
@@ -140,6 +182,18 @@ def collate_tokenized(
     batch: list[dict[str, Any]],
     pad_token_id: int = 0,
 ) -> dict[str, torch.Tensor]:
+    """Collate tokenized samples into padded tensors for model input.
+
+    Pads all sequences to the longest in the batch.  Labels are padded
+    with ``-100`` (cross-entropy ignore index).
+
+    Args:
+        batch: List of tokenized dicts with ``input_ids`` keys.
+        pad_token_id: Token id for input padding (masks use 0).
+
+    Returns:
+        Dict with ``input_ids``, ``labels``, and ``attention_mask`` tensors.
+    """
     max_len = max(len(sample["input_ids"]) for sample in batch)
 
     input_ids = []

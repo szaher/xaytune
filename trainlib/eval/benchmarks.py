@@ -14,6 +14,20 @@ def benchmark_evaluate(
     benchmarks: list[str],
     num_fewshot: int | None = None,
 ) -> dict[str, dict[str, Any]]:
+    """Run lm-eval-harness benchmarks against a HuggingFace model.
+
+    Args:
+        model: HuggingFace model name or local path.
+        benchmarks: Benchmark task names (e.g. ``["mmlu", "gsm8k"]``).
+        num_fewshot: Number of few-shot examples. ``None`` uses each
+            benchmark's default.
+
+    Returns:
+        Dict mapping benchmark names to their result dicts.
+
+    Raises:
+        ImportError: If ``lm-eval`` is not installed.
+    """
     if lm_eval is None:
         raise ImportError(
             "lm-eval is required for benchmark evaluation. "

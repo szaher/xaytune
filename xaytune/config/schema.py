@@ -241,6 +241,42 @@ class DeepSpeedConfig(BaseModel):
     stage3_param_persistence_threshold: int = 100_000
 
 
+class GenerationConfig(BaseModel):
+    """Generation parameters for online RL alignment.
+
+    Attributes:
+        max_new_tokens: Maximum tokens to generate per completion.
+        temperature: Sampling temperature (higher = more random).
+        top_p: Nucleus sampling threshold.
+        top_k: Top-k sampling (0 = disabled).
+        do_sample: Use sampling vs greedy decoding.
+        group_size: Completions per prompt (>1 for GRPO group sampling).
+    """
+
+    max_new_tokens: int = 256
+    temperature: float = 1.0
+    top_p: float = 1.0
+    top_k: int = 0
+    do_sample: bool = True
+    group_size: int = 4
+
+
+class OnlineRLConfig(BaseModel):
+    """Online RL configuration for generating completions during training.
+
+    Attributes:
+        enabled: Enable online generation (vs pre-computed advantages).
+        generation: Generation parameters.
+        reward_name: Registered reward function name.
+        reward_kwargs: Extra keyword arguments for the reward function.
+    """
+
+    enabled: bool = False
+    generation: GenerationConfig = GenerationConfig()
+    reward_name: str = "default"
+    reward_kwargs: dict[str, Any] = {}
+
+
 class TrainConfig(BaseModel):
     """Top-level training configuration combining all sub-configs.
 
@@ -275,6 +311,7 @@ class TrainConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     output: OutputConfig = OutputConfig()
     method_params: dict[str, Any] = {}
+    online_rl: OnlineRLConfig = OnlineRLConfig()
     fsdp: FSDPConfig = FSDPConfig()
     deepspeed_config: DeepSpeedConfig = DeepSpeedConfig()
 

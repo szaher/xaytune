@@ -1,0 +1,37 @@
+# Online GRPO alignment example (generates completions during training)
+# Usage: xaytune train --config configs/examples/grpo_online.yaml
+recipe: align
+method: grpo
+
+method_params:
+  kl_coeff: 0.04
+
+online_rl:
+  enabled: true
+  generation:
+    max_new_tokens: 256
+    temperature: 0.7
+    group_size: 4
+  reward_name: format_check
+  reward_kwargs:
+    required_markers: ["##", "```"]
+
+model:
+  name: output/sft-model
+
+data:
+  path: data/prompts.jsonl
+  format: preference
+
+trainer:
+  batch_size: 2
+  gradient_accumulation: 8
+  learning_rate: 1e-6
+  num_epochs: 1
+
+logging:
+  backends: [console, tensorboard]
+  project: grpo-online
+
+output:
+  dir: output/grpo-online

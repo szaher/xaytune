@@ -6,9 +6,11 @@ import torch
 
 from xaytune.data.tokenizer import (
     collate_preference,
+    collate_prompt,
     collate_tokenized,
     tokenize_dataset,
     tokenize_preference_dataset,
+    tokenize_prompt_dataset,
 )
 
 
@@ -339,3 +341,61 @@ class TestCollatePreference:
             "rejected_input_ids",
             "rejected_attention_mask",
         }
+
+
+class TestTokenizePromptDataset:
+    def test_empty_data(self):
+        assert tokenize_prompt_dataset([], _make_tokenizer()) == []
+
+    def test_passthrough_pretokenized(self):
+        data = [{"prompt_input_ids": [1, 2], "prompt_attention_mask": [1, 1]}]
+        result = tokenize_prompt_dataset(data, _make_tokenizer())
+        assert result is data
+
+    def test_tokenizes_prompts(self):
+        data = [{"prompt": "hello"}, {"prompt": "world"}]
+        result = tokenize_prompt_dataset(data, _make_tokenizer())
+        assert len(result) == 2
+        assert "prompt_input_ids" in result[0]
+        assert "prompt_attention_mask" in result[0]
+
+    def test_skips_empty_prompts(self):
+        data = [{"prompt": ""}, {"prompt": "valid"}]
+        result = tokenize_prompt_dataset(data, _make_tokenizer())
+        assert len(result) == 1
+
+    def test_respects_max_seq_length(self):
+        data = [{"prompt": "hello world foo bar"}]
+        result = tokenize_prompt_dataset(data, _make_tokenizer(), max_seq_length=3)
+        assert len(result[0]["prompt_input_ids"]) <= 3
+
+
+class TestCollatePrompt:
+    def test_pads_to_max_length(self):
+        batch = [
+            {"prompt_input_ids": [1], "prompt_attention_mask": [1]},
+            {"prompt_input_ids": [2, 3], "prompt_attention_mask": [1, 1]},
+        ]
+        result = collate_prompt(batch)
+        assert result["prompt_input_ids"].shape == (2, 2)
+        assert result["prompt_input_ids"][0].tolist() == [1, 0]
+        assert result["prompt_attention_mask"][0].tolist() == [1, 0]
+
+    def test_custom_pad_token(self):
+        batch = [
+            {"prompt_input_ids": [1], "prompt_attention_mask": [1]},
+            {"prompt_input_ids": [2, 3], "prompt_attention_mask": [1, 1]},
+        ]
+        result = collate_prompt(batch, pad_token_id=99)
+        assert result["prompt_input_ids"][0].tolist() == [1, 99]
+
+    def test_returns_tensors(self):
+        batch = [{"prompt_input_ids": [1, 2], "prompt_attention_mask": [1, 1]}]
+        result = collate_prompt(batch)
+        assert isinstance(result["prompt_input_ids"], torch.Tensor)
+        assert result["prompt_input_ids"].dtype == torch.long
+
+    def test_has_two_keys(self):
+        batch = [{"prompt_input_ids": [1], "prompt_attention_mask": [1]}]
+        result = collate_prompt(batch)
+        assert set(result.keys()) == {"prompt_input_ids", "prompt_attention_mask"}

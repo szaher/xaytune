@@ -10,9 +10,11 @@ from xaytune.data.packing import pack_sequences
 from xaytune.data.tokenizer import (
     StreamingTokenizedDataset,
     collate_preference,
+    collate_prompt,
     collate_tokenized,
     tokenize_dataset,
     tokenize_preference_dataset,
+    tokenize_prompt_dataset,
 )
 from xaytune.data.validation import validate_dataset_sample
 from xaytune.models import apply_lora, load_model
@@ -173,9 +175,24 @@ def setup_training(
         )
     else:
         samples: list[dict[str, Any]] = train_data  # type: ignore[assignment]
-        is_preference = samples and "prompt" in samples[0] and "chosen" in samples[0]
 
-        if is_preference:
+        is_prompt_only = (
+            config.online_rl.enabled
+            and samples
+            and "prompt" in samples[0]
+            and "chosen" not in samples[0]
+        )
+        is_preference = (
+            not is_prompt_only and samples and "prompt" in samples[0] and "chosen" in samples[0]
+        )
+
+        if is_prompt_only:
+            train_data = tokenize_prompt_dataset(
+                samples,
+                model_result.tokenizer,
+                max_seq,
+            )
+        elif is_preference:
             train_data = tokenize_preference_dataset(
                 samples,
                 model_result.tokenizer,
@@ -238,8 +255,18 @@ def setup_training(
         and train_data
         and "chosen_input_ids" in train_data[0]
     )
+    is_prompt_only_data = (
+        not is_streaming
+        and isinstance(train_data, list)
+        and train_data
+        and "prompt_input_ids" in train_data[0]
+    )
 
-    if is_preference:
+    if is_prompt_only_data:
+
+        def collate_fn(batch: list, pid: int = pad_id) -> dict:
+            return collate_prompt(batch, pad_token_id=pid)
+    elif is_preference:
 
         def collate_fn(batch: list, pid: int = pad_id) -> dict:
             return collate_preference(batch, pad_token_id=pid)

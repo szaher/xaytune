@@ -76,4 +76,4 @@ class TestExampleConfigs:
 
     def test_ten_examples_total(self):
         examples = list(EXAMPLES_DIR.glob("*.yaml"))
-        assert len(examples) == 10
+        assert len(examples) == 11

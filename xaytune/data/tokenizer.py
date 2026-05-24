@@ -224,6 +224,91 @@ def collate_tokenized(
     }
 
 
+def tokenize_prompt_dataset(
+    data: list[dict[str, Any]],
+    tokenizer: Any,
+    max_seq_length: int = 0,
+) -> list[dict[str, list[int]]]:
+    """Tokenize prompts only for online RL generation.
+
+    Each sample needs a ``"prompt"`` field. Returns prompt token IDs and
+    masks — completions are generated online during training.
+
+    Args:
+        data: Samples with a ``"prompt"`` key.
+        tokenizer: A HuggingFace tokenizer.
+        max_seq_length: Maximum prompt length (0 = use tokenizer default).
+
+    Returns:
+        List of dicts with ``prompt_input_ids`` and ``prompt_attention_mask``.
+    """
+    if not data:
+        return []
+
+    if "prompt_input_ids" in data[0]:
+        return data
+
+    max_length = (
+        max_seq_length if max_seq_length > 0 else getattr(tokenizer, "model_max_length", 1024)
+    )
+
+    tokenized = []
+    for sample in data:
+        prompt = sample.get("prompt", "")
+        if not prompt:
+            continue
+
+        encoded = tokenizer(
+            prompt,
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+            return_attention_mask=True,
+        )
+
+        if not encoded["input_ids"]:
+            continue
+
+        tokenized.append(
+            {
+                "prompt_input_ids": encoded["input_ids"],
+                "prompt_attention_mask": encoded["attention_mask"],
+            }
+        )
+
+    return tokenized
+
+
+def collate_prompt(
+    batch: list[dict[str, Any]],
+    pad_token_id: int = 0,
+) -> dict[str, torch.Tensor]:
+    """Collate tokenized prompts into padded tensors.
+
+    Args:
+        batch: List of dicts with ``prompt_input_ids``.
+        pad_token_id: Token id for padding.
+
+    Returns:
+        Dict with ``prompt_input_ids`` and ``prompt_attention_mask`` tensors.
+    """
+    max_len = max(len(_to_list(sample["prompt_input_ids"])) for sample in batch)
+
+    all_ids = []
+    all_mask = []
+    for sample in batch:
+        ids = _to_list(sample["prompt_input_ids"])
+        pad_len = max_len - len(ids)
+        all_ids.append(ids + [pad_token_id] * pad_len)
+        mask = _to_list(sample.get("prompt_attention_mask", [1] * len(ids)))
+        all_mask.append(mask + [0] * pad_len)
+
+    return {
+        "prompt_input_ids": torch.tensor(all_ids, dtype=torch.long),
+        "prompt_attention_mask": torch.tensor(all_mask, dtype=torch.long),
+    }
+
+
 def tokenize_sample(
     sample: dict[str, Any],
     tokenizer: Any,

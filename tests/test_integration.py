@@ -371,24 +371,30 @@ class TestConfigIntegration:
         assert config.trainer.batch_size == 4  # default
         assert config.trainer.num_epochs == 3  # default
 
-    def test_config_validation_catches_invalid_recipe(self):
-        from pydantic import ValidationError
+    def test_custom_recipe_accepted(self):
+        cfg = TrainConfig(
+            recipe="custom",
+            model=ModelConfig(name="test"),
+            data=DataConfig(path="data.jsonl", format="alpaca"),
+        )
+        assert cfg.recipe == "custom"
 
-        with pytest.raises(ValidationError, match="Input should be"):
+    def test_empty_recipe_rejected(self):
+        with pytest.raises(ValueError, match="non-empty"):
             TrainConfig(
-                recipe="invalid",
+                recipe="",
                 model=ModelConfig(name="test"),
                 data=DataConfig(path="data.jsonl", format="alpaca"),
             )
 
-    def test_config_validation_catches_invalid_method(self):
-        with pytest.raises(ValueError, match="method must be one of"):
-            TrainConfig(
-                recipe="finetune",
-                method="invalid",
-                model=ModelConfig(name="test"),
-                data=DataConfig(path="data.jsonl", format="alpaca"),
-            )
+    def test_custom_method_accepted(self):
+        cfg = TrainConfig(
+            recipe="finetune",
+            method="custom",
+            model=ModelConfig(name="test"),
+            data=DataConfig(path="data.jsonl", format="alpaca"),
+        )
+        assert cfg.method == "custom"
 
 
 class TestEarlyStoppingIntegration:

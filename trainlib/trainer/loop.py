@@ -149,7 +149,7 @@ class Trainer:
                 state.step = step
                 self.callback_manager.fire("step_start", state)
 
-                loss = self._training_step(model, batch, optimizer, state)
+                loss = self.training_step(model, batch, optimizer, state)
                 state.metrics["loss"] = loss
                 state.global_step += 1
 
@@ -168,14 +168,14 @@ class Trainer:
         self.callback_manager.fire("train_end", state)
         return state
 
-    def _move_batch_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
+    def move_batch_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
         device = torch.device(self._device_type)
         return {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
 
-    def _training_step(
+    def training_step(
         self,
         model: Any,
         batch: dict[str, Any],
@@ -183,7 +183,7 @@ class Trainer:
         state: TrainState,
     ) -> float:
         if isinstance(batch, dict):
-            batch = self._move_batch_to_device(batch)
+            batch = self.move_batch_to_device(batch)
 
         # Skip forward pass for preference batches — alignment loss_fn does its own
         skip_forward = (

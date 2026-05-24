@@ -58,6 +58,8 @@ def setup_training(
     config: TrainConfig,
     callback_manager: CallbackManager | None = None,
     resume_from: str | None = None,
+    model: Any | None = None,
+    tokenizer: Any | None = None,
 ) -> TrainingComponents:
     """Build the full training pipeline from a configuration object.
 
@@ -83,18 +85,32 @@ def setup_training(
     ctx = init_distributed()
     strategy = get_strategy(config.trainer.strategy, ctx.world_size)
 
-    quantization = None
-    if config.method == "qlora":
-        quantization = "4bit"
-    elif config.model.quantization:
-        quantization = config.model.quantization
+    if model is not None:
+        from trainlib.models.loader import ModelResult
 
-    model_result = load_model(
-        config.model.name,
-        quantization=quantization,
-        dtype=config.model.dtype,
-        trust_remote_code=config.model.trust_remote_code,
-    )
+        if isinstance(model, ModelResult):
+            model_result = model
+        else:
+            if tokenizer is None:
+                raise ValueError(
+                    "tokenizer is required when passing a raw model to setup_training()"
+                )
+            model_result = ModelResult(
+                model=model, tokenizer=tokenizer, name="custom",
+            )
+    else:
+        quantization = None
+        if config.method == "qlora":
+            quantization = "4bit"
+        elif config.model.quantization:
+            quantization = config.model.quantization
+
+        model_result = load_model(
+            config.model.name,
+            quantization=quantization,
+            dtype=config.model.dtype,
+            trust_remote_code=config.model.trust_remote_code,
+        )
 
     if config.method in ("lora", "qlora"):
         model_result = apply_lora(

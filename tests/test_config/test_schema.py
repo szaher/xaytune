@@ -213,19 +213,36 @@ class TestTrainConfig:
         assert cfg.lora.rank == 32
         assert cfg.trainer.num_epochs == 5
 
-    def test_invalid_recipe(self):
+    def test_custom_recipe_accepted(self):
+        cfg = TrainConfig(
+            recipe="distill",
+            model=ModelConfig(name="m"),
+            data=DataConfig(path="d", format="alpaca"),
+        )
+        assert cfg.recipe == "distill"
+
+    def test_empty_recipe_rejected(self):
         with pytest.raises(ValueError):
             TrainConfig(
-                recipe="invalid",
+                recipe="",
                 model=ModelConfig(name="m"),
                 data=DataConfig(path="d", format="alpaca"),
             )
 
-    def test_invalid_method(self):
+    def test_custom_method_accepted(self):
+        cfg = TrainConfig(
+            recipe="finetune",
+            method="distill",
+            model=ModelConfig(name="m"),
+            data=DataConfig(path="d", format="alpaca"),
+        )
+        assert cfg.method == "distill"
+
+    def test_empty_method_rejected(self):
         with pytest.raises(ValueError):
             TrainConfig(
                 recipe="finetune",
-                method="invalid",
+                method="",
                 model=ModelConfig(name="m"),
                 data=DataConfig(path="d", format="alpaca"),
             )

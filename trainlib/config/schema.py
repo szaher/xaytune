@@ -264,7 +264,7 @@ class TrainConfig(BaseModel):
         deepspeed_config: DeepSpeed settings.
     """
 
-    recipe: Literal["finetune", "pretrain", "align"]
+    recipe: str
     method: str = "full"
     base: str | None = None
     model: ModelConfig
@@ -281,15 +281,13 @@ class TrainConfig(BaseModel):
     @field_validator("recipe")
     @classmethod
     def validate_recipe(cls, v: str) -> str:
-        valid = {"finetune", "pretrain", "align"}
-        if v not in valid:
-            raise ValueError(f"recipe must be one of {valid}, got '{v}'")
+        if not v or not v.strip():
+            raise ValueError("recipe must be a non-empty string")
         return v
 
     @field_validator("method")
     @classmethod
     def validate_method(cls, v: str) -> str:
-        valid = {"full", "lora", "qlora", "dpo", "grpo", "ppo", "orpo", "simpo", "reinforce"}
-        if v not in valid:
-            raise ValueError(f"method must be one of {valid}, got '{v}'")
+        if not v or not v.strip():
+            raise ValueError("method must be a non-empty string")
         return v

@@ -122,6 +122,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from trainlib.plugins import discover_plugins
+    discover_plugins()
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 

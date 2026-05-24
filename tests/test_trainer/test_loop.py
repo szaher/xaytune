@@ -448,3 +448,74 @@ class TestGradientAccumulation:
         )
 
         assert mock_optimizer.step.call_count == 3
+
+
+class TestSubclassableTrainer:
+    def test_custom_training_step(self):
+        class MyTrainer(Trainer):
+            def training_step(self, model, batch, optimizer, state):
+                return 0.42
+
+        config = TrainerConfig(num_epochs=1, max_steps=2)
+        trainer = MyTrainer(config=config)
+
+        mock_model = MagicMock()
+        dl = [{"input_ids": torch.tensor([1])}, {"input_ids": torch.tensor([2])}]
+
+        state = trainer.train(
+            model=mock_model,
+            train_dataloader=dl,
+            optimizer=MagicMock(),
+            scheduler=MagicMock(),
+        )
+
+        assert state.global_step == 2
+        assert abs(state.metrics["loss"] - 0.42) < 1e-5
+        mock_model.assert_not_called()
+
+    def test_subclass_inherits_callbacks(self):
+        class MyTrainer(Trainer):
+            def training_step(self, model, batch, optimizer, state):
+                return 0.1
+
+        config = TrainerConfig(num_epochs=1, max_steps=2)
+        events = []
+        cm = CallbackManager()
+
+        @cm.on("train_start")
+        def on_start(state):
+            events.append("start")
+
+        @cm.on("step_end")
+        def on_step(state):
+            events.append(f"step:{state.global_step}")
+
+        trainer = MyTrainer(config=config, callback_manager=cm)
+        dl = [{"x": 1}, {"x": 2}]
+        trainer.train(model=MagicMock(), train_dataloader=dl,
+                      optimizer=MagicMock(), scheduler=MagicMock())
+
+        assert "start" in events
+        assert "step:1" in events
+        assert "step:2" in events
+
+    def test_subclass_with_custom_optimizer_logic(self):
+        step_count = {"n": 0}
+
+        class MyTrainer(Trainer):
+            def training_step(self, model, batch, optimizer, state):
+                step_count["n"] += 1
+                optimizer.step()
+                optimizer.zero_grad()
+                return 0.5
+
+        config = TrainerConfig(num_epochs=1, max_steps=3)
+        trainer = MyTrainer(config=config)
+        mock_opt = MagicMock()
+        dl = [{"x": i} for i in range(5)]
+
+        trainer.train(model=MagicMock(), train_dataloader=dl,
+                      optimizer=mock_opt, scheduler=MagicMock())
+
+        assert step_count["n"] == 3
+        assert mock_opt.step.call_count == 3

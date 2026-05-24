@@ -208,7 +208,7 @@ class TestBuildConfig:
     def test_validation_error(self):
         with pytest.raises(Exception):
             build_config(
-                recipe="invalid", method="full",
+                recipe="", method="full",
                 model_name="m", data_path="d", data_format="alpaca",
             )
 

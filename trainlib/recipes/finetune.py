@@ -15,7 +15,8 @@ from trainlib.trainer.callbacks import TrainState
 def finetune(
     *,
     config: TrainConfig | None = None,
-    model: str | None = None,
+    model: Any | None = None,
+    tokenizer: Any | None = None,
     dataset: str | None = None,
     method: str = "full",
     format: str = "alpaca",
@@ -35,7 +36,11 @@ def finetune(
     Args:
         config: Complete training configuration. When provided, all other
             arguments except ``resume_from`` are ignored.
-        model: HuggingFace model name or local path (e.g. ``"meta-llama/Llama-3-8B"``).
+        model: HuggingFace model name, local path, or a pre-built
+            ``nn.Module`` / ``ModelResult``.  When passing a raw module,
+            ``tokenizer`` must also be provided.
+        tokenizer: Tokenizer instance — required when ``model`` is a raw
+            ``nn.Module``, ignored when ``model`` is a string or ``None``.
         dataset: Path to a JSONL training file or HuggingFace dataset name.
         method: Fine-tuning method — ``"full"``, ``"lora"``, or ``"qlora"``.
         format: Data format — ``"alpaca"``, ``"sharegpt"``, ``"chat"``, or ``"text"``.
@@ -64,8 +69,15 @@ def finetune(
         )
         print(f"Final loss: {state.metrics['loss']:.4f}")
     """
+    injected_model = None
     if config is None:
-        if model is None or dataset is None:
+        if dataset is None:
+            raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")
+
+        model_name = model if isinstance(model, str) else "custom"
+        if not isinstance(model, str) and model is not None:
+            injected_model = model
+        elif model is None:
             raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")
 
         trainer_fields = {}
@@ -77,7 +89,7 @@ def finetune(
         config = TrainConfig(
             recipe="finetune",
             method=method,
-            model=ModelConfig(name=model),
+            model=ModelConfig(name=model_name),
             data=DataConfig(path=dataset, format=format),
             trainer=TrainerConfig(
                 num_epochs=num_epochs,
@@ -87,7 +99,10 @@ def finetune(
             ),
         )
 
-    components = _base.setup_training(config, resume_from=resume_from)
+    components = _base.setup_training(
+        config, resume_from=resume_from,
+        model=injected_model, tokenizer=tokenizer,
+    )
 
     state = components.trainer.train(
         model=components.model,

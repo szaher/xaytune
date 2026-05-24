@@ -15,7 +15,8 @@ from trainlib.trainer.callbacks import TrainState
 def pretrain(
     *,
     config: TrainConfig | None = None,
-    model: str | None = None,
+    model: Any | None = None,
+    tokenizer: Any | None = None,
     dataset: str | None = None,
     format: str = "text",
     num_epochs: int = 1,
@@ -60,8 +61,15 @@ def pretrain(
             max_steps=1000,
         )
     """
+    injected_model = None
     if config is None:
-        if model is None or dataset is None:
+        if dataset is None:
+            raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")
+
+        model_name = model if isinstance(model, str) else "custom"
+        if not isinstance(model, str) and model is not None:
+            injected_model = model
+        elif model is None:
             raise ValueError("Either 'config' or both 'model' and 'dataset' are required.")
 
         trainer_fields = {}
@@ -73,7 +81,7 @@ def pretrain(
         config = TrainConfig(
             recipe="pretrain",
             method="full",
-            model=ModelConfig(name=model),
+            model=ModelConfig(name=model_name),
             data=DataConfig(path=dataset, format=format),
             trainer=TrainerConfig(
                 num_epochs=num_epochs,
@@ -83,7 +91,10 @@ def pretrain(
             ),
         )
 
-    components = _base.setup_training(config, resume_from=resume_from)
+    components = _base.setup_training(
+        config, resume_from=resume_from,
+        model=injected_model, tokenizer=tokenizer,
+    )
 
     state = components.trainer.train(
         model=components.model,

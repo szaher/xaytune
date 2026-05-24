@@ -73,3 +73,44 @@ class TestLoadModel:
         load_model("some-model", quantization="8bit")
         call_kwargs = mock_model_cls.from_pretrained.call_args[1]
         assert "quantization_config" in call_kwargs
+
+
+class TestRegistryModelLoading:
+    def test_registry_loader_called(self):
+        from trainlib.models.loader import ModelResult
+
+        mock_result = ModelResult(
+            model=MagicMock(), tokenizer=MagicMock(), name="my-arch",
+        )
+
+        @register_model("test-registry-arch", override=True)
+        def my_loader(name_or_path, **kwargs):
+            return mock_result
+
+        result = load_model("test-registry-arch")
+        assert result is mock_result
+
+    @patch("trainlib.models.loader.AutoModelForCausalLM")
+    @patch("trainlib.models.loader.AutoTokenizer")
+    def test_unregistered_falls_through_to_hf(self, mock_tok, mock_model):
+        mock_model.from_pretrained.return_value = MagicMock()
+        mock_tok.from_pretrained.return_value = MagicMock()
+        result = load_model("not-in-registry-xyz")
+        mock_model.from_pretrained.assert_called_once()
+        assert result.name == "not-in-registry-xyz"
+
+    def test_registry_loader_receives_kwargs(self):
+        from trainlib.models.loader import ModelResult
+
+        received = {}
+
+        @register_model("test-kwargs-arch", override=True)
+        def my_loader(name_or_path, **kwargs):
+            received.update(kwargs)
+            return ModelResult(
+                model=MagicMock(), tokenizer=MagicMock(), name=name_or_path,
+            )
+
+        load_model("test-kwargs-arch", dtype="bf16", quantization="4bit")
+        assert received["dtype"] == "bf16"
+        assert received["quantization"] == "4bit"

@@ -20,7 +20,8 @@ from trainlib.trainer.callbacks import TrainState
 def align(
     *,
     config: TrainConfig | None = None,
-    model: str | None = None,
+    model: Any | None = None,
+    tokenizer: Any | None = None,
     dataset: str | None = None,
     method: str = "dpo",
     format: str = "preference",
@@ -71,8 +72,17 @@ def align(
             max_steps=200,
         )
     """
+    injected_model = None
     if config is None:
-        if model is None or dataset is None:
+        if dataset is None:
+            raise ValueError(
+                "Either 'config' or both 'model' and 'dataset' are required."
+            )
+
+        model_name = model if isinstance(model, str) else "custom"
+        if not isinstance(model, str) and model is not None:
+            injected_model = model
+        elif model is None:
             raise ValueError(
                 "Either 'config' or both 'model' and 'dataset' are required."
             )
@@ -92,7 +102,7 @@ def align(
         config = TrainConfig(
             recipe="align",
             method=method,
-            model=ModelConfig(name=model),
+            model=ModelConfig(name=model_name),
             data=DataConfig(path=dataset, format=format),
             trainer=TrainerConfig(
                 num_epochs=num_epochs,
@@ -103,7 +113,10 @@ def align(
             method_params=method_params,
         )
 
-    components = _base.setup_training(config, resume_from=resume_from)
+    components = _base.setup_training(
+        config, resume_from=resume_from,
+        model=injected_model, tokenizer=tokenizer,
+    )
 
     loss_fn = None
     if is_alignment_method(config.method):

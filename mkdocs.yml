@@ -53,6 +53,7 @@ nav:
       - Alignment Losses: api/alignment.md
       - Evaluation: api/evaluation.md
       - Export: api/export.md
+  - Training Studio: studio.md
   - Extensibility: extensibility.md
   - CLI Reference: cli.md
   - Examples: examples.md

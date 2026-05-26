@@ -269,12 +269,16 @@ class OnlineRLConfig(BaseModel):
         generation: Generation parameters.
         reward_name: Registered reward function name.
         reward_kwargs: Extra keyword arguments for the reward function.
+        eval_prompts: Prompts to evaluate periodically during training.
+        eval_every_n_steps: Run online eval every N training steps.
     """
 
     enabled: bool = False
     generation: GenerationConfig = GenerationConfig()
     reward_name: str = "default"
     reward_kwargs: dict[str, Any] = {}
+    eval_prompts: list[str] = []
+    eval_every_n_steps: int = 100
 
 
 class TrainConfig(BaseModel):

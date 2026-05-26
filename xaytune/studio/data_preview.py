@@ -11,11 +11,15 @@ def preview_dataset(
     source: str = "local",
     num_samples: int = 5,
 ) -> list[dict[str, Any]]:
-    """Load and return the first N samples from a dataset file.
+    """Load and return the first N samples from a dataset.
 
-    Supports JSONL files (one JSON object per line).  Returns an empty list
-    if the file does not exist or cannot be parsed.
+    When ``source="local"``, reads a JSONL file from disk.
+    When ``source="huggingface"``, streams from the HuggingFace Hub.
+    Returns an empty list if the data cannot be loaded.
     """
+    if source == "huggingface":
+        return _preview_hf(path, num_samples)
+
     try:
         p = Path(path)
         if not p.exists():
@@ -33,6 +37,22 @@ def preview_dataset(
                     samples.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
+        return samples
+    except Exception:
+        return []
+
+
+def _preview_hf(dataset_id: str, num_samples: int) -> list[dict[str, Any]]:
+    """Preview a HuggingFace dataset using streaming."""
+    try:
+        from datasets import load_dataset
+
+        ds = load_dataset(dataset_id, split="train", streaming=True)
+        samples: list[dict[str, Any]] = []
+        for i, row in enumerate(ds):
+            if i >= num_samples:
+                break
+            samples.append(dict(row))
         return samples
     except Exception:
         return []

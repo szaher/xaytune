@@ -16,3 +16,16 @@ def get_gpu_metrics() -> dict[str, float]:
         }
     except Exception:
         return {}
+
+
+def get_gpu_utilization() -> float | None:
+    """Return current GPU utilization percentage (0-100), or None on CPU."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return None
+
+        return float(torch.cuda.utilization())
+    except Exception:
+        return None

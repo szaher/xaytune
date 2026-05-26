@@ -3,10 +3,13 @@ from __future__ import annotations
 import collections
 import dataclasses
 import enum
+import json
 import logging
 import threading
 import time
+import traceback as tb_mod
 import uuid
+from pathlib import Path
 from typing import Any
 
 from xaytune.config.schema import TrainConfig
@@ -90,12 +93,41 @@ class JobInfo:
             "tags": self.tags,
         }
 
+    @classmethod
+    def from_dict(
+        cls,
+        d: dict[str, Any],
+        metrics_history: list[dict[str, Any]] | None = None,
+    ) -> JobInfo:
+        return cls(
+            job_id=d["job_id"],
+            status=JobStatus(d["status"]),
+            recipe=d["recipe"],
+            created_at=d["created_at"],
+            started_at=d.get("started_at"),
+            completed_at=d.get("completed_at"),
+            error=d.get("error"),
+            state=d.get("state"),
+            tags=d.get("tags", []),
+            metrics_history=metrics_history or [],
+        )
+
 
 class JobManager:
-    def __init__(self, event_bus: EventBus | None = None) -> None:
+    def __init__(
+        self,
+        event_bus: EventBus | None = None,
+        persist_dir: Path | str | None = None,
+    ) -> None:
         self._jobs: dict[str, JobInfo] = {}
         self._event_bus = event_bus or EventBus()
         self._lock = threading.Lock()
+        if persist_dir is not None:
+            self._persist_dir: Path | None = Path(persist_dir).expanduser()
+            self._persist_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self._persist_dir = None
+        self._load_persisted_jobs()
 
     @property
     def event_bus(self) -> EventBus:
@@ -139,6 +171,7 @@ class JobManager:
             if job_id not in self._jobs:
                 raise KeyError(f"Unknown job: {job_id}")
             self._jobs[job_id].status = JobStatus.CANCELLED
+            self._save_metadata(job_id)
 
     def add_tag(self, job_id: str, tag: str) -> None:
         with self._lock:
@@ -146,6 +179,7 @@ class JobManager:
                 raise KeyError(f"Unknown job: {job_id}")
             if tag not in self._jobs[job_id].tags:
                 self._jobs[job_id].tags.append(tag)
+            self._save_metadata(job_id)
 
     def remove_tag(self, job_id: str, tag: str) -> None:
         with self._lock:
@@ -155,12 +189,80 @@ class JobManager:
                 self._jobs[job_id].tags.remove(tag)
             except ValueError:
                 pass
+            self._save_metadata(job_id)
 
     def get_metrics_history(self, job_id: str) -> list[dict[str, Any]]:
         with self._lock:
             if job_id not in self._jobs:
                 raise KeyError(f"Unknown job: {job_id}")
             return list(self._jobs[job_id].metrics_history)
+
+    def _save_metadata(self, job_id: str) -> None:
+        if self._persist_dir is None:
+            return
+        job = self._jobs[job_id]
+        job_dir = self._persist_dir / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "metadata.json").write_text(json.dumps(job.to_dict(), indent=2))
+
+    def _append_metrics(self, job_id: str, entry: dict[str, Any]) -> None:
+        if self._persist_dir is None:
+            return
+        job_dir = self._persist_dir / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        with (job_dir / "metrics.jsonl").open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def _save_logs(self, job_id: str) -> None:
+        if self._persist_dir is None:
+            return
+        job = self._jobs[job_id]
+        lines = job.log_buffer.get_all()[-2000:]
+        job_dir = self._persist_dir / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "logs.txt").write_text("\n".join(lines))
+
+    def _load_persisted_jobs(self) -> None:
+        if self._persist_dir is None or not self._persist_dir.exists():
+            return
+        for job_dir in self._persist_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+            meta_path = job_dir / "metadata.json"
+            if not meta_path.exists():
+                continue
+            try:
+                d = json.loads(meta_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            status = d.get("status", "")
+            if status in ("running", "pending"):
+                continue
+            if d.get("job_id") in self._jobs:
+                continue
+            metrics: list[dict[str, Any]] = []
+            metrics_path = job_dir / "metrics.jsonl"
+            if metrics_path.exists():
+                for line in metrics_path.read_text().splitlines():
+                    try:
+                        metrics.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            self._jobs[d["job_id"]] = JobInfo.from_dict(d, metrics_history=metrics)
+
+    def get_logs(self, job_id: str) -> str:
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(f"Unknown job: {job_id}")
+            job = self._jobs[job_id]
+        lines = job.log_buffer.get_all()
+        if lines:
+            return "\n".join(lines)
+        if self._persist_dir is not None:
+            logs_path = self._persist_dir / job_id / "logs.txt"
+            if logs_path.exists():
+                return logs_path.read_text()
+        return ""
 
     def _run_job(
         self,
@@ -193,6 +295,7 @@ class JobManager:
                         entry["samples_per_sec"] = config.trainer.batch_size / dt
 
                 job.metrics_history.append(entry)
+                self._append_metrics(job_id, entry)
 
             last_step_time.clear()
             last_step_time.append(now)
@@ -212,6 +315,7 @@ class JobManager:
             with self._lock:
                 job.status = JobStatus.RUNNING
                 job.started_at = time.time()
+                self._save_metadata(job_id)
 
             last_step_time.append(time.time())
 
@@ -229,10 +333,14 @@ class JobManager:
                 else:
                     job.status = JobStatus.COMPLETED
                 job.completed_at = time.time()
-        except Exception as e:
+                self._save_metadata(job_id)
+                self._save_logs(job_id)
+        except Exception as exc:
             with self._lock:
                 job.status = JobStatus.FAILED
-                job.error = str(e)
+                job.error = "".join(tb_mod.format_exception(type(exc), exc, exc.__traceback__))
                 job.completed_at = time.time()
+                self._save_metadata(job_id)
+                self._save_logs(job_id)
         finally:
             root_logger.removeHandler(handler)

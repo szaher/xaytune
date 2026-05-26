@@ -63,7 +63,84 @@ def align(
 - **num_epochs** -- Number of training epochs (default: 1).
 - **learning_rate** -- Learning rate (default: 5e-6, lower than fine-tuning).
 - **batch_size** -- Per-device batch size (default: 4).
-- **\*\*kwargs** -- Additional `TrainerConfig` fields.
+- **resume_from** -- Path to a checkpoint directory to resume training.
+- **\*\*kwargs** -- Method hyperparameters (`beta`, `kl_coeff`, `lambda_weight`, `gamma`, `clip_eps`), online RL params (`reward_name`, `reward_kwargs`, `max_new_tokens`, `temperature`, `top_p`, `top_k`, `do_sample`, `group_size`), and any extra `TrainerConfig` fields.
+
+## Online Generation (RL Methods)
+
+GRPO, PPO, and REINFORCE can generate completions during training instead of using pre-computed data. Enable this with the `online_rl` config block — the model generates responses, a reward function scores them, and advantages are computed automatically.
+
+### Python API
+
+```python
+import xaytune
+
+state = xaytune.align(
+    model="output/sft-model",
+    dataset="data/prompts.jsonl",
+    method="grpo",
+    # Online RL params (auto-enable online_rl when present)
+    reward_name="format_check",
+    reward_kwargs={"required_markers": ["##", "```"]},
+    max_new_tokens=256,
+    temperature=0.7,
+    group_size=4,
+    # Method params
+    kl_coeff=0.04,
+    learning_rate=1e-6,
+)
+```
+
+When you pass generation/reward kwargs (`reward_name`, `max_new_tokens`, `temperature`, `top_p`, `top_k`, `do_sample`, `group_size`), online RL is enabled automatically.
+
+### YAML Config
+
+```yaml
+recipe: align
+method: grpo
+
+method_params:
+  kl_coeff: 0.04
+
+online_rl:
+  enabled: true
+  generation:
+    max_new_tokens: 256
+    temperature: 0.7
+    top_p: 1.0
+    top_k: 0
+    do_sample: true
+    group_size: 4
+  reward_name: format_check
+  reward_kwargs:
+    required_markers: ["##", "```"]
+
+model:
+  name: output/sft-model
+
+data:
+  path: data/prompts.jsonl
+  format: preference
+
+trainer:
+  batch_size: 2
+  learning_rate: 1e-6
+```
+
+### Generation Config
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_new_tokens` | 256 | Maximum tokens to generate per completion |
+| `temperature` | 1.0 | Sampling temperature (lower = more deterministic) |
+| `top_p` | 1.0 | Nucleus sampling threshold |
+| `top_k` | 0 | Top-k sampling (0 = disabled) |
+| `do_sample` | true | Enable stochastic sampling |
+| `group_size` | 4 | Completions per prompt (GRPO uses groups for advantage estimation) |
+
+### Backward Compatibility
+
+Datasets with pre-computed `advantages` in each batch still work — `OnlineRLStep` detects them and falls back to the offline loss path. This means you can gradually migrate from pre-computed to online generation.
 
 ## YAML Config Examples
 

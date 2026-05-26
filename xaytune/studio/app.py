@@ -16,7 +16,11 @@ from xaytune.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
+from xaytune.studio.code_runner import CODE_TEMPLATES, run_code
+from xaytune.studio.codegen import generate_code
 from xaytune.studio.data_preview import preview_dataset
+from xaytune.studio.dataset_browser import get_dataset_info, preview_hf_dataset, search_datasets
+from xaytune.studio.examples import EXAMPLES, load_example_values
 from xaytune.studio.gpu_metrics import get_gpu_metrics
 from xaytune.studio.hub_browser import search_models
 from xaytune.studio.jobs import JobManager, JobStatus
@@ -212,7 +216,9 @@ def _status_badge(status: str) -> str:
     )
 
 
-def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
+def create_app(
+    job_manager: JobManager | None = None,
+) -> gr.Blocks:
     mgr = job_manager or JobManager()
 
     with gr.Blocks(title="xaytune Studio") as app:
@@ -226,6 +232,20 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                 label="Mode",
                 info="Simple: essential options only. Advanced: full control.",
             )
+
+            if EXAMPLES:
+                with gr.Accordion("Examples", open=False):
+                    gr.Markdown(
+                        "Load a pre-configured example to populate the form. "
+                        "You can modify values before launching."
+                    )
+                    with gr.Row():
+                        example_dropdown = gr.Dropdown(
+                            choices=list(EXAMPLES.keys()),
+                            label="Example Config",
+                            info="Select an example configuration to load.",
+                        )
+                        load_example_btn = gr.Button("Load Example", size="sm", variant="secondary")
 
             with gr.Accordion("Recipe & Model", open=True):
                 with gr.Row():
@@ -246,6 +266,12 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                         label="Model Name",
                         placeholder="meta-llama/Llama-3-8B",
                         info="HuggingFace model ID or local path to model directory.",
+                    )
+                    hf_token = gr.Textbox(
+                        label="HF Token",
+                        placeholder="hf_...",
+                        type="password",
+                        info="Token for gated models. Leave blank if logged in.",
                     )
                 with gr.Row():
                     quantization = gr.Dropdown(
@@ -701,9 +727,126 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                 outputs=[advanced_column],
             )
 
+            if EXAMPLES:
+                _example_outputs = [
+                    recipe,
+                    method,
+                    model_name,
+                    data_path,
+                    data_format,
+                    quantization,
+                    dtype,
+                    trust_remote_code,
+                    source,
+                    max_seq_length,
+                    packing,
+                    streaming,
+                    eval_split,
+                    eval_path,
+                    lora_rank,
+                    lora_alpha,
+                    lora_dropout,
+                    batch_size,
+                    grad_accum,
+                    learning_rate,
+                    num_epochs,
+                    max_steps,
+                    seed,
+                    mixed_precision,
+                    scheduler,
+                    warmup_steps,
+                    warmup_ratio,
+                    weight_decay,
+                    max_grad_norm,
+                    eval_every,
+                    es_patience,
+                    es_metric,
+                    es_min_delta,
+                    log_every,
+                    output_dir,
+                    merge_on_complete,
+                    checkpoint_every,
+                    save_last,
+                    activation_ckpt,
+                    async_ckpt,
+                    mp_beta,
+                    mp_kl_coeff,
+                    mp_clip_eps,
+                    mp_lambda_weight,
+                    mp_gamma,
+                ]
+
+                def _load_example(name: str | None):
+                    if not name:
+                        return [gr.update()] * len(_example_outputs)
+                    vals = load_example_values(name)
+                    if not vals:
+                        return [gr.update()] * len(_example_outputs)
+                    return [
+                        gr.update(value=vals.get("recipe", "finetune")),
+                        gr.update(value=vals.get("method", "full")),
+                        gr.update(value=vals.get("model_name", "")),
+                        gr.update(value=vals.get("data_path", "")),
+                        gr.update(value=vals.get("data_format", "alpaca")),
+                        gr.update(value=vals.get("quantization", "None")),
+                        gr.update(value=vals.get("dtype", "auto")),
+                        gr.update(value=vals.get("trust_remote_code", False)),
+                        gr.update(value=vals.get("source", "local")),
+                        gr.update(value=vals.get("max_seq_length", 2048)),
+                        gr.update(value=vals.get("packing", True)),
+                        gr.update(value=vals.get("streaming", False)),
+                        gr.update(value=vals.get("eval_split", 0.0)),
+                        gr.update(value=vals.get("eval_path", "")),
+                        gr.update(value=vals.get("lora_rank", 16)),
+                        gr.update(value=vals.get("lora_alpha", 32)),
+                        gr.update(value=vals.get("lora_dropout", 0.05)),
+                        gr.update(value=vals.get("batch_size", 4)),
+                        gr.update(value=vals.get("gradient_accumulation", 1)),
+                        gr.update(value=vals.get("learning_rate", 2e-4)),
+                        gr.update(value=vals.get("num_epochs", 3)),
+                        gr.update(value=vals.get("max_steps", -1)),
+                        gr.update(value=vals.get("seed", 42)),
+                        gr.update(value=vals.get("mixed_precision", "bf16")),
+                        gr.update(value=vals.get("scheduler", "cosine")),
+                        gr.update(value=vals.get("warmup_steps", 0)),
+                        gr.update(value=vals.get("warmup_ratio", 0.0)),
+                        gr.update(value=vals.get("weight_decay", 0.01)),
+                        gr.update(value=vals.get("max_grad_norm", 1.0)),
+                        gr.update(value=vals.get("eval_every_n_steps", 500)),
+                        gr.update(value=vals.get("early_stopping_patience", 0)),
+                        gr.update(value=vals.get("early_stopping_metric", "eval_loss")),
+                        gr.update(value=vals.get("early_stopping_min_delta", 0.0)),
+                        gr.update(value=vals.get("log_every_n_steps", 10)),
+                        gr.update(value=vals.get("output_dir", "output")),
+                        gr.update(value=vals.get("merge_on_complete", False)),
+                        gr.update(value=vals.get("checkpoint_every_n_steps", 500)),
+                        gr.update(value=vals.get("save_last", True)),
+                        gr.update(value=vals.get("activation_checkpointing", False)),
+                        gr.update(value=vals.get("async_checkpoint", False)),
+                        gr.update(value=vals.get("beta", 0.1)),
+                        gr.update(value=vals.get("kl_coeff", 0.04)),
+                        gr.update(value=vals.get("clip_eps", 0.2)),
+                        gr.update(value=vals.get("lambda_weight", 1.0)),
+                        gr.update(value=vals.get("gamma", 0.5)),
+                    ]
+
+                load_example_btn.click(
+                    fn=_load_example,
+                    inputs=[example_dropdown],
+                    outputs=_example_outputs,
+                )
+
             validation_output = gr.Markdown("")
-            submit_btn = gr.Button("Start Training", variant="primary", size="lg")
+            with gr.Row():
+                submit_btn = gr.Button("Start Training", variant="primary", size="lg")
+                gen_code_btn = gr.Button("Generate Code", size="lg")
             train_status = gr.Markdown("")
+            generated_code = gr.Code(
+                label="Generated Python",
+                language="python",
+                interactive=False,
+                lines=10,
+            )
 
             all_inputs = [
                 recipe,
@@ -751,6 +894,7 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                 mp_clip_eps,
                 mp_lambda_weight,
                 mp_gamma,
+                hf_token,
             ]
 
             def _submit(
@@ -799,7 +943,21 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                 clip_eps_v,
                 lambda_w_v,
                 gamma_v,
+                token_v,
             ):
+                if token_v and token_v.strip():
+                    try:
+                        from huggingface_hub import login
+
+                        login(token=token_v.strip(), add_to_git_credential=False)
+                    except Exception as e:
+                        return (
+                            f'<div style="color:#dc2626; padding:8px; '
+                            f"border:1px solid #dc2626; border-radius:8px; "
+                            f'background:#fef2f2;">\n\n'
+                            f"**HF Login error:** {e}\n\n</div>"
+                        ), ""
+
                 quant_val = None if quant_v == "None" else quant_v
                 errors = validate_form(
                     recipe=recipe_v,
@@ -898,6 +1056,112 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                 fn=_submit,
                 inputs=all_inputs,
                 outputs=[validation_output, train_status],
+            )
+
+            def _gen_code(
+                recipe_v,
+                method_v,
+                model_v,
+                data_v,
+                format_v,
+                quant_v,
+                dtype_v,
+                trust_v,
+                source_v,
+                seq_len_v,
+                packing_v,
+                streaming_v,
+                esplit_v,
+                epath_v,
+                lr_rank_v,
+                lr_alpha_v,
+                lr_drop_v,
+                bs_v,
+                ga_v,
+                lr_v,
+                epochs_v,
+                steps_v,
+                seed_v,
+                mp_v,
+                sched_v,
+                warmup_v,
+                wratio_v,
+                wd_v,
+                gn_v,
+                eval_v,
+                esp_v,
+                esm_v,
+                esd_v,
+                log_v,
+                out_v,
+                merge_v,
+                ckpt_v,
+                slast_v,
+                actckpt_v,
+                asyncckpt_v,
+                beta_v,
+                kl_coeff_v,
+                clip_eps_v,
+                lambda_w_v,
+                gamma_v,
+                _token_v,
+            ):
+                try:
+                    quant_val = None if quant_v == "None" else quant_v
+                    code = generate_code(
+                        recipe=recipe_v,
+                        method=method_v,
+                        model_name=model_v.strip() if model_v else "",
+                        data_path=data_v.strip() if data_v else "",
+                        data_format=format_v,
+                        quantization=quant_val,
+                        dtype=dtype_v,
+                        trust_remote_code=trust_v,
+                        max_seq_length=int(float(seq_len_v)),
+                        packing=packing_v,
+                        streaming=streaming_v,
+                        eval_split=float(esplit_v),
+                        eval_path=epath_v or "",
+                        lora_rank=int(float(lr_rank_v)),
+                        lora_alpha=int(float(lr_alpha_v)),
+                        lora_dropout=float(lr_drop_v),
+                        batch_size=int(float(bs_v)),
+                        gradient_accumulation=int(float(ga_v)),
+                        learning_rate=float(lr_v),
+                        num_epochs=int(float(epochs_v)),
+                        max_steps=int(float(steps_v)),
+                        seed=int(float(seed_v)),
+                        mixed_precision=mp_v,
+                        scheduler=sched_v,
+                        warmup_steps=int(float(warmup_v)),
+                        warmup_ratio=float(wratio_v),
+                        weight_decay=float(wd_v),
+                        max_grad_norm=float(gn_v),
+                        eval_every_n_steps=int(float(eval_v)),
+                        early_stopping_patience=int(float(esp_v)),
+                        early_stopping_metric=esm_v,
+                        early_stopping_min_delta=float(esd_v),
+                        log_every_n_steps=int(float(log_v)),
+                        output_dir=out_v,
+                        merge_on_complete=merge_v,
+                        checkpoint_every_n_steps=int(float(ckpt_v)),
+                        save_last=slast_v,
+                        activation_checkpointing=actckpt_v,
+                        async_checkpoint=asyncckpt_v,
+                        beta=float(beta_v),
+                        kl_coeff=float(kl_coeff_v),
+                        clip_eps=float(clip_eps_v),
+                        lambda_weight=float(lambda_w_v),
+                        gamma=float(gamma_v),
+                    )
+                    return code
+                except Exception as exc:
+                    return f"# Error generating code: {exc}"
+
+            gen_code_btn.click(
+                fn=_gen_code,
+                inputs=all_inputs,
+                outputs=[generated_code],
             )
 
         # ── Monitor Tab ────────────────────────────────────────────
@@ -1154,6 +1418,172 @@ def create_app(job_manager: JobManager | None = None) -> gr.Blocks:
                 outputs=[compare_plot, compare_table],
             )
 
+        # ── Datasets Tab ──────────────────────────────────────────
+        with gr.Tab("Datasets"):
+            gr.Markdown("Search and preview HuggingFace datasets.")
+            with gr.Row():
+                ds_search_query = gr.Textbox(
+                    label="Search",
+                    placeholder="alpaca, code, math, chat...",
+                    info="Search HuggingFace Hub for datasets.",
+                )
+                ds_search_btn = gr.Button("Search Datasets", size="sm")
+            ds_results = gr.Dataframe(
+                headers=["Dataset ID", "Downloads", "Likes", "Tags"],
+                label="Results",
+                interactive=False,
+            )
+
+            def _search_datasets(query: str):
+                if not query or not query.strip():
+                    return []
+                results = search_datasets(query.strip())
+                return [[r["dataset_id"], r["downloads"], r["likes"], r["tags"]] for r in results]
+
+            ds_search_btn.click(
+                fn=_search_datasets,
+                inputs=[ds_search_query],
+                outputs=[ds_results],
+            )
+
+            with gr.Accordion("Preview", open=False):
+                with gr.Row():
+                    ds_preview_id = gr.Textbox(
+                        label="Dataset ID",
+                        placeholder="tatsu-lab/alpaca",
+                        info="Enter a HuggingFace dataset ID to preview.",
+                    )
+                    ds_split = gr.Dropdown(
+                        choices=["train", "test", "validation"],
+                        value="train",
+                        label="Split",
+                    )
+                    ds_preview_btn = gr.Button("Preview", size="sm")
+
+                ds_preview_table = gr.Dataframe(
+                    label="Samples",
+                    interactive=False,
+                )
+                ds_info_md = gr.Markdown("")
+
+                def _preview_hf(dataset_id: str, split: str):
+                    if not dataset_id or not dataset_id.strip():
+                        return [], ""
+                    samples = preview_hf_dataset(dataset_id.strip(), split=split, num_samples=5)
+                    if not samples:
+                        return [], "No samples found or dataset could not be loaded."
+                    headers = list(samples[0].keys())
+                    rows = []
+                    for s in samples:
+                        row = []
+                        for h in headers:
+                            val = s.get(h, "")
+                            text = str(val)
+                            if len(text) > 200:
+                                text = text[:200] + "..."
+                            row.append(text)
+                        rows.append(row)
+
+                    info = get_dataset_info(dataset_id.strip())
+                    info_text = ""
+                    if info:
+                        info_text = f"**{info.get('id', '')}**"
+                        desc = info.get("description", "")
+                        if desc:
+                            info_text += f"\n\n{desc}"
+                        downloads = info.get("downloads", 0)
+                        info_text += f"\n\nDownloads: **{downloads:,}**"
+                        tags = info.get("tags", [])
+                        if tags:
+                            info_text += f" | Tags: {', '.join(tags[:10])}"
+
+                    return rows, info_text
+
+                ds_preview_btn.click(
+                    fn=_preview_hf,
+                    inputs=[ds_preview_id, ds_split],
+                    outputs=[ds_preview_table, ds_info_md],
+                )
+
+                def _select_dataset(evt: gr.SelectData):
+                    return evt.value
+
+                ds_results.select(
+                    fn=_select_dataset,
+                    outputs=[ds_preview_id],
+                )
+
+        # ── Code Tab ─────────────────────────────────────────────
+        with gr.Tab("Code"):
+            gr.Markdown(
+                "Write and run Python code using the xaytune API. "
+                "The `xaytune` module is pre-imported."
+            )
+            with gr.Row():
+                code_template = gr.Dropdown(
+                    choices=list(CODE_TEMPLATES.keys()),
+                    value="Custom",
+                    label="Template",
+                    info="Load a starter template.",
+                )
+                code_run_btn = gr.Button("Run", variant="primary", size="sm")
+                code_clear_btn = gr.Button("Clear Output", size="sm")
+
+            code_editor = gr.Code(
+                value=CODE_TEMPLATES["Custom"],
+                language="python",
+                interactive=True,
+                lines=20,
+                label="Python Editor",
+            )
+            code_output = gr.Code(
+                label="Output",
+                language=None,
+                interactive=False,
+                lines=12,
+            )
+            code_status = gr.Markdown("")
+
+            def _on_template_change(name: str):
+                return gr.update(value=CODE_TEMPLATES.get(name, ""))
+
+            code_template.change(
+                fn=_on_template_change,
+                inputs=[code_template],
+                outputs=[code_editor],
+            )
+
+            def _run_code(code: str):
+                if not code or not code.strip():
+                    return "", "No code to run."
+                result = run_code(code)
+                output_parts = []
+                if result.stdout:
+                    output_parts.append(result.stdout)
+                if result.stderr:
+                    output_parts.append(f"[stderr]\n{result.stderr}")
+                if result.error:
+                    output_parts.append(f"[error]\n{result.error}")
+                output_text = "\n".join(output_parts) if output_parts else "(no output)"
+                if result.error:
+                    status = f'<span style="color:#dc2626;">Failed</span> in {result.duration:.1f}s'
+                else:
+                    status = (
+                        f'<span style="color:#16a34a;">Completed</span> in {result.duration:.1f}s'
+                    )
+                return output_text, status
+
+            code_run_btn.click(
+                fn=_run_code,
+                inputs=[code_editor],
+                outputs=[code_output, code_status],
+            )
+
+            code_clear_btn.click(
+                fn=lambda: ("", ""),
+                outputs=[code_output, code_status],
+            )
+
     return app  # type: ignore[no-any-return]
 
 
@@ -1199,10 +1629,15 @@ def _poll(
     status_md = f"### {badge}"
 
     if job.error:
+        import html
+
+        escaped = html.escape(job.error)
         status_md += (
-            f'\n\n<div style="color:#dc2626; padding:6px; '
-            f'border-left:3px solid #dc2626; background:#fef2f2;">'
-            f"{job.error}</div>"
+            '\n\n<details open><summary style="color:#dc2626; font-weight:600;">'
+            "Error Details</summary>"
+            '<pre style="background:#fef2f2; color:#991b1b; padding:12px; '
+            "border-radius:8px; border:1px solid #fecaca; overflow-x:auto; "
+            f'font-size:0.85em; white-space:pre-wrap;">{escaped}</pre></details>'
         )
 
     if job.started_at and is_running:
@@ -1210,13 +1645,47 @@ def _poll(
         mins, secs = divmod(int(elapsed), 60)
         status_md += f"\n\nElapsed: **{mins}m {secs}s**"
 
+    if job.state and is_running:
+        step = job.state.get("global_step", 0)
+        max_steps = job.state.get("max_steps", -1)
+        num_epochs = job.state.get("num_epochs", 0)
+        epoch = job.state.get("epoch", 0)
+
+        if max_steps > 0 and step > 0:
+            pct = min(100, int(step / max_steps * 100))
+            eta_str = ""
+            if job.started_at:
+                elapsed_s = time.time() - job.started_at
+                eta_seconds = int(elapsed_s / step * (max_steps - step))
+                eta_m, eta_s = divmod(eta_seconds, 60)
+                eta_str = f" | ETA: {eta_m}m {eta_s}s"
+            status_md += (
+                '\n\n<div style="background:#e5e7eb; border-radius:8px; '
+                'height:20px; margin:8px 0;">'
+                f'<div style="background:#4f46e5; border-radius:8px; '
+                f"height:20px; width:{pct}%; min-width:2px; "
+                f'transition:width 0.3s;"></div></div>'
+                f"**Step {step} / {max_steps}** ({pct}%){eta_str}"
+            )
+        elif num_epochs > 0:
+            pct = min(100, int((epoch + 1) / num_epochs * 100))
+            status_md += f"\n\n**Epoch {epoch + 1} / {num_epochs}** ({pct}%)"
+
     if job.state and "global_step" in job.state:
         step = job.state["global_step"]
         metrics = job.state.get("metrics", {})
 
         seen_steps = {h["step"] for h in history}
         if step not in seen_steps and "loss" in metrics:
-            history = [*history, {"step": step, "loss": metrics["loss"]}]
+            gpu_snap = get_gpu_metrics()
+            history = [
+                *history,
+                {
+                    "step": step,
+                    "loss": metrics["loss"],
+                    "gpu_memory_mb": gpu_snap.get("gpu_memory_allocated_mb") if gpu_snap else None,
+                },
+            ]
 
         metrics_lines = [f"**Step:** {step}"]
         for k, v in metrics.items():
@@ -1238,21 +1707,44 @@ def _poll(
     if history:
         steps = [h["step"] for h in history]
         losses = [h["loss"] for h in history]
-        fig = go.Figure(
+        gpu_mem = [h.get("gpu_memory_mb") for h in history]
+
+        fig = go.Figure()
+        fig.add_trace(
             go.Scatter(
                 x=steps,
                 y=losses,
                 mode="lines+markers",
+                name="Loss",
                 line={"color": "#4f46e5", "width": 2},
                 marker={"size": 4},
+                yaxis="y",
             )
         )
+
+        if any(v is not None for v in gpu_mem):
+            fig.add_trace(
+                go.Scatter(
+                    x=steps,
+                    y=gpu_mem,
+                    mode="lines",
+                    name="GPU Memory (MB)",
+                    line={"color": "#dc2626", "width": 1, "dash": "dot"},
+                    yaxis="y2",
+                )
+            )
+
         fig.update_layout(
             title="Training Loss",
             xaxis_title="Step",
-            yaxis_title="Loss",
+            yaxis={"title": "Loss", "side": "left"},
+            yaxis2={
+                "title": "GPU Memory (MB)",
+                "side": "right",
+                "overlaying": "y",
+            },
             template="plotly_white",
-            margin={"l": 40, "r": 20, "t": 40, "b": 40},
+            margin={"l": 40, "r": 60, "t": 40, "b": 40},
         )
     else:
         fig = _empty_plot()
@@ -1268,7 +1760,12 @@ def _poll(
         gpu_md = ""
 
     log_lines = job.log_buffer.get_all()
-    log_text = "\n".join(log_lines[-200:]) if log_lines else ""
+    if log_lines:
+        log_text = "\n".join(log_lines[-200:])
+    else:
+        logs_from_disk = mgr.get_logs(job_id)
+        lines = logs_from_disk.splitlines()[-200:] if logs_from_disk else []
+        log_text = "\n".join(lines)
 
     return status_md, fig, metrics_md, history, cancel_update, gpu_md, log_text
 

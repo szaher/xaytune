@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def launch(
     *,
@@ -10,11 +12,14 @@ def launch(
     import gradio as gr
 
     from xaytune.studio.app import create_app
+    from xaytune.studio.jobs import JobManager
 
     theme = gr.themes.Soft(
         primary_hue="indigo",
         secondary_hue="slate",
         neutral_hue="slate",
     )
-    app = create_app()
+    persist_dir = Path("~/.xaytune/studio/jobs").expanduser()
+    mgr = JobManager(persist_dir=persist_dir)
+    app = create_app(job_manager=mgr)
     app.launch(server_name=host, server_port=port, share=share, theme=theme)

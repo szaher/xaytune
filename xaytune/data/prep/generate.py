@@ -64,7 +64,7 @@ def _call_llm_sync(
         ],
         temperature=temperature,
     )
-    return response.choices[0].message.content
+    return str(response.choices[0].message.content)
 
 
 _AUGMENT_SYSTEM = (
@@ -133,7 +133,8 @@ def _parse_response(text: str) -> dict[str, Any]:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines)
-    return json.loads(text)
+    result: dict[str, Any] = json.loads(text)
+    return result
 
 
 def _apply_post_filter(
@@ -196,6 +197,7 @@ def generate(
                 continue
 
     elif mode == "distill":
+        assert topic is not None
         for _ in range(n):
             prompt = _distill_prompt(topic, format)
             response = _call_llm_sync(client, model, _DISTILL_SYSTEM, prompt, temperature)

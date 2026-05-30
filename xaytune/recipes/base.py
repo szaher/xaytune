@@ -46,7 +46,7 @@ def run_data_prep(config: TrainConfig) -> str | None:
         steps.append(step_dict)
 
     prep_output = Path(config.output.dir) / ".data_prep_cache" / "prepped.jsonl"
-    result = pipeline(input=config.data.path, output=str(prep_output), steps=steps)
+    pipeline(input=config.data.path, output=str(prep_output), steps=steps)
     return str(prep_output)
 
 

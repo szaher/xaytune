@@ -81,12 +81,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--models", nargs="+", required=True, help="Paths to models to merge"
     )
     model_merge_parser.add_argument(
-        "--method", required=True, choices=["linear", "slerp", "ties", "dare"],
+        "--method",
+        required=True,
+        choices=["linear", "slerp", "ties", "dare"],
         help="Merge method",
     )
     model_merge_parser.add_argument("--output", required=True, help="Output directory")
     model_merge_parser.add_argument(
-        "--weights", nargs="+", type=float, default=None,
+        "--weights",
+        nargs="+",
+        type=float,
+        default=None,
         help="Per-model weights for linear merge",
     )
     model_merge_parser.add_argument(
@@ -96,11 +101,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--base-model", default=None, help="Base model path (required for ties/dare)"
     )
     model_merge_parser.add_argument(
-        "--density", type=float, default=0.5,
+        "--density",
+        type=float,
+        default=0.5,
         help="Sparsification density for ties/dare (default: 0.5)",
     )
     model_merge_parser.add_argument(
-        "--weight", type=float, default=1.0,
+        "--weight",
+        type=float,
+        default=1.0,
         help="Task vector scaling for ties/dare (default: 1.0)",
     )
     model_merge_parser.add_argument(
@@ -154,20 +163,53 @@ def _build_parser() -> argparse.ArgumentParser:
     dedup_parser.add_argument("input", help="Path to input JSONL file")
     dedup_parser.add_argument("-o", "--output", required=True, help="Output file path")
     dedup_parser.add_argument(
-        "--method", default="both", choices=["exact", "minhash", "both"],
+        "--method",
+        default="both",
+        choices=["exact", "minhash", "both"],
         help="Dedup method (default: both)",
     )
-    dedup_parser.add_argument("--threshold", type=float, default=0.85, help="MinHash threshold (default: 0.85)")
-    dedup_parser.add_argument("--field", default=None, help="Field to compare (auto-detected if omitted)")
+    dedup_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.85,
+        help="MinHash threshold (default: 0.85)",
+    )
+    dedup_parser.add_argument(
+        "--field",
+        default=None,
+        help="Field to compare (auto-detected if omitted)",
+    )
 
     filter_parser = data_subparsers.add_parser("filter", help="Filter samples by quality criteria")
     filter_parser.add_argument("input", help="Path to input JSONL file")
     filter_parser.add_argument("-o", "--output", required=True, help="Output file path")
-    filter_parser.add_argument("--min-chars", type=int, default=None, help="Minimum character count")
-    filter_parser.add_argument("--max-chars", type=int, default=None, help="Maximum character count")
-    filter_parser.add_argument("--language", default=None, help="Keep only this language (e.g., en)")
-    filter_parser.add_argument("--drop-regex", default=None, help="Drop samples matching this regex")
-    filter_parser.add_argument("--field", default=None, help="Field to filter on (auto-detected if omitted)")
+    filter_parser.add_argument(
+        "--min-chars",
+        type=int,
+        default=None,
+        help="Minimum character count",
+    )
+    filter_parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help="Maximum character count",
+    )
+    filter_parser.add_argument(
+        "--language",
+        default=None,
+        help="Keep only this language (e.g., en)",
+    )
+    filter_parser.add_argument(
+        "--drop-regex",
+        default=None,
+        help="Drop samples matching this regex",
+    )
+    filter_parser.add_argument(
+        "--field",
+        default=None,
+        help="Field to filter on (auto-detected if omitted)",
+    )
 
     convert_parser = data_subparsers.add_parser("convert", help="Convert between data formats")
     convert_parser.add_argument("input", help="Path to input file")
@@ -175,12 +217,18 @@ def _build_parser() -> argparse.ArgumentParser:
     convert_parser.add_argument("--from", dest="source_format", required=True, help="Source format")
     convert_parser.add_argument("--to", dest="target_format", required=True, help="Target format")
     convert_parser.add_argument(
-        "--field-map", default=None,
+        "--field-map",
+        default=None,
         help="Field mapping (e.g., question=instruction,answer=output)",
     )
 
     gen_parser = data_subparsers.add_parser("generate", help="Generate synthetic training data")
-    gen_parser.add_argument("--mode", required=True, choices=["augment", "distill", "evolve"], help="Generation mode")
+    gen_parser.add_argument(
+        "--mode",
+        required=True,
+        choices=["augment", "distill", "evolve"],
+        help="Generation mode",
+    )
     gen_parser.add_argument("--seed", default=None, help="Path to seed examples JSONL")
     gen_parser.add_argument("--topic", default=None, help="Topic for distill mode")
     gen_parser.add_argument("-n", type=int, default=10, help="Number of examples to generate")
@@ -190,7 +238,10 @@ def _build_parser() -> argparse.ArgumentParser:
     gen_parser.add_argument("--api-base", default=None, help="API base URL")
     gen_parser.add_argument("-o", "--output", required=True, help="Output file path")
 
-    pipeline_parser = data_subparsers.add_parser("pipeline", help="Run a prep pipeline from YAML config")
+    pipeline_parser = data_subparsers.add_parser(
+        "pipeline",
+        help="Run a prep pipeline from YAML config",
+    )
     pipeline_parser.add_argument("config", help="Path to pipeline YAML config")
 
     return parser
@@ -554,14 +605,20 @@ def _handle_lr_find(args: argparse.Namespace) -> int:
 
 def _handle_data(args: argparse.Namespace) -> int:
     if args.data_command is None:
-        print("Error: Specify a data command: deduplicate, filter, convert, generate, pipeline", file=sys.stderr)
+        print(
+            "Error: Specify a data command: deduplicate, filter, convert, generate, pipeline",
+            file=sys.stderr,
+        )
         return 1
 
     if args.data_command == "deduplicate":
         from xaytune.data.prep import deduplicate
 
         result = deduplicate(
-            args.input, method=args.method, threshold=args.threshold, field=args.field,
+            args.input,
+            method=args.method,
+            threshold=args.threshold,
+            field=args.field,
         )
         result.save(args.output)
         print(result.report.summary())
@@ -584,7 +641,11 @@ def _handle_data(args: argparse.Namespace) -> int:
             filters.append({"type": "regex", "drop_pattern": args.drop_regex})
 
         if not filters:
-            print("Error: Specify at least one filter (--min-chars, --max-chars, --language, --drop-regex)", file=sys.stderr)
+            print(
+                "Error: Specify at least one filter "
+                "(--min-chars, --max-chars, --language, --drop-regex)",
+                file=sys.stderr,
+            )
             return 1
 
         result = filter_dataset(args.input, filters=filters, field=args.field)
@@ -600,8 +661,10 @@ def _handle_data(args: argparse.Namespace) -> int:
             field_map = dict(pair.split("=") for pair in args.field_map.split(","))
 
         result = convert(
-            args.input, output=args.output,
-            source_format=args.source_format, target_format=args.target_format,
+            args.input,
+            output=args.output,
+            source_format=args.source_format,
+            target_format=args.target_format,
             field_map=field_map,
         )
         print(result.report.summary())
@@ -612,9 +675,14 @@ def _handle_data(args: argparse.Namespace) -> int:
 
         try:
             result = generate(
-                mode=args.mode, seed=args.seed, topic=args.topic,
-                n=args.n, rounds=args.rounds, format=args.format,
-                model=args.model, api_base=args.api_base,
+                mode=args.mode,
+                seed=args.seed,
+                topic=args.topic,
+                n=args.n,
+                rounds=args.rounds,
+                format=args.format,
+                model=args.model,
+                api_base=args.api_base,
             )
             result.save(args.output)
             print(result.report.summary())

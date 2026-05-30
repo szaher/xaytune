@@ -32,7 +32,10 @@ def _linear_merge(state_dicts: list[dict[str, Tensor]], weights: list[float]) ->
     keys = state_dicts[0].keys()
     for key in keys:
         tensors = [sd[key] for sd in state_dicts]
-        merged[key] = sum(w * t for w, t in zip(weights, tensors))
+        acc = weights[0] * tensors[0]
+        for w, t in zip(weights[1:], tensors[1:]):
+            acc = acc + w * t
+        merged[key] = acc
     return merged
 
 
@@ -209,10 +212,12 @@ def model_merge(
         merged_sd = _slerp_merge(state_dicts[0], state_dicts[1], t)
         params["t"] = t
     elif method == "ties":
+        assert base_model is not None
         base_sd = _load_state_dict(base_model)
         merged_sd = _ties_merge(state_dicts, base_sd, density, weight)
         params.update({"density": density, "weight": weight, "base_model": base_model})
     elif method == "dare":
+        assert base_model is not None
         base_sd = _load_state_dict(base_model)
         merged_sd = _dare_merge(state_dicts, base_sd, density, weight, seed)
         params.update(

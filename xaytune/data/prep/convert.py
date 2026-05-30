@@ -43,7 +43,8 @@ def _load_parquet(path: Path) -> list[dict[str, Any]]:
     except ImportError:
         raise ImportError("Parquet support requires pyarrow. Install with: pip install pyarrow")
     table = pq.read_table(path)
-    return table.to_pylist()
+    result: list[dict[str, Any]] = table.to_pylist()
+    return result
 
 
 def _apply_field_map(samples: list[dict], field_map: dict[str, str]) -> list[dict]:

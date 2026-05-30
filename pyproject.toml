@@ -46,6 +46,9 @@ wandb = ["wandb>=0.16"]
 mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]
 studio = ["gradio>=5.0", "plotly>=5.0"]
+data-prep = ["datasketch>=1.6", "langdetect>=1.0"]
+synth = ["openai>=1.0"]
+data-all = ["xaytune[data-prep]", "xaytune[synth]"]
 all = [
     "xaytune[deepspeed]",
     "xaytune[eval]",
@@ -53,6 +56,8 @@ all = [
     "xaytune[mlflow]",
     "xaytune[tensorboard]",
     "xaytune[studio]",
+    "xaytune[data-prep]",
+    "xaytune[synth]",
 ]
 docs = [
     "mkdocs-material>=9.5",

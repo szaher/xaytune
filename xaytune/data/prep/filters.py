@@ -1,9 +1,8 @@
-from __future____ import annotations
-
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from xaytune.data.prep.report import PrepReport, PrepResult, StepReport
 from xaytune.utils.registry import Registry
@@ -48,6 +47,7 @@ def _build_length_filter(min_chars: int = 0, max_chars: int = -1, **_: Any) -> F
         if max_chars > 0 and length > max_chars:
             return False
         return True
+
     return fn
 
 
@@ -64,6 +64,7 @@ def _build_regex_filter(
         if keep_re and not keep_re.search(text):
             return False
         return True
+
     return fn
 
 
@@ -72,8 +73,7 @@ def _build_language_filter(keep: list[str], **_: Any) -> FilterFn:
         from langdetect import detect
     except ImportError:
         raise ImportError(
-            "Language filtering requires langdetect. "
-            "Install with: pip install xaytune[data-prep]"
+            "Language filtering requires langdetect. Install with: pip install xaytune[data-prep]"
         )
 
     def fn(sample: dict, field: str) -> bool:
@@ -82,6 +82,7 @@ def _build_language_filter(keep: list[str], **_: Any) -> FilterFn:
             return lang in keep
         except Exception:
             return False
+
     return fn
 
 
@@ -103,6 +104,7 @@ def _build_decontaminate_filter(
             if " ".join(words[i : i + ngram_size]) in ref_ngrams:
                 return False
         return True
+
     return fn
 
 
@@ -155,12 +157,14 @@ def filter_dataset(
         before = len(samples)
         filter_name, filter_fn = _resolve_filter(spec, field)
         samples = [s for s in samples if filter_fn(s, field)]
-        steps.append(StepReport(
-            name=f"filter:{filter_name}",
-            input_rows=before,
-            output_rows=len(samples),
-            details=spec,
-        ))
+        steps.append(
+            StepReport(
+                name=f"filter:{filter_name}",
+                input_rows=before,
+                output_rows=len(samples),
+                details=spec,
+            )
+        )
 
     return PrepResult(
         dataset=samples,

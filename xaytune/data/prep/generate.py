@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 from pathlib import Path
 from typing import Any, Literal
 
@@ -87,8 +86,14 @@ _EVOLVE_SYSTEM = (
 
 _FORMAT_TEMPLATES: dict[str, str] = {
     "alpaca": '{"instruction": "...", "output": "..."}',
-    "sharegpt": '{"conversations": [{"from": "human", "value": "..."}, {"from": "gpt", "value": "..."}]}',
-    "chat": '{"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}',
+    "sharegpt": (
+        '{"conversations": [{"from": "human", "value": "..."}, '
+        '{"from": "gpt", "value": "..."}]}'
+    ),
+    "chat": (
+        '{"messages": [{"role": "user", "content": "..."}, '
+        '{"role": "assistant", "content": "..."}]}'
+    ),
 }
 
 
@@ -224,11 +229,13 @@ def generate(
         report=PrepReport(
             input_rows=input_rows,
             output_rows=len(generated),
-            steps=[StepReport(
-                name="generate",
-                input_rows=input_rows,
-                output_rows=len(generated),
-                details={"mode": mode, "model": model, "n": n},
-            )],
+            steps=[
+                StepReport(
+                    name="generate",
+                    input_rows=input_rows,
+                    output_rows=len(generated),
+                    details={"mode": mode, "model": model, "n": n},
+                )
+            ],
         ),
     )

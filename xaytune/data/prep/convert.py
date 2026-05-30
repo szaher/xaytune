@@ -128,10 +128,12 @@ def _chat_to_sharegpt(sample: dict) -> dict:
     role_map = {"user": "human", "assistant": "gpt"}
     convs = []
     for msg in messages:
-        convs.append({
-            "from": role_map.get(msg["role"], msg["role"]),
-            "value": msg["content"],
-        })
+        convs.append(
+            {
+                "from": role_map.get(msg["role"], msg["role"]),
+                "value": msg["content"],
+            }
+        )
     return {"conversations": convs}
 
 
@@ -159,7 +161,9 @@ def convert(
     if field_map:
         samples = _apply_field_map(samples, field_map)
 
-    src_fmt = source_format if source_format not in ("csv", "parquet") else _detect_loaded_format(samples)
+    src_fmt = (
+        source_format if source_format not in ("csv", "parquet") else _detect_loaded_format(samples)
+    )
     if src_fmt in ("csv", "parquet"):
         src_fmt = "alpaca"
 
@@ -180,12 +184,14 @@ def convert(
         report=PrepReport(
             input_rows=input_rows,
             output_rows=len(converted),
-            steps=[StepReport(
-                name="convert",
-                input_rows=input_rows,
-                output_rows=len(converted),
-                details={"source_format": source_format, "target_format": target_format},
-            )],
+            steps=[
+                StepReport(
+                    name="convert",
+                    input_rows=input_rows,
+                    output_rows=len(converted),
+                    details={"source_format": source_format, "target_format": target_format},
+                )
+            ],
         ),
     )
 

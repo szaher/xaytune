@@ -45,7 +45,19 @@ class TestDataConvertCLI:
             src = Path(d) / "data.jsonl"
             dst = Path(d) / "out.jsonl"
             _write_jsonl(src, samples)
-            ret = main(["data", "convert", str(src), "-o", str(dst), "--from", "alpaca", "--to", "sharegpt"])
+            ret = main(
+                [
+                    "data",
+                    "convert",
+                    str(src),
+                    "-o",
+                    str(dst),
+                    "--from",
+                    "alpaca",
+                    "--to",
+                    "sharegpt",
+                ]
+            )
             assert ret == 0
             lines = dst.read_text().strip().split("\n")
             loaded = json.loads(lines[0])

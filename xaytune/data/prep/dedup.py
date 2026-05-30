@@ -56,8 +56,7 @@ def _minhash_dedup(
         from datasketch import MinHash, MinHashLSH
     except ImportError:
         raise ImportError(
-            "Near-duplicate dedup requires datasketch. "
-            "Install with: pip install xaytune[data-prep]"
+            "Near-duplicate dedup requires datasketch. Install with: pip install xaytune[data-prep]"
         )
 
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)

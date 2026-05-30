@@ -33,7 +33,9 @@ def _run_step(
     before = len(samples)
 
     if step_name == "filter":
-        result = filter_dataset(samples, filters=[_as_filter_spec(step_params)], field=step_params.get("field"))
+        result = filter_dataset(
+            samples, filters=[_as_filter_spec(step_params)], field=step_params.get("field")
+        )
         return result.dataset, result.report.steps[0] if result.report.steps else StepReport(
             name="filter", input_rows=before, output_rows=len(result.dataset), details=step_params
         )
@@ -41,7 +43,10 @@ def _run_step(
     if step_name == "deduplicate":
         result = deduplicate(samples, **step_params)
         return result.dataset, result.report.steps[0] if result.report.steps else StepReport(
-            name="deduplicate", input_rows=before, output_rows=len(result.dataset), details=step_params
+            name="deduplicate",
+            input_rows=before,
+            output_rows=len(result.dataset),
+            details=step_params,
         )
 
     if step_name == "convert":
@@ -50,7 +55,9 @@ def _run_step(
             name="convert", input_rows=before, output_rows=len(result.dataset), details=step_params
         )
 
-    raise ValueError(f"Unknown pipeline step: '{step_name}'. Supported: filter, deduplicate, convert")
+    raise ValueError(
+        f"Unknown pipeline step: '{step_name}'. Supported: filter, deduplicate, convert"
+    )
 
 
 def _as_filter_spec(params: dict[str, Any]) -> dict[str, Any]:
@@ -67,7 +74,12 @@ def _as_filter_spec(params: dict[str, Any]) -> dict[str, Any]:
         return spec
 
     if "language" in params:
-        return {"type": "language", "keep": [params["language"]] if isinstance(params["language"], str) else params["language"]}
+        return {
+            "type": "language",
+            "keep": [params["language"]]
+            if isinstance(params["language"], str)
+            else params["language"],
+        }
 
     if "drop_regex" in params:
         return {"type": "regex", "drop_pattern": params["drop_regex"]}

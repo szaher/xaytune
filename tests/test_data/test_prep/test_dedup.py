@@ -1,5 +1,5 @@
-import tempfile
 import json
+import tempfile
 from pathlib import Path
 
 from xaytune.data.prep.dedup import deduplicate
@@ -63,7 +63,10 @@ class TestFieldAutoDetect:
             assert len(result.dataset) == 1
 
     def test_detects_output_field(self):
-        samples = [{"instruction": "hi", "output": "hello"}, {"instruction": "yo", "output": "hello"}]
+        samples = [
+            {"instruction": "hi", "output": "hello"},
+            {"instruction": "yo", "output": "hello"},
+        ]
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "data.jsonl"
             _write_jsonl(path, samples)

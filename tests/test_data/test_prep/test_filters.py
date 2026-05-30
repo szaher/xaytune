@@ -14,19 +14,25 @@ def _write_jsonl(path, samples):
 class TestLengthFilter:
     def test_min_chars(self):
         samples = [{"text": "hi"}, {"text": "hello world this is long enough"}]
-        result = filter_dataset(samples, filters=[{"type": "length", "min_chars": 10}], field="text")
+        result = filter_dataset(
+            samples, filters=[{"type": "length", "min_chars": 10}], field="text"
+        )
         assert len(result.dataset) == 1
         assert result.dataset[0]["text"].startswith("hello")
 
     def test_max_chars(self):
         samples = [{"text": "short"}, {"text": "x" * 200}]
-        result = filter_dataset(samples, filters=[{"type": "length", "max_chars": 100}], field="text")
+        result = filter_dataset(
+            samples, filters=[{"type": "length", "max_chars": 100}], field="text"
+        )
         assert len(result.dataset) == 1
         assert result.dataset[0]["text"] == "short"
 
     def test_min_and_max(self):
         samples = [{"text": "ab"}, {"text": "hello world"}, {"text": "x" * 500}]
-        result = filter_dataset(samples, filters=[{"type": "length", "min_chars": 5, "max_chars": 100}], field="text")
+        result = filter_dataset(
+            samples, filters=[{"type": "length", "min_chars": 5, "max_chars": 100}], field="text"
+        )
         assert len(result.dataset) == 1
 
 
@@ -36,7 +42,9 @@ class TestRegexFilter:
             {"text": "check out https://example.com for details"},
             {"text": "no urls here"},
         ]
-        result = filter_dataset(samples, filters=[{"type": "regex", "drop_pattern": r"https?://\S+"}], field="text")
+        result = filter_dataset(
+            samples, filters=[{"type": "regex", "drop_pattern": r"https?://\S+"}], field="text"
+        )
         assert len(result.dataset) == 1
         assert result.dataset[0]["text"] == "no urls here"
 
@@ -45,7 +53,9 @@ class TestRegexFilter:
             {"text": "Python is great"},
             {"text": "Java is fine"},
         ]
-        result = filter_dataset(samples, filters=[{"type": "regex", "keep_pattern": r"Python"}], field="text")
+        result = filter_dataset(
+            samples, filters=[{"type": "regex", "keep_pattern": r"Python"}], field="text"
+        )
         assert len(result.dataset) == 1
 
 
@@ -107,7 +117,9 @@ class TestFromFile:
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "data.jsonl"
             _write_jsonl(path, samples)
-            result = filter_dataset(str(path), filters=[{"type": "length", "min_chars": 10}], field="text")
+            result = filter_dataset(
+                str(path), filters=[{"type": "length", "min_chars": 10}], field="text"
+            )
             assert len(result.dataset) == 1
 
 

@@ -19,7 +19,9 @@ class TestAlpacaToShareGPT:
             src = Path(d) / "src.jsonl"
             dst = Path(d) / "dst.jsonl"
             _write_jsonl(src, samples)
-            result = convert(str(src), output=str(dst), source_format="alpaca", target_format="sharegpt")
+            result = convert(
+                str(src), output=str(dst), source_format="alpaca", target_format="sharegpt"
+            )
             assert len(result.dataset) == 1
             item = result.dataset[0]
             assert "conversations" in item
@@ -35,7 +37,9 @@ class TestAlpacaToShareGPT:
             src = Path(d) / "src.jsonl"
             dst = Path(d) / "dst.jsonl"
             _write_jsonl(src, samples)
-            result = convert(str(src), output=str(dst), source_format="alpaca", target_format="sharegpt")
+            result = convert(
+                str(src), output=str(dst), source_format="alpaca", target_format="sharegpt"
+            )
             user_msg = result.dataset[0]["conversations"][0]["value"]
             assert "Translate" in user_msg
             assert "Hello" in user_msg
@@ -43,15 +47,21 @@ class TestAlpacaToShareGPT:
 
 class TestShareGPTToAlpaca:
     def test_basic(self):
-        samples = [{"conversations": [
-            {"from": "human", "value": "What is 2+2?"},
-            {"from": "gpt", "value": "4"},
-        ]}]
+        samples = [
+            {
+                "conversations": [
+                    {"from": "human", "value": "What is 2+2?"},
+                    {"from": "gpt", "value": "4"},
+                ]
+            }
+        ]
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / "src.jsonl"
             dst = Path(d) / "dst.jsonl"
             _write_jsonl(src, samples)
-            result = convert(str(src), output=str(dst), source_format="sharegpt", target_format="alpaca")
+            result = convert(
+                str(src), output=str(dst), source_format="sharegpt", target_format="alpaca"
+            )
             item = result.dataset[0]
             assert item["instruction"] == "What is 2+2?"
             assert item["output"] == "4"
@@ -59,15 +69,21 @@ class TestShareGPTToAlpaca:
 
 class TestChatToAlpaca:
     def test_basic(self):
-        samples = [{"messages": [
-            {"role": "user", "content": "Hi"},
-            {"role": "assistant", "content": "Hello!"},
-        ]}]
+        samples = [
+            {
+                "messages": [
+                    {"role": "user", "content": "Hi"},
+                    {"role": "assistant", "content": "Hello!"},
+                ]
+            }
+        ]
         with tempfile.TemporaryDirectory() as d:
             src = Path(d) / "src.jsonl"
             dst = Path(d) / "dst.jsonl"
             _write_jsonl(src, samples)
-            result = convert(str(src), output=str(dst), source_format="chat", target_format="alpaca")
+            result = convert(
+                str(src), output=str(dst), source_format="chat", target_format="alpaca"
+            )
             item = result.dataset[0]
             assert item["instruction"] == "Hi"
             assert item["output"] == "Hello!"
@@ -83,8 +99,10 @@ class TestCSVConversion:
                 writer.writeheader()
                 writer.writerow({"question": "What is AI?", "answer": "Artificial Intelligence"})
             result = convert(
-                str(src), output=str(dst),
-                source_format="csv", target_format="alpaca",
+                str(src),
+                output=str(dst),
+                source_format="csv",
+                target_format="alpaca",
                 field_map={"question": "instruction", "answer": "output"},
             )
             assert len(result.dataset) == 1

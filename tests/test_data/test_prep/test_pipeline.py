@@ -58,7 +58,11 @@ class TestPipelineConvert:
     def test_convert_then_filter(self):
         samples = [
             {"instruction": "Q1", "input": "", "output": "short"},
-            {"instruction": "Q2", "input": "", "output": "This is a much longer answer that passes the filter"},
+            {
+                "instruction": "Q2",
+                "input": "",
+                "output": "This is a much longer answer that passes the filter",
+            },
         ]
         result = pipeline(
             input=samples,

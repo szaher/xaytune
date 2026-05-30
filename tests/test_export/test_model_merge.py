@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from xaytune.export.model_merge import MergeResult, _linear_merge
+from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor
 
 
 class TestMergeResult:
@@ -62,3 +62,58 @@ class TestLinearMerge:
         sd_b = {"w": torch.ones(3, 4)}
         merged = _linear_merge([sd_a, sd_b], weights=[0.5, 0.5])
         assert torch.allclose(merged["w"], torch.full((3, 4), 0.5))
+
+
+class TestSlerpTensor:
+    def test_t_zero_returns_a(self):
+        a = torch.tensor([1.0, 0.0, 0.0])
+        b = torch.tensor([0.0, 1.0, 0.0])
+        result = _slerp_tensor(a, b, t=0.0)
+        assert torch.allclose(result, a, atol=1e-6)
+
+    def test_t_one_returns_b(self):
+        a = torch.tensor([1.0, 0.0, 0.0])
+        b = torch.tensor([0.0, 1.0, 0.0])
+        result = _slerp_tensor(a, b, t=1.0)
+        assert torch.allclose(result, b, atol=1e-6)
+
+    def test_t_half_is_midpoint(self):
+        a = torch.tensor([1.0, 0.0])
+        b = torch.tensor([0.0, 1.0])
+        result = _slerp_tensor(a, b, t=0.5)
+        assert torch.allclose(result[0], result[1], atol=1e-6)
+        assert result.norm() > 0
+
+    def test_parallel_vectors_fallback(self):
+        a = torch.tensor([1.0, 2.0, 3.0])
+        b = torch.tensor([2.0, 4.0, 6.0])
+        result = _slerp_tensor(a, b, t=0.5)
+        expected = 0.5 * a + 0.5 * b
+        assert torch.allclose(result, expected, atol=1e-6)
+
+    def test_1d_bias_fallback(self):
+        a = torch.tensor([1.0])
+        b = torch.tensor([3.0])
+        result = _slerp_tensor(a, b, t=0.5)
+        assert torch.allclose(result, torch.tensor([2.0]), atol=1e-6)
+
+
+class TestSlerpMerge:
+    def test_basic(self):
+        sd_a = {"w": torch.tensor([1.0, 0.0, 0.0]), "b": torch.tensor([0.0])}
+        sd_b = {"w": torch.tensor([0.0, 1.0, 0.0]), "b": torch.tensor([2.0])}
+        merged = _slerp_merge(sd_a, sd_b, t=0.0)
+        assert torch.allclose(merged["w"], sd_a["w"], atol=1e-6)
+
+    def test_t_one(self):
+        sd_a = {"w": torch.tensor([1.0, 0.0]), "b": torch.tensor([0.0])}
+        sd_b = {"w": torch.tensor([0.0, 1.0]), "b": torch.tensor([2.0])}
+        merged = _slerp_merge(sd_a, sd_b, t=1.0)
+        assert torch.allclose(merged["w"], sd_b["w"], atol=1e-6)
+        assert torch.allclose(merged["b"], sd_b["b"], atol=1e-6)
+
+    def test_preserves_all_keys(self):
+        sd_a = {"a": torch.tensor([1.0]), "b": torch.tensor([2.0]), "c": torch.tensor([3.0])}
+        sd_b = {"a": torch.tensor([4.0]), "b": torch.tensor([5.0]), "c": torch.tensor([6.0])}
+        merged = _slerp_merge(sd_a, sd_b, t=0.5)
+        assert set(merged.keys()) == {"a", "b", "c"}

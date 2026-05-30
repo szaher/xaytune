@@ -35,3 +35,38 @@ def _linear_merge(
         tensors = [sd[key] for sd in state_dicts]
         merged[key] = sum(w * t for w, t in zip(weights, tensors))
     return merged
+
+
+def _slerp_tensor(a: Tensor, b: Tensor, t: float) -> Tensor:
+    if a.dim() <= 1 and a.numel() <= 1:
+        return (1 - t) * a + t * b
+
+    a_flat = a.flatten().float()
+    b_flat = b.flatten().float()
+
+    a_norm = torch.nn.functional.normalize(a_flat, dim=0)
+    b_norm = torch.nn.functional.normalize(b_flat, dim=0)
+
+    dot = torch.clamp(torch.dot(a_norm, b_norm), -1.0, 1.0)
+    theta = torch.acos(dot)
+
+    if theta.abs() < 1e-6:
+        return ((1 - t) * a + t * b).to(a.dtype)
+
+    sin_theta = torch.sin(theta)
+    w_a = torch.sin((1 - t) * theta) / sin_theta
+    w_b = torch.sin(t * theta) / sin_theta
+
+    return (w_a * a.float() + w_b * b.float()).to(a.dtype)
+
+
+def _slerp_merge(
+    sd_a: dict[str, Tensor], sd_b: dict[str, Tensor], t: float
+) -> dict[str, Tensor]:
+    merged: dict[str, Tensor] = {}
+    for key in sd_a.keys():
+        if not isinstance(sd_a[key], Tensor):
+            merged[key] = sd_a[key]
+            continue
+        merged[key] = _slerp_tensor(sd_a[key], sd_b[key], t)
+    return merged

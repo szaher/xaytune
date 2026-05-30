@@ -281,6 +281,17 @@ class OnlineRLConfig(BaseModel):
     eval_every_n_steps: int = 100
 
 
+class DataPrepStepConfig(BaseModel):
+    """A single data preparation step.
+
+    Exactly one of the fields should be set per step.
+    """
+
+    filter: dict[str, Any] | None = None
+    deduplicate: dict[str, Any] | None = None
+    convert: dict[str, Any] | None = None
+
+
 class TrainConfig(BaseModel):
     """Top-level training configuration combining all sub-configs.
 
@@ -316,6 +327,7 @@ class TrainConfig(BaseModel):
     output: OutputConfig = OutputConfig()
     method_params: dict[str, Any] = {}
     online_rl: OnlineRLConfig = OnlineRLConfig()
+    data_prep: list[dict[str, Any]] = []
     fsdp: FSDPConfig = FSDPConfig()
     deepspeed_config: DeepSpeedConfig = DeepSpeedConfig()
 

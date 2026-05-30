@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from torch.utils.data import DataLoader
@@ -31,6 +32,22 @@ from xaytune.trainer.distributed import (
 from xaytune.trainer.early_stopping import register_early_stopping_callbacks
 from xaytune.trainer.eval_callback import register_eval_callbacks
 from xaytune.trainer.progress import register_progress_callbacks
+
+
+def run_data_prep(config: TrainConfig) -> str | None:
+    """Run data_prep pipeline if configured. Returns path to prepped data, or None."""
+    if not config.data_prep:
+        return None
+
+    from xaytune.data.prep import pipeline
+
+    steps = []
+    for step_dict in config.data_prep:
+        steps.append(step_dict)
+
+    prep_output = Path(config.output.dir) / ".data_prep_cache" / "prepped.jsonl"
+    result = pipeline(input=config.data.path, output=str(prep_output), steps=steps)
+    return str(prep_output)
 
 
 class TrainingComponents(NamedTuple):

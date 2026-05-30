@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor
+from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor, _ties_merge
 
 
 class TestMergeResult:
@@ -117,3 +117,45 @@ class TestSlerpMerge:
         sd_b = {"a": torch.tensor([4.0]), "b": torch.tensor([5.0]), "c": torch.tensor([6.0])}
         merged = _slerp_merge(sd_a, sd_b, t=0.5)
         assert set(merged.keys()) == {"a", "b", "c"}
+
+
+class TestTiesMerge:
+    def test_basic_with_known_values(self):
+        base = {"w": torch.tensor([0.0, 0.0, 0.0, 0.0])}
+        sd_a = {"w": torch.tensor([1.0, -0.1, 0.5, -2.0])}
+        sd_b = {"w": torch.tensor([0.8, 0.1, -0.5, -1.5])}
+        merged = _ties_merge([sd_a, sd_b], base, density=1.0, weight=1.0)
+        assert "w" in merged
+        assert merged["w"].shape == torch.Size([4])
+
+    def test_density_trims_values(self):
+        base = {"w": torch.zeros(10)}
+        sd_a = {"w": torch.randn(10)}
+        sd_b = {"w": torch.randn(10)}
+        merged_full = _ties_merge([sd_a, sd_b], base, density=1.0, weight=1.0)
+        merged_sparse = _ties_merge([sd_a, sd_b], base, density=0.3, weight=1.0)
+        assert not torch.allclose(merged_full["w"], merged_sparse["w"])
+
+    def test_weight_scales_result(self):
+        base = {"w": torch.tensor([0.0, 0.0])}
+        sd_a = {"w": torch.tensor([2.0, 2.0])}
+        sd_b = {"w": torch.tensor([2.0, 2.0])}
+        merged_1 = _ties_merge([sd_a, sd_b], base, density=1.0, weight=1.0)
+        merged_2 = _ties_merge([sd_a, sd_b], base, density=1.0, weight=2.0)
+        ratio = merged_2["w"] / merged_1["w"]
+        assert torch.allclose(ratio, torch.tensor([2.0, 2.0]), atol=1e-6)
+
+    def test_result_includes_base(self):
+        base = {"w": torch.tensor([10.0, 20.0])}
+        sd_a = {"w": torch.tensor([11.0, 21.0])}
+        merged = _ties_merge([sd_a], base, density=1.0, weight=1.0)
+        assert merged["w"][0] > 10.0
+
+    def test_sign_election(self):
+        base = {"w": torch.tensor([0.0, 0.0])}
+        sd_a = {"w": torch.tensor([1.0, -1.0])}
+        sd_b = {"w": torch.tensor([2.0, -2.0])}
+        sd_c = {"w": torch.tensor([-0.5, 0.5])}
+        merged = _ties_merge([sd_a, sd_b, sd_c], base, density=1.0, weight=1.0)
+        assert merged["w"][0] > 0
+        assert merged["w"][1] < 0

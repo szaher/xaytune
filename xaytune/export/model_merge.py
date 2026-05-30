@@ -70,3 +70,43 @@ def _slerp_merge(
             continue
         merged[key] = _slerp_tensor(sd_a[key], sd_b[key], t)
     return merged
+
+
+def _ties_merge(
+    state_dicts: list[dict[str, Tensor]],
+    base_sd: dict[str, Tensor],
+    density: float,
+    weight: float,
+) -> dict[str, Tensor]:
+    merged: dict[str, Tensor] = {}
+
+    for key in base_sd.keys():
+        base_tensor = base_sd[key].float()
+
+        task_vectors = [(sd[key].float() - base_tensor) for sd in state_dicts]
+
+        trimmed = []
+        for tv in task_vectors:
+            flat = tv.flatten()
+            k = max(1, int(density * flat.numel()))
+            threshold = flat.abs().topk(k).values[-1]
+            mask = flat.abs() >= threshold
+            trimmed_flat = flat * mask.float()
+            trimmed.append(trimmed_flat.reshape(tv.shape))
+
+        stacked = torch.stack(trimmed)
+        sign_magnitude = stacked.sum(dim=0)
+        elected_sign = torch.sign(sign_magnitude)
+
+        aligned = []
+        for tv in trimmed:
+            mask = torch.sign(tv) == elected_sign
+            aligned.append(tv * mask.float())
+
+        stacked_aligned = torch.stack(aligned)
+        counts = (stacked_aligned != 0).float().sum(dim=0).clamp(min=1)
+        avg_task_vector = stacked_aligned.sum(dim=0) / counts
+
+        merged[key] = (base_tensor + weight * avg_task_vector).to(base_sd[key].dtype)
+
+    return merged

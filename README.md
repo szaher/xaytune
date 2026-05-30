@@ -21,6 +21,7 @@
 - **Callbacks** — event-driven hooks for early stopping, checkpointing, progress, custom logic
 - **Evaluation** — built-in metrics + lm-eval-harness benchmarks
 - **Export** — merge LoRA adapters, GGUF conversion, push to HuggingFace Hub
+- **Model merging** — combine fine-tuned models with Linear, SLERP, TIES, and DARE algorithms
 - **Training Studio** — Gradio web UI for configuring and launching runs
 - **8 CLI commands** — train, eval, export, compare, lr-find, list, studio, launch
 - **Fully typed** — Pydantic configs, py.typed, mypy-clean

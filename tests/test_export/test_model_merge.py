@@ -1,13 +1,21 @@
-import torch
-import pytest
-from unittest.mock import patch, MagicMock
 from importlib import import_module
+from unittest.mock import MagicMock, patch
 
-import xaytune.export.model_merge as mm_module
-from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor, _ties_merge, _dare_merge, model_merge
+import pytest
+import torch
+
+from xaytune.export.model_merge import (
+    MergeResult,
+    _dare_merge,
+    _linear_merge,
+    _slerp_merge,
+    _slerp_tensor,
+    _ties_merge,
+    model_merge,
+)
 
 # Ensure we have the actual module, not the function
-mm_module = import_module('xaytune.export.model_merge')
+mm_module = import_module("xaytune.export.model_merge")
 
 
 class TestMergeResult:
@@ -236,7 +244,13 @@ class TestValidation:
 
     def test_density_out_of_range(self):
         with pytest.raises(ValueError, match="density"):
-            model_merge(models=["a", "b"], method="ties", output="/tmp/out", base_model="base", density=1.5)
+            model_merge(
+                models=["a", "b"],
+                method="ties",
+                output="/tmp/out",
+                base_model="base",
+                density=1.5,
+            )
 
     def test_t_out_of_range(self):
         with pytest.raises(ValueError, match="t"):
@@ -282,7 +296,13 @@ class TestModelMergeDispatch:
         base_sd = self._make_sd()
         mock_load.side_effect = [self._make_sd(), self._make_sd(), base_sd]
         mock_tok.return_value = MagicMock()
-        result = model_merge(models=["a", "b"], method="ties", output="/tmp/out", base_model="base", density=0.7)
+        result = model_merge(
+            models=["a", "b"],
+            method="ties",
+            output="/tmp/out",
+            base_model="base",
+            density=0.7,
+        )
         assert result.method == "ties"
         assert result.params["density"] == 0.7
 
@@ -295,3 +315,53 @@ class TestModelMergeDispatch:
         mock_tok.return_value = MagicMock()
         result = model_merge(models=["a", "b"], method="dare", output="/tmp/out", base_model="base")
         assert result.method == "dare"
+
+
+class TestIntegration:
+    def _make_sd(self):
+        return {
+            "layer.weight": torch.randn(4, 4),
+            "layer.bias": torch.randn(4),
+        }
+
+    def test_linear_end_to_end(self):
+        sd_a = self._make_sd()
+        sd_b = self._make_sd()
+        merged = _linear_merge([sd_a, sd_b], weights=[0.5, 0.5])
+        for key in sd_a:
+            expected = 0.5 * sd_a[key] + 0.5 * sd_b[key]
+            assert torch.allclose(merged[key], expected)
+
+    def test_slerp_end_to_end(self):
+        sd_a = self._make_sd()
+        sd_b = self._make_sd()
+        merged = _slerp_merge(sd_a, sd_b, t=0.5)
+        for key in sd_a:
+            assert merged[key].shape == sd_a[key].shape
+
+    def test_ties_end_to_end(self):
+        base = self._make_sd()
+        sd_a = {k: v + torch.randn_like(v) * 0.1 for k, v in base.items()}
+        sd_b = {k: v + torch.randn_like(v) * 0.1 for k, v in base.items()}
+        merged = _ties_merge([sd_a, sd_b], base, density=0.5, weight=1.0)
+        for key in base:
+            assert merged[key].shape == base[key].shape
+
+    def test_dare_end_to_end(self):
+        base = self._make_sd()
+        sd_a = {k: v + torch.randn_like(v) * 0.1 for k, v in base.items()}
+        sd_b = {k: v + torch.randn_like(v) * 0.1 for k, v in base.items()}
+        merged = _dare_merge([sd_a, sd_b], base, density=0.5, weight=1.0, seed=42)
+        for key in base:
+            assert merged[key].shape == base[key].shape
+
+    def test_all_methods_produce_same_keys(self):
+        base = self._make_sd()
+        sd_a = {k: v + 0.1 for k, v in base.items()}
+        sd_b = {k: v + 0.2 for k, v in base.items()}
+        keys = set(base.keys())
+
+        assert set(_linear_merge([sd_a, sd_b], [0.5, 0.5]).keys()) == keys
+        assert set(_slerp_merge(sd_a, sd_b, 0.5).keys()) == keys
+        assert set(_ties_merge([sd_a, sd_b], base, 0.5, 1.0).keys()) == keys
+        assert set(_dare_merge([sd_a, sd_b], base, 0.5, 1.0, 42).keys()) == keys

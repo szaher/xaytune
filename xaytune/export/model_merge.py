@@ -110,3 +110,35 @@ def _ties_merge(
         merged[key] = (base_tensor + weight * avg_task_vector).to(base_sd[key].dtype)
 
     return merged
+
+
+def _dare_merge(
+    state_dicts: list[dict[str, Tensor]],
+    base_sd: dict[str, Tensor],
+    density: float,
+    weight: float,
+    seed: int,
+) -> dict[str, Tensor]:
+    merged: dict[str, Tensor] = {}
+    gen = torch.Generator()
+    gen.manual_seed(seed)
+
+    for key in base_sd.keys():
+        base_tensor = base_sd[key].float()
+
+        task_vectors = [(sd[key].float() - base_tensor) for sd in state_dicts]
+
+        rescaled = []
+        for tv in task_vectors:
+            mask = torch.bernoulli(
+                torch.full_like(tv, density), generator=gen
+            ).bool()
+            dropped = tv * mask.float()
+            if density > 0:
+                dropped = dropped / density
+            rescaled.append(dropped)
+
+        avg_task_vector = torch.stack(rescaled).mean(dim=0)
+        merged[key] = (base_tensor + weight * avg_task_vector).to(base_sd[key].dtype)
+
+    return merged

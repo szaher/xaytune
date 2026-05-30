@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor, _ties_merge
+from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor, _ties_merge, _dare_merge
 
 
 class TestMergeResult:
@@ -159,3 +159,53 @@ class TestTiesMerge:
         merged = _ties_merge([sd_a, sd_b, sd_c], base, density=1.0, weight=1.0)
         assert merged["w"][0] > 0
         assert merged["w"][1] < 0
+
+
+class TestDareMerge:
+    def test_basic(self):
+        base = {"w": torch.tensor([0.0, 0.0, 0.0, 0.0])}
+        sd_a = {"w": torch.tensor([1.0, 2.0, 3.0, 4.0])}
+        sd_b = {"w": torch.tensor([2.0, 3.0, 4.0, 5.0])}
+        merged = _dare_merge([sd_a, sd_b], base, density=1.0, weight=1.0, seed=42)
+        assert "w" in merged
+        assert merged["w"].shape == torch.Size([4])
+
+    def test_density_drops_elements(self):
+        torch.manual_seed(0)
+        base = {"w": torch.zeros(100)}
+        sd_a = {"w": torch.ones(100)}
+        merged = _dare_merge([sd_a], base, density=0.5, weight=1.0, seed=42)
+        task_vec = merged["w"] - base["w"]
+        nonzero = (task_vec.abs() > 1e-6).sum().item()
+        assert 30 < nonzero < 70
+
+    def test_rescaling_preserves_magnitude(self):
+        base = {"w": torch.zeros(1000)}
+        sd_a = {"w": torch.ones(1000)}
+        merged_full = _dare_merge([sd_a], base, density=1.0, weight=1.0, seed=42)
+        merged_half = _dare_merge([sd_a], base, density=0.5, weight=1.0, seed=42)
+        mean_full = (merged_full["w"] - base["w"]).mean()
+        mean_half = (merged_half["w"] - base["w"]).mean()
+        assert abs(mean_full.item() - mean_half.item()) < 0.15
+
+    def test_deterministic_with_seed(self):
+        base = {"w": torch.zeros(50)}
+        sd_a = {"w": torch.randn(50)}
+        merged_1 = _dare_merge([sd_a], base, density=0.5, weight=1.0, seed=123)
+        merged_2 = _dare_merge([sd_a], base, density=0.5, weight=1.0, seed=123)
+        assert torch.allclose(merged_1["w"], merged_2["w"])
+
+    def test_weight_scales_result(self):
+        base = {"w": torch.tensor([0.0, 0.0])}
+        sd_a = {"w": torch.tensor([1.0, 1.0])}
+        merged_1 = _dare_merge([sd_a], base, density=1.0, weight=1.0, seed=42)
+        merged_2 = _dare_merge([sd_a], base, density=1.0, weight=2.0, seed=42)
+        diff_1 = merged_1["w"] - base["w"]
+        diff_2 = merged_2["w"] - base["w"]
+        assert torch.allclose(diff_2, 2 * diff_1, atol=1e-6)
+
+    def test_result_includes_base(self):
+        base = {"w": torch.tensor([10.0, 20.0])}
+        sd_a = {"w": torch.tensor([11.0, 21.0])}
+        merged = _dare_merge([sd_a], base, density=1.0, weight=1.0, seed=42)
+        assert torch.allclose(merged["w"], sd_a["w"], atol=1e-6)

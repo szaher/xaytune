@@ -1,3 +1,4 @@
+import importlib
 import json
 import tempfile
 from pathlib import Path
@@ -5,7 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from xaytune.data.prep.generate import generate
+_gen_module = importlib.import_module("xaytune.data.prep.generate")
+generate = _gen_module.generate
 
 
 def _write_jsonl(path, samples):
@@ -23,8 +25,9 @@ def _mock_openai_response(content: str):
 
 
 class TestAugment:
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_augment_from_seeds(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_augment_from_seeds(self, mock_call, _mock_client):
         mock_call.return_value = json.dumps(
             {
                 "instruction": "Explain gravity",
@@ -43,8 +46,9 @@ class TestAugment:
         assert len(result.dataset) == 2
         assert mock_call.call_count == 2
 
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_augment_from_file(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_augment_from_file(self, mock_call, _mock_client):
         mock_call.return_value = json.dumps(
             {
                 "instruction": "New question",
@@ -66,8 +70,9 @@ class TestAugment:
 
 
 class TestDistill:
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_distill_from_topic(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_distill_from_topic(self, mock_call, _mock_client):
         mock_call.return_value = json.dumps(
             {
                 "instruction": "What is K8s?",
@@ -90,8 +95,9 @@ class TestDistill:
 
 
 class TestEvolve:
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_evolve_increases_complexity(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_evolve_increases_complexity(self, mock_call, _mock_client):
         mock_call.return_value = json.dumps(
             {
                 "instruction": "Compare and contrast gravity in Newtonian and Einsteinian physics",
@@ -112,8 +118,9 @@ class TestEvolve:
 
 
 class TestPostFilter:
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_post_filter_drops_short(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_post_filter_drops_short(self, mock_call, _mock_client):
         mock_call.side_effect = [
             json.dumps({"instruction": "Q", "output": "A"}),
             json.dumps(
@@ -138,8 +145,9 @@ class TestAPIKeyResolution:
             with pytest.raises(ValueError, match="API key"):
                 generate(mode="distill", topic="test", n=1, format="alpaca", model="test")
 
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_env_var_key(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_env_var_key(self, mock_call, _mock_client):
         mock_call.return_value = json.dumps({"instruction": "Q", "output": "A"})
         with patch.dict("os.environ", {"OPENAI_API_KEY": "env-key"}):
             result = generate(
@@ -153,8 +161,9 @@ class TestAPIKeyResolution:
 
 
 class TestReport:
-    @patch("xaytune.data.prep.generate._call_llm_sync")
-    def test_report_counts(self, mock_call):
+    @patch.object(_gen_module, "_get_client", return_value=MagicMock())
+    @patch.object(_gen_module, "_call_llm_sync")
+    def test_report_counts(self, mock_call, _mock_client):
         mock_call.return_value = json.dumps({"instruction": "Q", "output": "A"})
         result = generate(
             mode="distill",

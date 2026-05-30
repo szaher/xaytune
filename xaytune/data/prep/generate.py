@@ -171,14 +171,14 @@ def generate(
     concurrency: int = 5,
     post_filter: list[dict[str, Any]] | None = None,
 ) -> PrepResult:
-    resolved_key = _resolve_api_key(api_key)
-    client = _get_client(resolved_key, api_base)
-
     if mode == "distill" and not topic:
         raise ValueError("mode='distill' requires a topic= argument.")
 
     if mode in ("augment", "evolve") and seed is None:
         raise ValueError(f"mode='{mode}' requires a seed= argument.")
+
+    resolved_key = _resolve_api_key(api_key)
+    client = _get_client(resolved_key, api_base)
 
     seeds: list[dict] = []
     if seed is not None:

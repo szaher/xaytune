@@ -1,6 +1,13 @@
+import sys
 from pathlib import Path
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        import pip._vendor.tomli as tomllib
 
 
 class TestPackaging:

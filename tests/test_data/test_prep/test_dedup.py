@@ -2,7 +2,15 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from xaytune.data.prep.dedup import deduplicate
+
+try:
+    import datasketch  # noqa: F401
+    _has_datasketch = True
+except ImportError:
+    _has_datasketch = False
 
 
 def _write_jsonl(path, samples):
@@ -89,6 +97,7 @@ class TestAcceptsList:
         assert len(result.dataset) == 2
 
 
+@pytest.mark.skipif(not _has_datasketch, reason="datasketch not installed")
 class TestMinHashDedup:
     def test_removes_near_duplicates(self):
         samples = [
@@ -114,6 +123,7 @@ class TestMinHashDedup:
             assert len(result.dataset) == 2
 
 
+@pytest.mark.skipif(not _has_datasketch, reason="datasketch not installed")
 class TestBothMethod:
     def test_removes_exact_and_near(self):
         samples = [

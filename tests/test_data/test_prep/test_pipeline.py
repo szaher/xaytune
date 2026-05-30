@@ -55,7 +55,7 @@ class TestPipelineBasic:
 
 
 class TestPipelineConvert:
-    def test_convert_then_filter(self):
+    def test_filter_then_convert(self):
         samples = [
             {"instruction": "Q1", "input": "", "output": "short"},
             {
@@ -67,8 +67,8 @@ class TestPipelineConvert:
         result = pipeline(
             input=samples,
             steps=[
-                {"convert": {"source_format": "alpaca", "target_format": "sharegpt"}},
                 {"filter": {"min_chars": 20}},
+                {"convert": {"source_format": "alpaca", "target_format": "sharegpt"}},
             ],
         )
         assert len(result.dataset) == 1

@@ -8,6 +8,7 @@ from xaytune.data.prep.dedup import deduplicate
 
 try:
     import datasketch  # noqa: F401
+
     _has_datasketch = True
 except ImportError:
     _has_datasketch = False

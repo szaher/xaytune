@@ -87,8 +87,7 @@ _EVOLVE_SYSTEM = (
 _FORMAT_TEMPLATES: dict[str, str] = {
     "alpaca": '{"instruction": "...", "output": "..."}',
     "sharegpt": (
-        '{"conversations": [{"from": "human", "value": "..."}, '
-        '{"from": "gpt", "value": "..."}]}'
+        '{"conversations": [{"from": "human", "value": "..."}, {"from": "gpt", "value": "..."}]}'
     ),
     "chat": (
         '{"messages": [{"role": "user", "content": "..."}, '

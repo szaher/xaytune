@@ -2,6 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
+METHOD_PARAMS_SPEC: dict[str, list[dict[str, Any]]] = {
+    "dpo": [{"name": "beta", "default": 0.1, "info": "Preference strength temperature."}],
+    "grpo": [{"name": "kl_coeff", "default": 0.04, "info": "KL divergence penalty weight."}],
+    "ppo": [{"name": "clip_eps", "default": 0.2, "info": "Policy clipping range."}],
+    "orpo": [{"name": "lambda_weight", "default": 1.0, "info": "Odds-ratio loss weight."}],
+    "simpo": [
+        {"name": "beta", "default": 2.0, "info": "Preference scaling."},
+        {"name": "gamma", "default": 0.5, "info": "Sigmoid offset."},
+    ],
+}
+
 _RECIPE_FUNC: dict[str, str] = {
     "finetune": "finetune",
     "pretrain": "pretrain",
@@ -244,8 +255,6 @@ def generate_code(
             params.append((k, _format_value(v)))
 
     if recipe == "align":
-        from xaytune.studio.app import METHOD_PARAMS_SPEC
-
         spec = METHOD_PARAMS_SPEC.get(method, [])
         mp_values = {
             "beta": beta,

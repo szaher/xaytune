@@ -17,7 +17,7 @@ from xaytune.config.schema import (
     TrainerConfig,
 )
 from xaytune.studio.code_runner import CODE_TEMPLATES, run_code
-from xaytune.studio.codegen import generate_code
+from xaytune.studio.codegen import METHOD_PARAMS_SPEC, generate_code
 from xaytune.studio.data_preview import preview_dataset
 from xaytune.studio.dataset_browser import get_dataset_info, preview_hf_dataset, search_datasets
 from xaytune.studio.examples import EXAMPLES, load_example_values
@@ -31,16 +31,6 @@ RECIPE_METHODS: dict[str, list[str]] = {
     "align": ["dpo", "grpo", "ppo", "orpo", "simpo"],
 }
 
-METHOD_PARAMS_SPEC: dict[str, list[dict[str, Any]]] = {
-    "dpo": [{"name": "beta", "default": 0.1, "info": "Preference strength temperature."}],
-    "grpo": [{"name": "kl_coeff", "default": 0.04, "info": "KL divergence penalty weight."}],
-    "ppo": [{"name": "clip_eps", "default": 0.2, "info": "Policy clipping range."}],
-    "orpo": [{"name": "lambda_weight", "default": 1.0, "info": "Odds-ratio loss weight."}],
-    "simpo": [
-        {"name": "beta", "default": 2.0, "info": "Preference scaling."},
-        {"name": "gamma", "default": 0.5, "info": "Sigmoid offset."},
-    ],
-}
 
 STATUS_COLORS: dict[str, str] = {
     "pending": "#6b7280",

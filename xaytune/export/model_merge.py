@@ -27,9 +27,7 @@ class MergeResult:
         return "\n".join(lines)
 
 
-def _linear_merge(
-    state_dicts: list[dict[str, Tensor]], weights: list[float]
-) -> dict[str, Tensor]:
+def _linear_merge(state_dicts: list[dict[str, Tensor]], weights: list[float]) -> dict[str, Tensor]:
     merged: dict[str, Tensor] = {}
     keys = state_dicts[0].keys()
     for key in keys:
@@ -61,9 +59,7 @@ def _slerp_tensor(a: Tensor, b: Tensor, t: float) -> Tensor:
     return (w_a * a.float() + w_b * b.float()).to(a.dtype)
 
 
-def _slerp_merge(
-    sd_a: dict[str, Tensor], sd_b: dict[str, Tensor], t: float
-) -> dict[str, Tensor]:
+def _slerp_merge(sd_a: dict[str, Tensor], sd_b: dict[str, Tensor], t: float) -> dict[str, Tensor]:
     merged: dict[str, Tensor] = {}
     for key in sd_a.keys():
         if not isinstance(sd_a[key], Tensor):
@@ -131,9 +127,7 @@ def _dare_merge(
 
         rescaled = []
         for tv in task_vectors:
-            mask = torch.bernoulli(
-                torch.full_like(tv, density), generator=gen
-            ).bool()
+            mask = torch.bernoulli(torch.full_like(tv, density), generator=gen).bool()
             dropped = tv * mask.float()
             if density > 0:
                 dropped = dropped / density
@@ -147,12 +141,14 @@ def _dare_merge(
 
 def _load_state_dict(path: str) -> dict[str, Tensor]:
     from transformers import AutoModelForCausalLM
+
     model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32)
     return model.state_dict()
 
 
 def _load_tokenizer(path: str) -> Any:
     from transformers import AutoTokenizer
+
     return AutoTokenizer.from_pretrained(path)
 
 
@@ -182,9 +178,7 @@ def model_merge(
         raise ValueError(f"{method.upper()} requires base_model= argument")
 
     if weights is not None and len(weights) != len(models):
-        raise ValueError(
-            f"weights length ({len(weights)}) must match models count ({len(models)})"
-        )
+        raise ValueError(f"weights length ({len(weights)}) must match models count ({len(models)})")
 
     if not 0.0 <= density <= 1.0:
         raise ValueError(f"density must be between 0.0 and 1.0, got {density}")
@@ -221,7 +215,9 @@ def model_merge(
     elif method == "dare":
         base_sd = _load_state_dict(base_model)
         merged_sd = _dare_merge(state_dicts, base_sd, density, weight, seed)
-        params.update({"density": density, "weight": weight, "seed": seed, "base_model": base_model})
+        params.update(
+            {"density": density, "weight": weight, "seed": seed, "base_model": base_model}
+        )
     else:
         raise ValueError(f"Unknown merge method: {method}")
 

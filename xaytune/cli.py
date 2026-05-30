@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Any
 
 import xaytune
 from xaytune.config import load_config, validate_config
@@ -112,6 +113,53 @@ def _build_parser() -> argparse.ArgumentParser:
         "--override", action="append", default=[], help="Config overrides (key=value)"
     )
 
+    # Data preparation subcommands
+    data_parser = subparsers.add_parser("data", help="Data preparation toolkit")
+    data_subparsers = data_parser.add_subparsers(dest="data_command", help="Data commands")
+
+    dedup_parser = data_subparsers.add_parser("deduplicate", help="Remove duplicate samples")
+    dedup_parser.add_argument("input", help="Path to input JSONL file")
+    dedup_parser.add_argument("-o", "--output", required=True, help="Output file path")
+    dedup_parser.add_argument(
+        "--method", default="both", choices=["exact", "minhash", "both"],
+        help="Dedup method (default: both)",
+    )
+    dedup_parser.add_argument("--threshold", type=float, default=0.85, help="MinHash threshold (default: 0.85)")
+    dedup_parser.add_argument("--field", default=None, help="Field to compare (auto-detected if omitted)")
+
+    filter_parser = data_subparsers.add_parser("filter", help="Filter samples by quality criteria")
+    filter_parser.add_argument("input", help="Path to input JSONL file")
+    filter_parser.add_argument("-o", "--output", required=True, help="Output file path")
+    filter_parser.add_argument("--min-chars", type=int, default=None, help="Minimum character count")
+    filter_parser.add_argument("--max-chars", type=int, default=None, help="Maximum character count")
+    filter_parser.add_argument("--language", default=None, help="Keep only this language (e.g., en)")
+    filter_parser.add_argument("--drop-regex", default=None, help="Drop samples matching this regex")
+    filter_parser.add_argument("--field", default=None, help="Field to filter on (auto-detected if omitted)")
+
+    convert_parser = data_subparsers.add_parser("convert", help="Convert between data formats")
+    convert_parser.add_argument("input", help="Path to input file")
+    convert_parser.add_argument("-o", "--output", required=True, help="Output file path")
+    convert_parser.add_argument("--from", dest="source_format", required=True, help="Source format")
+    convert_parser.add_argument("--to", dest="target_format", required=True, help="Target format")
+    convert_parser.add_argument(
+        "--field-map", default=None,
+        help="Field mapping (e.g., question=instruction,answer=output)",
+    )
+
+    gen_parser = data_subparsers.add_parser("generate", help="Generate synthetic training data")
+    gen_parser.add_argument("--mode", required=True, choices=["augment", "distill", "evolve"], help="Generation mode")
+    gen_parser.add_argument("--seed", default=None, help="Path to seed examples JSONL")
+    gen_parser.add_argument("--topic", default=None, help="Topic for distill mode")
+    gen_parser.add_argument("-n", type=int, default=10, help="Number of examples to generate")
+    gen_parser.add_argument("--rounds", type=int, default=1, help="Evolution rounds (evolve mode)")
+    gen_parser.add_argument("--format", default="alpaca", help="Output format (default: alpaca)")
+    gen_parser.add_argument("--model", required=True, help="LLM model name")
+    gen_parser.add_argument("--api-base", default=None, help="API base URL")
+    gen_parser.add_argument("-o", "--output", required=True, help="Output file path")
+
+    pipeline_parser = data_subparsers.add_parser("pipeline", help="Run a prep pipeline from YAML config")
+    pipeline_parser.add_argument("config", help="Path to pipeline YAML config")
+
     return parser
 
 
@@ -150,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "launch":
         return _handle_launch(args)
+
+    if args.command == "data":
+        return _handle_data(args)
 
     return 0
 
@@ -441,6 +492,91 @@ def _handle_lr_find(args: argparse.Namespace) -> int:
         print(f"Results saved to {args.output}")
 
     return 0
+
+
+def _handle_data(args: argparse.Namespace) -> int:
+    if args.data_command is None:
+        print("Error: Specify a data command: deduplicate, filter, convert, generate, pipeline", file=sys.stderr)
+        return 1
+
+    if args.data_command == "deduplicate":
+        from xaytune.data.prep import deduplicate
+
+        result = deduplicate(
+            args.input, method=args.method, threshold=args.threshold, field=args.field,
+        )
+        result.save(args.output)
+        print(result.report.summary())
+        return 0
+
+    if args.data_command == "filter":
+        from xaytune.data.prep import filter_dataset
+
+        filters = []
+        if args.min_chars is not None or args.max_chars is not None:
+            f: dict[str, Any] = {"type": "length"}
+            if args.min_chars is not None:
+                f["min_chars"] = args.min_chars
+            if args.max_chars is not None:
+                f["max_chars"] = args.max_chars
+            filters.append(f)
+        if args.language:
+            filters.append({"type": "language", "keep": [args.language]})
+        if args.drop_regex:
+            filters.append({"type": "regex", "drop_pattern": args.drop_regex})
+
+        if not filters:
+            print("Error: Specify at least one filter (--min-chars, --max-chars, --language, --drop-regex)", file=sys.stderr)
+            return 1
+
+        result = filter_dataset(args.input, filters=filters, field=args.field)
+        result.save(args.output)
+        print(result.report.summary())
+        return 0
+
+    if args.data_command == "convert":
+        from xaytune.data.prep import convert
+
+        field_map = None
+        if args.field_map:
+            field_map = dict(pair.split("=") for pair in args.field_map.split(","))
+
+        result = convert(
+            args.input, output=args.output,
+            source_format=args.source_format, target_format=args.target_format,
+            field_map=field_map,
+        )
+        print(result.report.summary())
+        return 0
+
+    if args.data_command == "generate":
+        from xaytune.data.prep import generate
+
+        try:
+            result = generate(
+                mode=args.mode, seed=args.seed, topic=args.topic,
+                n=args.n, rounds=args.rounds, format=args.format,
+                model=args.model, api_base=args.api_base,
+            )
+            result.save(args.output)
+            print(result.report.summary())
+            return 0
+        except (ValueError, ImportError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    if args.data_command == "pipeline":
+        from xaytune.data.prep import pipeline
+
+        try:
+            result = pipeline(config=args.config)
+            print(result.report.summary())
+            return 0
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    return 1
 
 
 if __name__ == "__main__":

@@ -1,7 +1,13 @@
 import torch
 import pytest
+from unittest.mock import patch, MagicMock
+from importlib import import_module
 
-from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor, _ties_merge, _dare_merge
+import xaytune.export.model_merge as mm_module
+from xaytune.export.model_merge import MergeResult, _linear_merge, _slerp_merge, _slerp_tensor, _ties_merge, _dare_merge, model_merge
+
+# Ensure we have the actual module, not the function
+mm_module = import_module('xaytune.export.model_merge')
 
 
 class TestMergeResult:
@@ -209,3 +215,83 @@ class TestDareMerge:
         sd_a = {"w": torch.tensor([11.0, 21.0])}
         merged = _dare_merge([sd_a], base, density=1.0, weight=1.0, seed=42)
         assert torch.allclose(merged["w"], sd_a["w"], atol=1e-6)
+
+
+class TestValidation:
+    def test_slerp_requires_two_models(self):
+        with pytest.raises(ValueError, match="exactly 2"):
+            model_merge(models=["a", "b", "c"], method="slerp", output="/tmp/out")
+
+    def test_ties_requires_base_model(self):
+        with pytest.raises(ValueError, match="base_model"):
+            model_merge(models=["a", "b"], method="ties", output="/tmp/out")
+
+    def test_dare_requires_base_model(self):
+        with pytest.raises(ValueError, match="base_model"):
+            model_merge(models=["a", "b"], method="dare", output="/tmp/out")
+
+    def test_weights_length_mismatch(self):
+        with pytest.raises(ValueError, match="weights"):
+            model_merge(models=["a", "b"], method="linear", output="/tmp/out", weights=[0.5])
+
+    def test_density_out_of_range(self):
+        with pytest.raises(ValueError, match="density"):
+            model_merge(models=["a", "b"], method="ties", output="/tmp/out", base_model="base", density=1.5)
+
+    def test_t_out_of_range(self):
+        with pytest.raises(ValueError, match="t"):
+            model_merge(models=["a", "b"], method="slerp", output="/tmp/out", t=2.0)
+
+    def test_mismatched_keys(self):
+        sd_a = {"layer1.w": torch.tensor([1.0])}
+        sd_b = {"layer2.w": torch.tensor([1.0])}
+        with patch.object(mm_module, "_load_state_dict", side_effect=[sd_a, sd_b]):
+            with patch.object(mm_module, "_load_tokenizer", return_value=MagicMock()):
+                with pytest.raises(ValueError, match="keys"):
+                    model_merge(models=["a", "b"], method="linear", output="/tmp/out")
+
+
+class TestModelMergeDispatch:
+    def _make_sd(self):
+        return {"layer.weight": torch.randn(4, 4), "layer.bias": torch.randn(4)}
+
+    @patch.object(mm_module, "_save_merged")
+    @patch.object(mm_module, "_load_tokenizer")
+    @patch.object(mm_module, "_load_state_dict")
+    def test_linear_dispatch(self, mock_load, mock_tok, mock_save):
+        mock_load.side_effect = [self._make_sd(), self._make_sd()]
+        mock_tok.return_value = MagicMock()
+        result = model_merge(models=["a", "b"], method="linear", output="/tmp/out")
+        assert result.method == "linear"
+        mock_save.assert_called_once()
+
+    @patch.object(mm_module, "_save_merged")
+    @patch.object(mm_module, "_load_tokenizer")
+    @patch.object(mm_module, "_load_state_dict")
+    def test_slerp_dispatch(self, mock_load, mock_tok, mock_save):
+        mock_load.side_effect = [self._make_sd(), self._make_sd()]
+        mock_tok.return_value = MagicMock()
+        result = model_merge(models=["a", "b"], method="slerp", output="/tmp/out", t=0.3)
+        assert result.method == "slerp"
+        assert result.params["t"] == 0.3
+
+    @patch.object(mm_module, "_save_merged")
+    @patch.object(mm_module, "_load_tokenizer")
+    @patch.object(mm_module, "_load_state_dict")
+    def test_ties_dispatch(self, mock_load, mock_tok, mock_save):
+        base_sd = self._make_sd()
+        mock_load.side_effect = [self._make_sd(), self._make_sd(), base_sd]
+        mock_tok.return_value = MagicMock()
+        result = model_merge(models=["a", "b"], method="ties", output="/tmp/out", base_model="base", density=0.7)
+        assert result.method == "ties"
+        assert result.params["density"] == 0.7
+
+    @patch.object(mm_module, "_save_merged")
+    @patch.object(mm_module, "_load_tokenizer")
+    @patch.object(mm_module, "_load_state_dict")
+    def test_dare_dispatch(self, mock_load, mock_tok, mock_save):
+        base_sd = self._make_sd()
+        mock_load.side_effect = [self._make_sd(), self._make_sd(), base_sd]
+        mock_tok.return_value = MagicMock()
+        result = model_merge(models=["a", "b"], method="dare", output="/tmp/out", base_model="base")
+        assert result.method == "dare"

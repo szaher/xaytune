@@ -74,6 +74,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "--repo", required=True, help="HF Hub repo (e.g., username/model-name)"
     )
 
+    model_merge_parser = export_subparsers.add_parser(
+        "model-merge", help="Merge models using weight interpolation (linear, slerp, ties, dare)"
+    )
+    model_merge_parser.add_argument(
+        "--models", nargs="+", required=True, help="Paths to models to merge"
+    )
+    model_merge_parser.add_argument(
+        "--method", required=True, choices=["linear", "slerp", "ties", "dare"],
+        help="Merge method",
+    )
+    model_merge_parser.add_argument("--output", required=True, help="Output directory")
+    model_merge_parser.add_argument(
+        "--weights", nargs="+", type=float, default=None,
+        help="Per-model weights for linear merge",
+    )
+    model_merge_parser.add_argument(
+        "--t", type=float, default=0.5, help="SLERP interpolation factor (default: 0.5)"
+    )
+    model_merge_parser.add_argument(
+        "--base-model", default=None, help="Base model path (required for ties/dare)"
+    )
+    model_merge_parser.add_argument(
+        "--density", type=float, default=0.5,
+        help="Sparsification density for ties/dare (default: 0.5)",
+    )
+    model_merge_parser.add_argument(
+        "--weight", type=float, default=1.0,
+        help="Task vector scaling for ties/dare (default: 1.0)",
+    )
+    model_merge_parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for dare (default: 42)"
+    )
+
     compare_parser = subparsers.add_parser("compare", help="Compare two models side-by-side")
     compare_parser.add_argument("models", nargs="+", help="Model paths to compare (exactly 2)")
     compare_parser.add_argument("--benchmarks", required=True, help="Comma-separated benchmarks")
@@ -315,7 +348,7 @@ def _handle_eval(args: argparse.Namespace) -> int:
 
 def _handle_export(args: argparse.Namespace) -> int:
     if args.export_command is None:
-        print("Error: Specify an export command: merge, gguf, push", file=sys.stderr)
+        print("Error: Specify an export command: merge, model-merge, gguf, push", file=sys.stderr)
         return 1
 
     if args.export_command == "merge":
@@ -326,6 +359,9 @@ def _handle_export(args: argparse.Namespace) -> int:
 
     if args.export_command == "push":
         return _export_push(args)
+
+    if args.export_command == "model-merge":
+        return _export_model_merge(args)
 
     return 1
 
@@ -362,6 +398,28 @@ def _export_push(args: argparse.Namespace) -> int:
         print(f"Model pushed to {args.repo}")
         return 0
     except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _export_model_merge(args: argparse.Namespace) -> int:
+    from xaytune.export.model_merge import model_merge
+
+    try:
+        result = model_merge(
+            models=args.models,
+            method=args.method,
+            output=args.output,
+            weights=args.weights,
+            t=args.t,
+            base_model=args.base_model,
+            density=args.density,
+            weight=args.weight,
+            seed=args.seed,
+        )
+        print(result.summary())
+        return 0
+    except (ValueError, ImportError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 

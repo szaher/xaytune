@@ -6,6 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from xaytune.recipes.align.rewards import register_reward
+
 
 @dataclass
 class ParsedToolCall:
@@ -46,6 +48,7 @@ def parse_tool_calls(
     return calls
 
 
+@register_reward("tool_use_quality")
 def tool_use_quality_reward(
     prompt: str,
     response: str,
@@ -96,6 +99,7 @@ def tool_use_quality_reward(
     return (tool_score + sum(arg_scores) / len(arg_scores)) / 2.0
 
 
+@register_reward("task_completion")
 def task_completion_reward(
     prompt: str,
     response: str,
@@ -133,6 +137,7 @@ def task_completion_reward(
     return 0.0
 
 
+@register_reward("efficiency")
 def efficiency_reward(
     prompt: str,
     response: str,
@@ -172,3 +177,44 @@ def efficiency_reward(
         return 0.0
 
     return 1.0 - (num_calls / max_steps)
+
+
+@register_reward("agent_composite")
+def agent_composite_reward(
+    prompt: str,
+    response: str,
+    *,
+    quality_weight: float = 0.4,
+    completion_weight: float = 0.4,
+    efficiency_weight: float = 0.2,
+    parser: Callable | None = None,
+    expected_tools: list[str] | None = None,
+    required_args: dict[str, list[str]] | None = None,
+    success_markers: list[str] | None = None,
+    failure_markers: list[str] | None = None,
+    max_steps: int = 10,
+    optimal_steps: int | None = None,
+) -> float:
+    """Weighted combination of tool_use_quality, task_completion, and efficiency."""
+    quality = tool_use_quality_reward(
+        prompt,
+        response,
+        expected_tools=expected_tools,
+        required_args=required_args,
+        parser=parser,
+    )
+    completion = task_completion_reward(
+        prompt,
+        response,
+        success_markers=success_markers,
+        failure_markers=failure_markers,
+        parser=parser,
+    )
+    eff = efficiency_reward(
+        prompt,
+        response,
+        max_steps=max_steps,
+        optimal_steps=optimal_steps,
+        parser=parser,
+    )
+    return quality_weight * quality + completion_weight * completion + efficiency_weight * eff

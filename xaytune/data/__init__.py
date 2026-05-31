@@ -1,4 +1,7 @@
+import xaytune.data.agent_formats  # register agent formats  # noqa: F401
 import xaytune.data.formats  # register built-in formats  # noqa: F401
+from xaytune.data.agent_formats import AgentMessage
+from xaytune.data.agent_tokenizer import tokenize_agent_dataset
 from xaytune.data.formats import apply_chat_template
 from xaytune.data.loader import load_dataset
 from xaytune.data.packing import pack_sequences
@@ -17,12 +20,14 @@ from xaytune.data.validation import DataValidationError, validate_dataset_sample
 register_format = format_registry.register
 
 __all__ = [
+    "AgentMessage",
     "apply_chat_template",
     "collate_preference",
     "collate_tokenized",
     "load_dataset",
     "load_preference_dataset",
     "StreamingTokenizedDataset",
+    "tokenize_agent_dataset",
     "tokenize_sample",
     "format_registry",
     "register_format",

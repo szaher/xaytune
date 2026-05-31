@@ -193,6 +193,13 @@ def setup_training(
     else:
         samples: list[dict[str, Any]] = train_data  # type: ignore[assignment]
 
+        is_agent = (
+            isinstance(samples, list)
+            and samples
+            and isinstance(samples[0], list)
+            and samples[0]
+            and hasattr(samples[0][0], "trainable")
+        )
         is_prompt_only = (
             config.online_rl.enabled
             and samples
@@ -203,7 +210,21 @@ def setup_training(
             not is_prompt_only and samples and "prompt" in samples[0] and "chosen" in samples[0]
         )
 
-        if is_prompt_only:
+        if is_agent:
+            from xaytune.data.agent_tokenizer import tokenize_agent_dataset
+
+            train_data = tokenize_agent_dataset(
+                samples,
+                model_result.tokenizer,
+                max_seq,
+            )
+            if eval_data is not None and isinstance(eval_data, list) and eval_data:
+                eval_data = tokenize_agent_dataset(
+                    eval_data,
+                    model_result.tokenizer,
+                    max_seq,
+                )
+        elif is_prompt_only:
             train_data = tokenize_prompt_dataset(
                 samples,
                 model_result.tokenizer,
@@ -242,6 +263,7 @@ def setup_training(
 
         if (
             not is_preference
+            and not is_agent
             and config.data.packing
             and config.data.max_seq_length > 0
             and isinstance(train_data, list)

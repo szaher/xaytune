@@ -56,12 +56,58 @@ Domain adaptation workflows with curriculum learning, data mixing ratios, and ph
 - Example notebook: `examples/11_domain_adaptation.ipynb` — continued pre-training with curriculum learning
 - Config validation tests for the new curriculum/mixing YAML schema
 
-## 6. Model Merging
+## ~~6. Model Merging~~ ✅ Implemented (v0.7.0)
 
-TIES, DARE, and SLERP merge methods for combining fine-tuned adapters or full models. Useful for ensembling specialized models without retraining.
+Shipped: Linear, SLERP, TIES, DARE merge algorithms. Python API, CLI (`xaytune export model-merge`), example notebook.
+
+## 7. Agent Fine-Tuning
+
+Train models to be better agents — tool use, multi-step reasoning, and task completion. This is the first opinionated toolkit for agent fine-tuning with a clean CLI-first API.
+
+### 7a. Tool-Use Data Formats
+
+New data formats for agent training data:
+
+- **function_calling** — OpenAI-style function calling conversations with tool definitions, tool calls, and tool results
+- **react** — ReAct-style traces (Thought → Action → Observation loops)
+- **trajectory** — full agent trajectories with multi-step tool use, branching, and error recovery
+
+Each format maps to the existing `register_format` system and tokenizes tool schemas, calls, and results with appropriate special tokens.
+
+### 7b. Agent SFT (Supervised Fine-Tuning on Trajectories)
+
+Extend the `finetune` recipe to handle agent data:
+
+- Fine-tune on successful tool-use trajectories (teach the model which tools to call and when)
+- Loss masking on tool results (model learns to generate actions, not predict tool output)
+- Support for multi-turn conversations with interleaved tool calls
+- Compatible with LoRA/QLoRA for efficient training
+
+### 7c. Agent Alignment (RLHF/GRPO with Tool Execution)
+
+Extend the `align` recipe with agent-specific reward functions:
+
+- **Task completion reward** — did the agent achieve the goal?
+- **Tool-use quality reward** — were the right tools called with correct parameters?
+- **Efficiency reward** — fewer steps = better (penalize unnecessary tool calls)
+- **Execution feedback** — integrate actual tool execution results into the reward signal
+- Online RL with tool execution in the loop (builds on existing GRPO/PPO + online generation pipeline)
+
+### 7d. Agent Evaluation
+
+Agent-specific eval metrics and benchmarks:
+
+- Tool-use accuracy (correct tool + correct parameters)
+- Task success rate (end-to-end completion)
+- Step efficiency (steps taken vs minimum required)
+- Error recovery rate (handles tool failures gracefully)
+- Integration with existing `xaytune.eval` and lm-eval-harness
 
 **Testing requirements:**
-- Unit tests for each merge algorithm (TIES, DARE, SLERP) with small random weight tensors
-- Integration test: train 2 tiny LoRA adapters → merge them → verify the merged model produces valid outputs
-- Example notebook: `examples/12_model_merging.ipynb` — merge two fine-tuned adapters and compare with individual models
-- CLI tests for `xaytune export merge --method ties/dare/slerp`
+- Unit tests for each data format (function_calling, react, trajectory) with tokenization verification
+- Unit tests for loss masking on tool results
+- Unit tests for each reward function with known trajectories
+- Integration test: fine-tune a tiny model on tool-use data → evaluate tool-use accuracy
+- Integration test: run GRPO alignment with a mock tool execution environment
+- Example notebook: `examples/11_agent_finetuning.ipynb` — full agent training pipeline: data prep → SFT on trajectories → alignment with tool-use rewards → evaluation
+- CLI tests for any new subcommands or format options

@@ -6,41 +6,46 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from xaytune.recipes.align.rewards import register_reward
-
-_TOOL_CALL_PATTERN = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
-_TOOL_RESULT_PATTERN = re.compile(r"<tool_result>\s*(.*?)\s*</tool_result>", re.DOTALL)
-
 
 @dataclass
 class ParsedToolCall:
+    """Represents a parsed tool call from agent output."""
+
     name: str
     arguments: dict[str, Any]
 
 
 def parse_tool_calls(
-    response: str,
+    text: str,
     parser: Callable[[str], list[ParsedToolCall]] | None = None,
 ) -> list[ParsedToolCall]:
+    """Parse tool calls from text containing <tool_call> tags.
+
+    Args:
+        text: Text potentially containing tool calls
+        parser: Optional custom parser function
+
+    Returns:
+        List of ParsedToolCall objects
+    """
     if parser is not None:
-        return parser(response)
+        return parser(text)
 
     calls: list[ParsedToolCall] = []
-    for match in _TOOL_CALL_PATTERN.finditer(response):
+    pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
+
+    for match in re.finditer(pattern, text, re.DOTALL):
         try:
             data = json.loads(match.group(1))
-            calls.append(
-                ParsedToolCall(
-                    name=data.get("name", ""),
-                    arguments=data.get("arguments", {}),
-                )
-            )
+            name = data.get("name", "")
+            arguments = data.get("arguments", {})
+            calls.append(ParsedToolCall(name=name, arguments=arguments))
         except (json.JSONDecodeError, AttributeError):
             continue
+
     return calls
 
 
-@register_reward("tool_use_quality")
 def tool_use_quality_reward(
     prompt: str,
     response: str,
@@ -49,38 +54,48 @@ def tool_use_quality_reward(
     required_args: dict[str, list[str]] | None = None,
     parser: Callable | None = None,
 ) -> float:
+    """Reward based on using the expected tools with required arguments.
+
+    Args:
+        prompt: The input prompt
+        response: The agent's response
+        expected_tools: List of tool names that should be used
+        required_args: Dict mapping tool names to lists of required argument names
+        parser: Optional custom parser
+
+    Returns:
+        Score from 0.0 to 1.0
+    """
     calls = parse_tool_calls(response, parser=parser)
 
     if not calls:
-        return 0.0
+        return 1.0 if not expected_tools else 0.0
 
-    if expected_tools is None and required_args is None:
+    if not expected_tools:
         return 1.0
 
-    score_parts: list[float] = []
-    total_parts = 0
+    tool_names = [call.name for call in calls]
+    correct_tools = sum(1 for name in tool_names if name in expected_tools)
+    tool_score = correct_tools / len(calls)
 
-    if expected_tools is not None:
-        called_names = {c.name for c in calls}
-        matched = sum(1 for t in expected_tools if t in called_names)
-        total_parts += len(expected_tools)
-        score_parts.append(float(matched))
+    if not required_args:
+        return tool_score
 
-    if required_args is not None:
-        for call in calls:
-            if call.name in required_args:
-                required = required_args[call.name]
-                present = sum(1 for a in required if a in call.arguments)
-                total_parts += len(required)
-                score_parts.append(float(present))
+    arg_scores = []
+    for call in calls:
+        if call.name not in required_args:
+            continue
+        required = set(required_args[call.name])
+        provided = set(call.arguments.keys())
+        if required:
+            arg_scores.append(len(required & provided) / len(required))
 
-    if total_parts == 0:
-        return 1.0
+    if not arg_scores:
+        return tool_score
 
-    return sum(score_parts) / total_parts
+    return (tool_score + sum(arg_scores) / len(arg_scores)) / 2.0
 
 
-@register_reward("task_completion")
 def task_completion_reward(
     prompt: str,
     response: str,
@@ -89,24 +104,35 @@ def task_completion_reward(
     failure_markers: list[str] | None = None,
     parser: Callable | None = None,
 ) -> float:
-    if failure_markers:
-        for marker in failure_markers:
-            if marker.lower() in response.lower():
-                return 0.0
+    """Reward based on task completion indicators.
 
-    if success_markers:
-        matched = sum(1 for m in success_markers if m.lower() in response.lower())
-        return matched / len(success_markers)
+    Args:
+        prompt: The input prompt
+        response: The agent's response
+        success_markers: Phrases indicating successful completion
+        failure_markers: Phrases indicating failure
+        parser: Optional custom parser (not used here)
 
-    last_result = response.rfind("</tool_result>")
-    if last_result == -1:
-        return 1.0 if response.strip() else 0.0
+    Returns:
+        Score from 0.0 to 1.0
+    """
+    if success_markers is None:
+        success_markers = ["done", "Done", "completed", "Completed", "finished", "Finished"]
+    if failure_markers is None:
+        failure_markers = ["error", "Error", "failed", "Failed", "cannot", "unable"]
 
-    after_tools = response[last_result + len("</tool_result>") :].strip()
-    return 1.0 if after_tools else 0.0
+    has_success = any(marker in response for marker in success_markers)
+    has_failure = any(marker in response for marker in failure_markers)
+
+    if has_success and not has_failure:
+        return 1.0
+    if has_failure and not has_success:
+        return 0.0
+    if has_success and has_failure:
+        return 0.5
+    return 0.0
 
 
-@register_reward("efficiency")
 def efficiency_reward(
     prompt: str,
     response: str,
@@ -115,54 +141,34 @@ def efficiency_reward(
     optimal_steps: int | None = None,
     parser: Callable | None = None,
 ) -> float:
+    """Reward based on efficiency (fewer tool calls is better).
+
+    Args:
+        prompt: The input prompt
+        response: The agent's response
+        max_steps: Maximum acceptable number of tool calls
+        optimal_steps: Optimal number of tool calls (if known)
+        parser: Optional custom parser
+
+    Returns:
+        Score from 0.0 to 1.0
+    """
     calls = parse_tool_calls(response, parser=parser)
     num_calls = len(calls)
 
     if num_calls == 0:
-        return 1.0 if response.strip() else 0.0
+        return 1.0
 
     if optimal_steps is not None:
-        diff = abs(num_calls - optimal_steps)
-        return max(0.0, 1.0 - diff / max_steps)
+        if num_calls <= optimal_steps:
+            return 1.0
+        if num_calls >= max_steps:
+            return 0.0
+        excess = num_calls - optimal_steps
+        max_excess = max_steps - optimal_steps
+        return 1.0 - (excess / max_excess)
 
-    return max(0.0, 1.0 - num_calls / max_steps)
+    if num_calls >= max_steps:
+        return 0.0
 
-
-@register_reward("agent_composite")
-def agent_composite_reward(
-    prompt: str,
-    response: str,
-    *,
-    quality_weight: float = 0.4,
-    completion_weight: float = 0.4,
-    efficiency_weight: float = 0.2,
-    parser: Callable | None = None,
-    expected_tools: list[str] | None = None,
-    required_args: dict[str, list[str]] | None = None,
-    success_markers: list[str] | None = None,
-    failure_markers: list[str] | None = None,
-    max_steps: int = 10,
-    optimal_steps: int | None = None,
-) -> float:
-    quality = tool_use_quality_reward(
-        prompt,
-        response,
-        expected_tools=expected_tools,
-        required_args=required_args,
-        parser=parser,
-    )
-    completion = task_completion_reward(
-        prompt,
-        response,
-        success_markers=success_markers,
-        failure_markers=failure_markers,
-        parser=parser,
-    )
-    eff = efficiency_reward(
-        prompt,
-        response,
-        max_steps=max_steps,
-        optimal_steps=optimal_steps,
-        parser=parser,
-    )
-    return quality_weight * quality + completion_weight * completion + efficiency_weight * eff
+    return 1.0 - (num_calls / max_steps)

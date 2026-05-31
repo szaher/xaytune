@@ -10,14 +10,17 @@ from xaytune.data.loader import load_dataset
 class TestFormatRegistration:
     def test_function_calling_registered(self):
         from xaytune.data.registry import format_registry
+
         assert format_registry.has("function_calling")
 
     def test_react_registered(self):
         from xaytune.data.registry import format_registry
+
         assert format_registry.has("react")
 
     def test_trajectory_registered(self):
         from xaytune.data.registry import format_registry
+
         assert format_registry.has("trajectory")
 
 
@@ -56,20 +59,22 @@ class TestEndToEnd:
 
         tok = MagicMock()
         tok.model_max_length = 1024
+
         def tokenize_side_effect(text, **kwargs):
             tokens = list(range(len(text.split())))
             result = {"input_ids": tokens}
             if kwargs.get("return_attention_mask", True):
                 result["attention_mask"] = [1] * len(tokens)
             return result
+
         tok.side_effect = tokenize_side_effect
 
         result = tokenize_agent_dataset([messages], tok)
         assert len(result) == 1
         sample_out = result[0]
         assert len(sample_out["input_ids"]) == len(sample_out["labels"])
-        has_trainable = any(l != -100 for l in sample_out["labels"])
-        has_masked = any(l == -100 for l in sample_out["labels"])
+        has_trainable = any(v != -100 for v in sample_out["labels"])
+        has_masked = any(v == -100 for v in sample_out["labels"])
         assert has_trainable
         assert has_masked
 
@@ -77,8 +82,10 @@ class TestEndToEnd:
 class TestAgentDetection:
     def test_is_agent_data(self):
         data = [
-            [AgentMessage(role="user", content="hi", trainable=False),
-             AgentMessage(role="assistant", content="hello", trainable=True)]
+            [
+                AgentMessage(role="user", content="hi", trainable=False),
+                AgentMessage(role="assistant", content="hello", trainable=True),
+            ]
         ]
         is_agent = (
             isinstance(data, list)

@@ -111,3 +111,17 @@ Agent-specific eval metrics and benchmarks:
 - Integration test: run GRPO alignment with a mock tool execution environment
 - Example notebook: `examples/11_agent_finetuning.ipynb` — full agent training pipeline: data prep → SFT on trajectories → alignment with tool-use rewards → evaluation
 - CLI tests for any new subcommands or format options
+
+### 7e. Synthetic Agent Data Generation (future)
+
+Extend `xaytune.data.prep.generate` with agent-aware generation modes:
+
+- **trajectory_gen** — give an LLM a task + tool definitions, have it produce a multi-turn tool-use conversation as training data
+- **trajectory_verify** — execute generated trajectories against real tools to validate correctness before training
+- Builds on the existing augment/distill/evolve pipeline but produces structured agent formats instead of flat instruction/output pairs
+
+Deferred until 7a data formats are proven. The formats ship first with support for loading and training on existing agent data.
+
+### 7f. Multi-Agent Conversations (future)
+
+Training on multi-agent collaboration data where multiple agents interact. Extends the `trajectory` format with a `name` field per turn to distinguish agents. Covers CrewAI, AutoGen, and custom multi-agent orchestration patterns. Deferred until single-agent training is proven.

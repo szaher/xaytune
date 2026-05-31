@@ -92,8 +92,16 @@ class TestLossMasking:
 class TestTruncation:
     def test_max_seq_length(self):
         messages = [
-            AgentMessage(role="user", content=" ".join(f"w{i}" for i in range(50)), trainable=False),
-            AgentMessage(role="assistant", content=" ".join(f"a{i}" for i in range(50)), trainable=True),
+            AgentMessage(
+                role="user",
+                content=" ".join(f"w{i}" for i in range(50)),
+                trainable=False,
+            ),
+            AgentMessage(
+                role="assistant",
+                content=" ".join(f"a{i}" for i in range(50)),
+                trainable=True,
+            ),
         ]
         tok = _make_tokenizer()
         result = tokenize_agent_dataset([messages], tok, max_seq_length=20)

@@ -214,13 +214,13 @@ def setup_training(
             from xaytune.data.agent_tokenizer import tokenize_agent_dataset
 
             train_data = tokenize_agent_dataset(
-                samples,
+                samples,  # type: ignore[arg-type]
                 model_result.tokenizer,
                 max_seq,
             )
             if eval_data is not None and isinstance(eval_data, list) and eval_data:
                 eval_data = tokenize_agent_dataset(
-                    eval_data,
+                    eval_data,  # type: ignore[arg-type]
                     model_result.tokenizer,
                     max_seq,
                 )

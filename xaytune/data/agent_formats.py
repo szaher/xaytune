@@ -61,25 +61,37 @@ def format_function_calling(sample: dict[str, Any]) -> list[AgentMessage]:
                     parts.append(content)
                 for tc in tool_calls:
                     parts.append(_serialize_tool_call(tc))
-                result.append(AgentMessage(
-                    role="assistant",
-                    content="\n".join(parts),
-                    trainable=True,
-                ))
+                result.append(
+                    AgentMessage(
+                        role="assistant",
+                        content="\n".join(parts),
+                        trainable=True,
+                    )
+                )
             else:
-                result.append(AgentMessage(
-                    role="assistant", content=content, trainable=True,
-                ))
+                result.append(
+                    AgentMessage(
+                        role="assistant",
+                        content=content,
+                        trainable=True,
+                    )
+                )
         elif role == "tool":
-            result.append(AgentMessage(
-                role="tool",
-                content=f"<tool_result>\n{content}\n</tool_result>",
-                trainable=False,
-            ))
+            result.append(
+                AgentMessage(
+                    role="tool",
+                    content=f"<tool_result>\n{content}\n</tool_result>",
+                    trainable=False,
+                )
+            )
         else:
-            result.append(AgentMessage(
-                role=role, content=content, trainable=False,
-            ))
+            result.append(
+                AgentMessage(
+                    role=role,
+                    content=content,
+                    trainable=False,
+                )
+            )
 
     return result
 
@@ -99,16 +111,22 @@ def format_react(sample: dict[str, Any]) -> list[AgentMessage]:
         observation = step.get("observation", None)
 
         assistant_text = f"Thought: {thought}\nAction: {action}\nAction Input: {action_input}"
-        result.append(AgentMessage(
-            role="assistant", content=assistant_text, trainable=True,
-        ))
+        result.append(
+            AgentMessage(
+                role="assistant",
+                content=assistant_text,
+                trainable=True,
+            )
+        )
 
         if observation is not None:
-            result.append(AgentMessage(
-                role="tool",
-                content=f"Observation: {observation}",
-                trainable=False,
-            ))
+            result.append(
+                AgentMessage(
+                    role="tool",
+                    content=f"Observation: {observation}",
+                    trainable=False,
+                )
+            )
 
     return result
 
@@ -137,20 +155,28 @@ def format_trajectory(sample: dict[str, Any]) -> list[AgentMessage]:
                     parts.append(content)
                 for tc in tool_calls:
                     parts.append(_serialize_tool_call(tc))
-                result.append(AgentMessage(
-                    role="assistant",
-                    content="\n".join(parts),
-                    trainable=True,
-                ))
+                result.append(
+                    AgentMessage(
+                        role="assistant",
+                        content="\n".join(parts),
+                        trainable=True,
+                    )
+                )
             else:
-                result.append(AgentMessage(
-                    role="assistant", content=content, trainable=True,
-                ))
+                result.append(
+                    AgentMessage(
+                        role="assistant",
+                        content=content,
+                        trainable=True,
+                    )
+                )
         elif role == "tool":
-            result.append(AgentMessage(
-                role="tool",
-                content=f"<tool_result>\n{content}\n</tool_result>",
-                trainable=False,
-            ))
+            result.append(
+                AgentMessage(
+                    role="tool",
+                    content=f"<tool_result>\n{content}\n</tool_result>",
+                    trainable=False,
+                )
+            )
 
     return result

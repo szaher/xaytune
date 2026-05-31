@@ -16,9 +16,7 @@ def tokenize_agent_dataset(
         return []
 
     max_length = (
-        max_seq_length
-        if max_seq_length > 0
-        else getattr(tokenizer, "model_max_length", 1024)
+        max_seq_length if max_seq_length > 0 else getattr(tokenizer, "model_max_length", 1024)
     )
 
     tokenized = []
@@ -48,10 +46,12 @@ def tokenize_agent_dataset(
         if not all_ids:
             continue
 
-        tokenized.append({
-            "input_ids": all_ids,
-            "labels": all_labels,
-            "attention_mask": [1] * len(all_ids),
-        })
+        tokenized.append(
+            {
+                "input_ids": all_ids,
+                "labels": all_labels,
+                "attention_mask": [1] * len(all_ids),
+            }
+        )
 
     return tokenized

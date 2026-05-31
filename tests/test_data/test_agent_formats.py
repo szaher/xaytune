@@ -43,13 +43,18 @@ class TestFunctionCallingFormat:
         sample = {
             "messages": [
                 {"role": "user", "content": "Weather in London?"},
-                {"role": "assistant", "content": None, "tool_calls": [
-                    {"id": "call_1", "type": "function", "function": {
-                        "name": "get_weather",
-                        "arguments": "{\"city\": \"London\"}"
-                    }}
-                ]},
-                {"role": "tool", "tool_call_id": "call_1", "content": "{\"temp\": 18}"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "London"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": '{"temp": 18}'},
                 {"role": "assistant", "content": "It's 18°C in London."},
             ]
         }
@@ -83,11 +88,15 @@ class TestFunctionCallingFormat:
                 {"role": "assistant", "content": "Hello!"},
             ],
             "tools": [
-                {"type": "function", "function": {
-                    "name": "search", "description": "Search the web",
-                    "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}
-                }}
-            ]
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "description": "Search the web",
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                    },
+                }
+            ],
         }
         messages = format_function_calling(sample)
         assert messages[0].role == "system"
@@ -98,14 +107,22 @@ class TestFunctionCallingFormat:
         sample = {
             "messages": [
                 {"role": "user", "content": "Weather in London and Paris?"},
-                {"role": "assistant", "content": None, "tool_calls": [
-                    {"id": "c1", "type": "function", "function": {
-                        "name": "get_weather", "arguments": "{\"city\": \"London\"}"
-                    }},
-                    {"id": "c2", "type": "function", "function": {
-                        "name": "get_weather", "arguments": "{\"city\": \"Paris\"}"
-                    }},
-                ]},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "London"}'},
+                        },
+                        {
+                            "id": "c2",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        },
+                    ],
+                },
             ]
         }
         messages = format_function_calling(sample)
@@ -114,6 +131,7 @@ class TestFunctionCallingFormat:
 
     def test_registered(self):
         from xaytune.data.registry import format_registry
+
         assert format_registry.has("function_calling")
 
 
@@ -121,9 +139,7 @@ class TestReactFormat:
     def test_single_step(self):
         sample = {
             "task": "What is 2+2?",
-            "steps": [
-                {"thought": "Simple math.", "action": "finish", "action_input": "4"}
-            ]
+            "steps": [{"thought": "Simple math.", "action": "finish", "action_input": "4"}],
         }
         messages = format_react(sample)
         assert len(messages) == 2
@@ -144,14 +160,10 @@ class TestReactFormat:
                     "thought": "I need to search.",
                     "action": "search",
                     "action_input": "France population",
-                    "observation": "68 million"
+                    "observation": "68 million",
                 },
-                {
-                    "thought": "I have the answer.",
-                    "action": "finish",
-                    "action_input": "68 million"
-                }
-            ]
+                {"thought": "I have the answer.", "action": "finish", "action_input": "68 million"},
+            ],
         }
         messages = format_react(sample)
         assert len(messages) == 4
@@ -167,15 +179,14 @@ class TestReactFormat:
     def test_step_without_observation(self):
         sample = {
             "task": "Say hello",
-            "steps": [
-                {"thought": "Easy.", "action": "finish", "action_input": "Hello!"}
-            ]
+            "steps": [{"thought": "Easy.", "action": "finish", "action_input": "Hello!"}],
         }
         messages = format_react(sample)
         assert len(messages) == 2
 
     def test_registered(self):
         from xaytune.data.registry import format_registry
+
         assert format_registry.has("react")
 
 
@@ -185,7 +196,7 @@ class TestTrajectoryFormat:
             "goal": "Say hello",
             "turns": [
                 {"role": "assistant", "content": "Hello!"},
-            ]
+            ],
         }
         messages = format_trajectory(sample)
         assert len(messages) == 2
@@ -201,7 +212,7 @@ class TestTrajectoryFormat:
             "goal": "Write hello world",
             "turns": [
                 {"role": "assistant", "content": "Done."},
-            ]
+            ],
         }
         messages = format_trajectory(sample)
         assert len(messages) == 3
@@ -217,11 +228,11 @@ class TestTrajectoryFormat:
                     "content": "I'll create it.",
                     "tool_calls": [
                         {"name": "write_file", "arguments": {"path": "a.py", "content": "x=1"}}
-                    ]
+                    ],
                 },
                 {"role": "tool", "content": "File written."},
                 {"role": "assistant", "content": "Done."},
-            ]
+            ],
         }
         messages = format_trajectory(sample)
         assert len(messages) == 4
@@ -239,16 +250,20 @@ class TestTrajectoryFormat:
         sample = {
             "goal": "Do two things",
             "turns": [
-                {"role": "assistant", "content": "Step 1.", "tool_calls": [
-                    {"name": "tool_a", "arguments": {}}
-                ]},
+                {
+                    "role": "assistant",
+                    "content": "Step 1.",
+                    "tool_calls": [{"name": "tool_a", "arguments": {}}],
+                },
                 {"role": "tool", "content": "Result 1"},
-                {"role": "assistant", "content": "Step 2.", "tool_calls": [
-                    {"name": "tool_b", "arguments": {}}
-                ]},
+                {
+                    "role": "assistant",
+                    "content": "Step 2.",
+                    "tool_calls": [{"name": "tool_b", "arguments": {}}],
+                },
                 {"role": "tool", "content": "Result 2"},
                 {"role": "assistant", "content": "All done."},
-            ]
+            ],
         }
         messages = format_trajectory(sample)
         assert len(messages) == 6
@@ -257,4 +272,5 @@ class TestTrajectoryFormat:
 
     def test_registered(self):
         from xaytune.data.registry import format_registry
+
         assert format_registry.has("trajectory")

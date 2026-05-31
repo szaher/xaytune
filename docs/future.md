@@ -64,32 +64,17 @@ Shipped: Linear, SLERP, TIES, DARE merge algorithms. Python API, CLI (`xaytune e
 
 Train models to be better agents — tool use, multi-step reasoning, and task completion. This is the first opinionated toolkit for agent fine-tuning with a clean CLI-first API.
 
-### 7a. Tool-Use Data Formats
+### ~~7a. Tool-Use Data Formats~~ ✅ Implemented
 
-New data formats for agent training data:
+Shipped: function_calling, react, trajectory formats with AgentMessage intermediate representation, agent tokenizer with loss masking, setup_training() integration.
 
-- **function_calling** — OpenAI-style function calling conversations with tool definitions, tool calls, and tool results
-- **react** — ReAct-style traces (Thought → Action → Observation loops)
-- **trajectory** — full agent trajectories with multi-step tool use, branching, and error recovery
+### ~~7b. Agent SFT~~ ✅ Implemented
 
-Each format maps to the existing `register_format` system and tokenizes tool schemas, calls, and results with appropriate special tokens.
+Shipped: End-to-end agent SFT pipeline verified — format → tokenize → collate → train. Loss masking works via HuggingFace's native labels=-100 support.
 
-### 7b. Agent SFT (Supervised Fine-Tuning on Trajectories)
+### ~~7c. Agent Alignment~~ ✅ Implemented
 
-Extend the `finetune` recipe to handle agent data:
-
-- Fine-tune on successful tool-use trajectories (teach the model which tools to call and when)
-- Loss masking on tool results (model learns to generate actions, not predict tool output)
-- Support for multi-turn conversations with interleaved tool calls
-- Compatible with LoRA/QLoRA for efficient training
-
-### 7c. Agent Alignment (RLHF/GRPO with Tool Execution)
-
-Extend the `align` recipe with agent-specific reward functions:
-
-- **Task completion reward** — did the agent achieve the goal?
-- **Tool-use quality reward** — were the right tools called with correct parameters?
-- **Efficiency reward** — fewer steps = better (penalize unnecessary tool calls)
+Shipped: tool_use_quality, task_completion, efficiency, agent_composite reward functions with pluggable tool call parser. Integrates with existing GRPO/PPO via reward_registry.
 - **Execution feedback** — integrate actual tool execution results into the reward signal
 - Online RL with tool execution in the loop (builds on existing GRPO/PPO + online generation pipeline)
 

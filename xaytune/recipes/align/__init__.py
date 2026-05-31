@@ -1,3 +1,4 @@
+import xaytune.recipes.align.agent_rewards  # register agent rewards  # noqa: F401
 from xaytune.recipes.align.align import align
 from xaytune.recipes.align.dpo import dpo_loss
 from xaytune.recipes.align.generation import GenerationResult, generate_completions

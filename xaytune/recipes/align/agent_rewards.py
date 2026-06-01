@@ -77,26 +77,23 @@ def tool_use_quality_reward(
     if not expected_tools:
         return 1.0
 
-    tool_names = [call.name for call in calls]
-    correct_tools = sum(1 for name in tool_names if name in expected_tools)
-    tool_score = correct_tools / len(calls)
+    called_names = {call.name for call in calls}
+    matched = sum(1 for t in expected_tools if t in called_names)
+    score_parts = [float(matched)]
+    total_parts = len(expected_tools)
 
-    if not required_args:
-        return tool_score
+    if required_args:
+        for call in calls:
+            if call.name in required_args:
+                required = required_args[call.name]
+                present = sum(1 for a in required if a in call.arguments)
+                total_parts += len(required)
+                score_parts.append(float(present))
 
-    arg_scores = []
-    for call in calls:
-        if call.name not in required_args:
-            continue
-        required = set(required_args[call.name])
-        provided = set(call.arguments.keys())
-        if required:
-            arg_scores.append(len(required & provided) / len(required))
+    if total_parts == 0:
+        return 1.0
 
-    if not arg_scores:
-        return tool_score
-
-    return (tool_score + sum(arg_scores) / len(arg_scores)) / 2.0
+    return sum(score_parts) / total_parts
 
 
 @register_reward("task_completion")
@@ -120,21 +117,21 @@ def task_completion_reward(
     Returns:
         Score from 0.0 to 1.0
     """
-    if success_markers is None:
-        success_markers = ["done", "Done", "completed", "Completed", "finished", "Finished"]
-    if failure_markers is None:
-        failure_markers = ["error", "Error", "failed", "Failed", "cannot", "unable"]
+    if failure_markers:
+        for marker in failure_markers:
+            if marker.lower() in response.lower():
+                return 0.0
 
-    has_success = any(marker in response for marker in success_markers)
-    has_failure = any(marker in response for marker in failure_markers)
+    if success_markers:
+        matched = sum(1 for m in success_markers if m.lower() in response.lower())
+        return matched / len(success_markers)
 
-    if has_success and not has_failure:
-        return 1.0
-    if has_failure and not has_success:
-        return 0.0
-    if has_success and has_failure:
-        return 0.5
-    return 0.0
+    last_result = response.rfind("</tool_result>")
+    if last_result == -1:
+        return 1.0 if response.strip() else 0.0
+
+    after_tools = response[last_result + len("</tool_result>") :].strip()
+    return 1.0 if after_tools else 0.0
 
 
 @register_reward("efficiency")
@@ -162,21 +159,13 @@ def efficiency_reward(
     num_calls = len(calls)
 
     if num_calls == 0:
-        return 1.0
+        return 1.0 if response.strip() else 0.0
 
     if optimal_steps is not None:
-        if num_calls <= optimal_steps:
-            return 1.0
-        if num_calls >= max_steps:
-            return 0.0
-        excess = num_calls - optimal_steps
-        max_excess = max_steps - optimal_steps
-        return 1.0 - (excess / max_excess)
+        diff = abs(num_calls - optimal_steps)
+        return max(0.0, 1.0 - diff / max_steps)
 
-    if num_calls >= max_steps:
-        return 0.0
-
-    return 1.0 - (num_calls / max_steps)
+    return max(0.0, 1.0 - num_calls / max_steps)
 
 
 @register_reward("agent_composite")

@@ -14,6 +14,11 @@ The `examples/` directory contains step-by-step notebooks:
 | [04_alignment.ipynb](https://github.com/szaher/xaytune/blob/main/examples/04_alignment.ipynb) | Alignment with DPO, GRPO, and other methods |
 | [05_evaluation.ipynb](https://github.com/szaher/xaytune/blob/main/examples/05_evaluation.ipynb) | Evaluating models with metrics and benchmarks |
 | [06_advanced.ipynb](https://github.com/szaher/xaytune/blob/main/examples/06_advanced.ipynb) | Custom formats, metrics, rewards, callbacks, and distributed training |
+| [07_gpu_training.ipynb](https://github.com/szaher/xaytune/blob/main/examples/07_gpu_training.ipynb) | GPU training with single-node and Ray distributed examples |
+| [08_data_preparation.ipynb](https://github.com/szaher/xaytune/blob/main/examples/08_data_preparation.ipynb) | Dataset preparation -- dedup, filtering, conversion, synthetic generation |
+| [09_callbacks.ipynb](https://github.com/szaher/xaytune/blob/main/examples/09_callbacks.ipynb) | Training callbacks -- loss tracking, timing, early stopping |
+| [10_model_merging.ipynb](https://github.com/szaher/xaytune/blob/main/examples/10_model_merging.ipynb) | Model merging with Linear, SLERP, TIES, and DARE algorithms |
+| [11_agent_finetuning.ipynb](https://github.com/szaher/xaytune/blob/main/examples/11_agent_finetuning.ipynb) | Agent fine-tuning -- data formats, loss masking, rewards, evaluation, multi-agent |
 
 ## Example Configs
 
@@ -99,6 +104,33 @@ results = benchmark_evaluate(
     model="output/my-model",
     benchmarks=["mmlu", "gsm8k"],
     num_fewshot=5,
+)
+```
+
+### Agent Fine-Tuning
+
+```python
+import xaytune
+
+# Fine-tune on tool-use conversations with loss masking
+state = xaytune.finetune(
+    model="meta-llama/Llama-3.1-8B",
+    dataset="data/agent_traces.jsonl",
+    method="lora",
+    format="function_calling",  # or "react", "trajectory", "multi_agent"
+    num_epochs=3,
+)
+```
+
+### Agent Evaluation
+
+```python
+from xaytune.eval.agent_metrics import evaluate_agent
+
+results = evaluate_agent(
+    responses=[{"prompt": "...", "response": "..."}],
+    expected_tools=["search"],
+    success_markers=["Done"],
 )
 ```
 

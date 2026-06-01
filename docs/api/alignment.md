@@ -62,3 +62,29 @@ xaytune supports six alignment methods. Each has a dedicated loss function and c
 ::: xaytune.recipes.align.rewards.format_check_reward
 
 ::: xaytune.recipes.align.rewards.composite_reward
+
+## Agent Rewards
+
+Reward functions for agent alignment with GRPO/PPO. Score agent responses based on tool usage quality, task completion, and efficiency. All rewards use `<tool_call>` tag parsing with pluggable custom parsers.
+
+```python
+# In training config:
+online_rl:
+  reward_name: agent_composite
+  reward_kwargs:
+    expected_tools: ["search", "calculator"]
+    success_markers: ["Done"]
+    max_steps: 5
+```
+
+::: xaytune.recipes.align.agent_rewards.tool_use_quality_reward
+
+::: xaytune.recipes.align.agent_rewards.task_completion_reward
+
+::: xaytune.recipes.align.agent_rewards.efficiency_reward
+
+::: xaytune.recipes.align.agent_rewards.agent_composite_reward
+
+::: xaytune.recipes.align.agent_rewards.parse_tool_calls
+
+::: xaytune.recipes.align.agent_rewards.ParsedToolCall

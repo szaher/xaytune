@@ -84,6 +84,63 @@ _EVOLVE_SYSTEM = (
     "format but increase difficulty. Respond with ONLY valid JSON."
 )
 
+_AGENT_DISTILL_SYSTEM = (
+    "You are a training data generator for AI agents. Given a topic and tool "
+    "definitions, generate a realistic multi-turn conversation where an assistant "
+    "uses tools to accomplish a task. Output valid JSON in the function_calling "
+    "format with a 'messages' array containing user/assistant/tool turns. "
+    "Assistant tool calls should use the tool_calls field. "
+    "Respond with ONLY valid JSON."
+)
+
+_AGENT_AUGMENT_SYSTEM = (
+    "You are a training data generator for AI agents. Given an example agent "
+    "conversation, generate a NEW conversation with different content but the "
+    "same structure and tool usage patterns. Keep the same format (messages array "
+    "with user/assistant/tool turns). Respond with ONLY valid JSON."
+)
+
+
+def _agent_distill_prompt(
+    topic: str,
+    tools: list[dict[str, Any]] | None = None,
+) -> str:
+    tools_desc = ""
+    if tools:
+        tools_desc = "\n\nAvailable tools:\n"
+        for tool in tools:
+            func = tool.get("function", tool)
+            name = func.get("name", "")
+            desc = func.get("description", "")
+            params = func.get("parameters", {})
+            tools_desc += f"- {name}: {desc}\n  Parameters: {json.dumps(params)}\n"
+
+    return (
+        f"Generate a realistic agent conversation about: {topic}\n"
+        f"{tools_desc}\n"
+        f"The conversation should have:\n"
+        f"1. A user request\n"
+        f"2. The assistant using one or more tools via tool_calls\n"
+        f"3. Tool results\n"
+        f"4. A final assistant response summarizing the results\n\n"
+        f"Output format:\n"
+        f'{{"messages": [{{"role": "user", "content": "..."}}, '
+        f'{{"role": "assistant", "tool_calls": [...]}}, '
+        f'{{"role": "tool", "content": "..."}}, '
+        f'{{"role": "assistant", "content": "..."}}]}}'
+    )
+
+
+def _agent_augment_prompt(seed: dict[str, Any]) -> str:
+    return (
+        f"Here is an example agent conversation:\n\n"
+        f"{json.dumps(seed, ensure_ascii=False, indent=2)}\n\n"
+        f"Generate a NEW conversation with different content but the same "
+        f"structure and tool usage patterns. Use the same tools but with "
+        f"different arguments and results. Output valid JSON only."
+    )
+
+
 _FORMAT_TEMPLATES: dict[str, str] = {
     "alpaca": '{"instruction": "...", "output": "..."}',
     "sharegpt": (
@@ -158,9 +215,10 @@ def _apply_post_filter(
 
 def generate(
     *,
-    mode: Literal["augment", "distill", "evolve"],
+    mode: Literal["augment", "distill", "evolve", "agent_distill", "agent_augment"],
     seed: str | list[dict] | None = None,
     topic: str | None = None,
+    tools: list[dict[str, Any]] | None = None,
     n: int = 10,
     rounds: int = 1,
     format: str = "alpaca",
@@ -171,10 +229,10 @@ def generate(
     concurrency: int = 5,
     post_filter: list[dict[str, Any]] | None = None,
 ) -> PrepResult:
-    if mode == "distill" and not topic:
-        raise ValueError("mode='distill' requires a topic= argument.")
+    if mode in ("distill", "agent_distill") and not topic:
+        raise ValueError(f"mode='{mode}' requires a topic= argument.")
 
-    if mode in ("augment", "evolve") and seed is None:
+    if mode in ("augment", "evolve", "agent_augment") and seed is None:
         raise ValueError(f"mode='{mode}' requires a seed= argument.")
 
     resolved_key = _resolve_api_key(api_key)
@@ -220,10 +278,30 @@ def generate(
             current = evolved
         generated = current
 
+    elif mode == "agent_distill":
+        assert topic is not None
+        for _ in range(n):
+            prompt = _agent_distill_prompt(topic, tools=tools)
+            response = _call_llm_sync(client, model, _AGENT_DISTILL_SYSTEM, prompt, temperature)
+            try:
+                generated.append(_parse_response(response))
+            except json.JSONDecodeError:
+                continue
+
+    elif mode == "agent_augment":
+        for i in range(n):
+            example = seeds[i % len(seeds)]
+            prompt = _agent_augment_prompt(example)
+            response = _call_llm_sync(client, model, _AGENT_AUGMENT_SYSTEM, prompt, temperature)
+            try:
+                generated.append(_parse_response(response))
+            except json.JSONDecodeError:
+                continue
+
     if post_filter:
         generated = _apply_post_filter(generated, post_filter, format)
 
-    input_rows = len(seeds) if mode != "distill" else 0
+    input_rows = len(seeds) if mode not in ("distill", "agent_distill") else 0
 
     return PrepResult(
         dataset=generated,

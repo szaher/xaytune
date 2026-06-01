@@ -10,11 +10,14 @@ xaytune provides a recipe-based approach to LLM training built on PyTorch and Hu
 
 - **3 recipes** -- fine-tune, pre-train, and align -- each accessible as a single function call
 - **Multiple methods** -- full fine-tuning, LoRA, QLoRA, DPO, GRPO, ORPO, SimPO, PPO, and REINFORCE
+- **Agent fine-tuning** -- tool-use data formats (function calling, ReAct, trajectory, multi-agent) with loss masking, agent-specific rewards and evaluation metrics
+- **Data preparation toolkit** -- dedup, quality filtering, format conversion, synthetic data generation, pipeline chaining
+- **Model merging** -- combine fine-tuned models with Linear, SLERP, TIES, and DARE algorithms
 - **Pydantic config system** -- type-safe, validated configuration with sensible defaults
 - **Registry pattern** -- extend data formats, metrics, rewards, and model loaders via decorators
 - **Callback system** -- hook into training events with `@on("step_end")` style decorators
-- **Evaluation** -- built-in metrics (loss, perplexity, token accuracy) and lm-eval benchmark integration
-- **Export pipeline** -- merge LoRA adapters, save, push to Hugging Face Hub, convert to GGUF
+- **Evaluation** -- built-in metrics (loss, perplexity, token accuracy), agent evaluation, and lm-eval benchmark integration
+- **Export pipeline** -- merge LoRA adapters, model merging, push to Hugging Face Hub, convert to GGUF
 - **Flexible logging** -- console, TensorBoard, Weights & Biases, and MLflow backends
 - **Distributed training** -- DDP, FSDP, and DeepSpeed strategies
 

@@ -152,6 +152,45 @@ This prints a table showing each model's score on every benchmark metric.
 
 ---
 
+## Agent Evaluation
+
+Evaluate agent performance on tool-use tasks with `evaluate_agent()`. Scores a dataset of prompt-response pairs across four metrics.
+
+```python
+from xaytune.eval.agent_metrics import evaluate_agent
+
+results = evaluate_agent(
+    responses=[
+        {"prompt": "Search for cats", "response": "<tool_call>..."},
+    ],
+    expected_tools=["search"],
+    success_markers=["Done"],
+    max_steps=5,
+)
+# {'tool_use_accuracy': 0.85, 'task_success_rate': 0.90, ...}
+```
+
+### Agent Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `tool_use_accuracy` | Fraction of samples where the correct tools were called |
+| `task_success_rate` | Fraction of samples that completed the task |
+| `step_efficiency` | Average efficiency score (fewer tool calls = higher) |
+| `error_recovery_rate` | Fraction of samples that recovered after tool errors |
+
+::: xaytune.eval.agent_metrics.evaluate_agent
+
+::: xaytune.eval.agent_metrics.compute_tool_use_accuracy
+
+::: xaytune.eval.agent_metrics.compute_task_success_rate
+
+::: xaytune.eval.agent_metrics.compute_step_efficiency
+
+::: xaytune.eval.agent_metrics.compute_error_recovery_rate
+
+---
+
 ## Full API Reference
 
 ::: xaytune.eval.evaluate.evaluate

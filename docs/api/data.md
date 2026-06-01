@@ -32,6 +32,30 @@ Built-in format functions registered in `format_registry`:
 
 ::: xaytune.data.formats.apply_chat_template
 
+## Agent Formats
+
+Agent data formats for tool-use fine-tuning. Each format converts raw data into `list[AgentMessage]` with per-message `trainable` flags for loss masking.
+
+```
+load_dataset(format="function_calling") → list[AgentMessage] → tokenize_agent_dataset → DataLoader
+```
+
+::: xaytune.data.agent_formats.AgentMessage
+
+::: xaytune.data.agent_formats.format_function_calling
+
+::: xaytune.data.agent_formats.format_react
+
+::: xaytune.data.agent_formats.format_trajectory
+
+::: xaytune.data.agent_formats.format_multi_agent
+
+### Agent Tokenization
+
+The agent tokenizer applies per-token loss masking — only assistant actions are trainable, user prompts and tool results are masked with `IGNORE_INDEX=-100`.
+
+::: xaytune.data.agent_tokenizer.tokenize_agent_dataset
+
 ## Tokenization
 
 ::: xaytune.data.tokenizer.tokenize_dataset

@@ -9,6 +9,7 @@ xaytune organizes training workflows into **recipes** -- high-level functions th
 | **Fine-tune** | `xaytune.finetune()` | `full`, `lora`, `qlora` | Adapt a pre-trained model to a specific task or domain |
 | **Pre-train** | `xaytune.pretrain()` | `full` | Train a model from scratch on a large text corpus |
 | **Align** | `xaytune.align()` | `dpo`, `grpo`, `orpo`, `simpo`, `ppo`, `reinforce` | Align a model with human preferences |
+| **Agent Fine-tune** | `xaytune.finetune(format="function_calling")` | `lora`, `qlora`, `full` | Train models to use tools and follow reasoning patterns |
 
 ## How Recipes Work
 
@@ -96,3 +97,4 @@ xaytune list recipes
 - [Fine-tuning](finetuning.md) -- full, LoRA, and QLoRA fine-tuning
 - [Pre-training](pretraining.md) -- training from scratch
 - [Alignment](alignment.md) -- DPO, GRPO, and other alignment methods
+- [Agent Fine-tuning](agent-finetuning.md) -- tool-use formats, loss masking, agent rewards, evaluation

@@ -78,15 +78,9 @@ Shipped: tool_use_quality, task_completion, efficiency, agent_composite reward f
 - **Execution feedback** — integrate actual tool execution results into the reward signal
 - Online RL with tool execution in the loop (builds on existing GRPO/PPO + online generation pipeline)
 
-### 7d. Agent Evaluation
+### ~~7d. Agent Evaluation~~ ✅ Implemented
 
-Agent-specific eval metrics and benchmarks:
-
-- Tool-use accuracy (correct tool + correct parameters)
-- Task success rate (end-to-end completion)
-- Step efficiency (steps taken vs minimum required)
-- Error recovery rate (handles tool failures gracefully)
-- Integration with existing `xaytune.eval` and lm-eval-harness
+Shipped: tool_use_accuracy, task_success_rate, step_efficiency, error_recovery_rate metrics. evaluate_agent() convenience function. Integrated with metric_registry.
 
 **Testing requirements:**
 - Unit tests for each data format (function_calling, react, trajectory) with tokenization verification

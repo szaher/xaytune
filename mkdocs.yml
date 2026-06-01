@@ -43,6 +43,7 @@ nav:
       - Fine-tuning: recipes/finetuning.md
       - Pre-training: recipes/pretraining.md
       - Alignment: recipes/alignment.md
+      - Agent Fine-tuning: recipes/agent-finetuning.md
   - API Reference:
       - Overview: api/index.md
       - Recipes: api/recipes.md

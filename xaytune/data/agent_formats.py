@@ -12,6 +12,7 @@ class AgentMessage:
     role: Literal["system", "user", "assistant", "tool"]
     content: str
     trainable: bool
+    name: str | None = None
 
 
 def _serialize_tool_call(tool_call: dict[str, Any]) -> str:
@@ -168,6 +169,61 @@ def format_trajectory(sample: dict[str, Any]) -> list[AgentMessage]:
                         role="assistant",
                         content=content,
                         trainable=True,
+                    )
+                )
+        elif role == "tool":
+            result.append(
+                AgentMessage(
+                    role="tool",
+                    content=f"<tool_result>\n{content}\n</tool_result>",
+                    trainable=False,
+                )
+            )
+
+    return result
+
+
+@format_registry.register("multi_agent")
+def format_multi_agent(sample: dict[str, Any]) -> list[AgentMessage]:
+    """Parse multi-agent conversations where each turn has a named agent."""
+    system = sample.get("system", None)
+    goal = sample.get("goal", "")
+    turns = sample.get("turns", [])
+    result: list[AgentMessage] = []
+
+    if system:
+        result.append(AgentMessage(role="system", content=system, trainable=False))
+
+    result.append(AgentMessage(role="user", content=goal, trainable=False))
+
+    for turn in turns:
+        role = turn.get("role", "")
+        content = turn.get("content", "") or ""
+        tool_calls = turn.get("tool_calls", [])
+        agent_name = turn.get("agent", None)
+
+        if role == "assistant":
+            if tool_calls:
+                parts = []
+                if content:
+                    parts.append(content)
+                for tc in tool_calls:
+                    parts.append(_serialize_tool_call(tc))
+                result.append(
+                    AgentMessage(
+                        role="assistant",
+                        content="\n".join(parts),
+                        trainable=True,
+                        name=agent_name,
+                    )
+                )
+            else:
+                result.append(
+                    AgentMessage(
+                        role="assistant",
+                        content=content,
+                        trainable=True,
+                        name=agent_name,
                     )
                 )
         elif role == "tool":

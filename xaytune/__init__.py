@@ -3,6 +3,7 @@
 __version__ = "0.6.0"
 
 from xaytune.eval import evaluate
+from xaytune.pipeline import run_pipeline as pipeline
 from xaytune.plugins import discover_plugins
 from xaytune.recipes.align import align
 from xaytune.recipes.finetune import finetune
@@ -19,5 +20,6 @@ __all__ = [
     "finetune",
     "JobManager",
     "lr_find",
+    "pipeline",
     "pretrain",
 ]

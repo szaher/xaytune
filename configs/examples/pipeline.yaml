@@ -1,0 +1,55 @@
+# Multi-stage training pipeline: SFT → merge → DPO → eval
+#
+# Run with:
+#   xaytune pipeline --config configs/examples/pipeline.yaml
+#   xaytune pipeline --config configs/examples/pipeline.yaml --dry-run
+#   xaytune pipeline --config configs/examples/pipeline.yaml --resume-from dpo
+
+name: sft-to-aligned
+output_dir: output/pipeline
+
+stages:
+  # Stage 1: Supervised fine-tuning with LoRA
+  - name: sft
+    recipe: finetune
+    method: lora
+    model_name: "meta-llama/Llama-3.1-8B"
+    data:
+      path: "data/train.jsonl"
+      format: alpaca
+      eval_split: 0.05
+    trainer:
+      num_epochs: 3
+      learning_rate: 2e-4
+      batch_size: 4
+      gradient_accumulation: 4
+      mixed_precision: bf16
+    lora:
+      rank: 16
+      alpha: 32
+
+  # Stage 2: Merge LoRA adapters into base model
+  - name: merge
+    export: merge
+
+  # Stage 3: DPO alignment on preference data
+  - name: dpo
+    recipe: align
+    method: dpo
+    data:
+      path: "data/preferences.jsonl"
+      format: preference
+      eval_split: 0.05
+    trainer:
+      num_epochs: 1
+      learning_rate: 5e-6
+      batch_size: 4
+      mixed_precision: bf16
+    method_params:
+      beta: 0.1
+
+  # Stage 4: Evaluate the aligned model
+  - name: eval
+    eval:
+      metrics: [loss, perplexity]
+      benchmarks: [mmlu, hellaswag]

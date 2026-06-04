@@ -238,11 +238,25 @@ def _build_parser() -> argparse.ArgumentParser:
     gen_parser.add_argument("--api-base", default=None, help="API base URL")
     gen_parser.add_argument("-o", "--output", required=True, help="Output file path")
 
-    pipeline_parser = data_subparsers.add_parser(
+    data_pipeline_parser = data_subparsers.add_parser(
         "pipeline",
         help="Run a prep pipeline from YAML config",
     )
-    pipeline_parser.add_argument("config", help="Path to pipeline YAML config")
+    data_pipeline_parser.add_argument("config", help="Path to pipeline YAML config")
+
+    # --- Multi-stage training pipeline ---
+    train_pipeline_parser = subparsers.add_parser(
+        "pipeline", help="Run a multi-stage training pipeline (SFT → align → eval → export)"
+    )
+    train_pipeline_parser.add_argument(
+        "--config", required=True, help="Path to pipeline YAML config"
+    )
+    train_pipeline_parser.add_argument(
+        "--resume-from", default=None, help="Resume from a specific stage name"
+    )
+    train_pipeline_parser.add_argument(
+        "--dry-run", action="store_true", help="Print execution plan without running"
+    )
 
     return parser
 
@@ -285,6 +299,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "data":
         return _handle_data(args)
+
+    if args.command == "pipeline":
+        return _handle_pipeline(args)
 
     return 0
 
@@ -703,6 +720,42 @@ def _handle_data(args: argparse.Namespace) -> int:
             return 1
 
     return 1
+
+
+def _handle_pipeline(args: argparse.Namespace) -> int:
+    from xaytune.pipeline import load_pipeline_config, run_pipeline
+
+    try:
+        config = load_pipeline_config(args.config)
+    except Exception as e:
+        print(f"Error loading pipeline config: {e}", file=sys.stderr)
+        return 1
+
+    result = run_pipeline(
+        config,
+        resume_from=args.resume_from,
+        dry_run=args.dry_run,
+    )
+
+    if args.dry_run:
+        return 0
+
+    print(f"\n{'=' * 50}")
+    print(f"Pipeline: {result.name}")
+    print(f"Completed: {result.completed}")
+    print(f"{'=' * 50}")
+
+    for name, stage in result.stages.items():
+        status = stage.status
+        if stage.type == "eval" and stage.metrics:
+            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in stage.metrics.items() if isinstance(v, float))
+            print(f"  {name}: {status} ({metrics_str})")
+        elif stage.output:
+            print(f"  {name}: {status} → {stage.output}")
+        else:
+            print(f"  {name}: {status}")
+
+    return 0 if result.completed else 1
 
 
 if __name__ == "__main__":

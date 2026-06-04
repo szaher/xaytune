@@ -16,6 +16,7 @@ from xaytune.recipes.align.loss_dispatch import (
     _RL_METHODS,
     create_alignment_loss_fn,
     is_alignment_method,
+    needs_ref_model,
 )
 from xaytune.trainer.callbacks import TrainState
 
@@ -115,6 +116,13 @@ def align(
             elif k in online_rl_param_names:
                 online_rl_params[k] = kwargs.pop(k)
 
+        if kwargs:
+            valid = sorted(trainer_param_names | method_param_names | online_rl_param_names)
+            raise TypeError(
+                f"align() got unexpected keyword arguments: {', '.join(sorted(kwargs))}. "
+                f"Valid fields: {', '.join(valid)}"
+            )
+
         online_rl_config = OnlineRLConfig()
         if online_rl_params:
             gen_fields = {}
@@ -160,10 +168,16 @@ def align(
 
     loss_fn: Any = None
     if is_alignment_method(config.method):
-        ref_model = copy.deepcopy(components.model)
-        ref_model.eval()
-        for param in ref_model.parameters():
-            param.requires_grad = False
+        ref_model = None
+        if needs_ref_model(
+            config.method,
+            config.method_params,
+            online_rl_enabled=config.online_rl.enabled,
+        ):
+            ref_model = copy.deepcopy(components.model)
+            ref_model.eval()
+            for param in ref_model.parameters():
+                param.requires_grad = False
 
         if config.online_rl.enabled and config.method in _RL_METHODS:
             from xaytune.recipes.align.online_step import OnlineRLStep

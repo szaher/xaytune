@@ -155,11 +155,16 @@ def _load_tokenizer(path: str) -> Any:
     return AutoTokenizer.from_pretrained(path)
 
 
-def _save_merged(state_dict: dict[str, Tensor], tokenizer: Any, output: str) -> None:
+def _save_merged(state_dict: dict[str, Tensor], tokenizer: Any, output: str, model_paths: list[str] | None = None) -> None:
+    from transformers import AutoConfig
+
     path = Path(output)
     path.mkdir(parents=True, exist_ok=True)
     torch.save(state_dict, str(path / "pytorch_model.bin"))
     tokenizer.save_pretrained(output)
+    if model_paths:
+        config = AutoConfig.from_pretrained(model_paths[0])
+        config.save_pretrained(output)
 
 
 def model_merge(
@@ -226,7 +231,7 @@ def model_merge(
     else:
         raise ValueError(f"Unknown merge method: {method}")
 
-    _save_merged(merged_sd, tokenizer, output)
+    _save_merged(merged_sd, tokenizer, output, model_paths=models)
 
     return MergeResult(
         output_path=output,

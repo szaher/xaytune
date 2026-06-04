@@ -24,12 +24,13 @@ def tokenize_agent_dataset(
         all_ids: list[int] = []
         all_labels: list[int] = []
 
-        for msg in messages:
+        for i, msg in enumerate(messages):
             encoded = tokenizer(
                 msg.content,
                 truncation=False,
                 padding=False,
                 return_attention_mask=False,
+                add_special_tokens=(i == 0),
             )
             msg_ids = encoded["input_ids"]
 

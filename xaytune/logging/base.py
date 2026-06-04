@@ -30,13 +30,21 @@ class LoggingManager:
         if self.rank != 0:
             return
         for backend in self.backends:
-            backend.log_scalar(key, value, step)
+            try:
+                backend.log_scalar(key, value, step)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Logging backend {type(backend).__name__} failed: {e}")
 
     def log_config(self, config: dict[str, Any]) -> None:
         if self.rank != 0:
             return
         for backend in self.backends:
-            backend.log_config(config)
+            try:
+                backend.log_config(config)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"Logging backend {type(backend).__name__} failed: {e}")
 
     def close(self) -> None:
         for backend in self.backends:

@@ -12,7 +12,7 @@ class ConfigValidationError(Exception):
 
 
 _FINETUNE_METHODS = {"full", "lora", "qlora"}
-_ALIGN_METHODS = {"dpo", "grpo", "ppo", "orpo", "simpo"}
+_ALIGN_METHODS = {"dpo", "grpo", "ppo", "orpo", "simpo", "reinforce"}
 
 _KNOWN_METHOD_PARAMS: dict[str, set[str]] = {
     "dpo": {"beta"},

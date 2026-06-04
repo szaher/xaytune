@@ -45,7 +45,14 @@ def create_scheduler(
             f"Valid options: {', '.join(sorted(_VALID_TYPES))}"
         )
 
-    if scheduler_type == "constant":
+    if scheduler_type == "constant" and warmup_steps > 0:
+        # Auto-upgrade to constant_with_warmup when warmup is requested
+        def lr_lambda(current_step: int) -> float:
+            if current_step < warmup_steps:
+                return current_step / warmup_steps
+            return 1.0
+
+    elif scheduler_type == "constant":
 
         def lr_lambda(current_step: int) -> float:
             return 1.0

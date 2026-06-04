@@ -38,11 +38,15 @@ def save_checkpoint(
     if scaler is not None and hasattr(scaler, "state_dict"):
         torch.save(scaler.state_dict(), ckpt_path / "scaler.pt")
 
+    safe_metrics = {}
+    for k, v in state.metrics.items():
+        safe_metrics[k] = v.item() if hasattr(v, "item") else v
+
     metadata = {
         "global_step": state.global_step,
         "epoch": state.epoch,
         "step": state.step,
-        "metrics": state.metrics,
+        "metrics": safe_metrics,
     }
     (ckpt_path / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
@@ -69,25 +73,25 @@ def load_checkpoint(
 
     model_path = ckpt_path / "model.pt"
     if model_path.exists():
-        model_state = torch.load(model_path, weights_only=True)
+        model_state = torch.load(model_path, weights_only=True, map_location="cpu")
         if model_state and hasattr(model, "load_state_dict"):
             model.load_state_dict(model_state)
 
     optimizer_path = ckpt_path / "optimizer.pt"
     if optimizer_path.exists():
-        opt_state = torch.load(optimizer_path, weights_only=True)
+        opt_state = torch.load(optimizer_path, weights_only=True, map_location="cpu")
         if opt_state and hasattr(optimizer, "load_state_dict"):
             optimizer.load_state_dict(opt_state)
 
     scheduler_path = ckpt_path / "scheduler.pt"
     if scheduler is not None and scheduler_path.exists():
-        sched_state = torch.load(scheduler_path, weights_only=True)
+        sched_state = torch.load(scheduler_path, weights_only=True, map_location="cpu")
         if sched_state and hasattr(scheduler, "load_state_dict"):
             scheduler.load_state_dict(sched_state)
 
     scaler_path = ckpt_path / "scaler.pt"
     if scaler is not None and scaler_path.exists():
-        scaler_state = torch.load(scaler_path, weights_only=True)
+        scaler_state = torch.load(scaler_path, weights_only=True, map_location="cpu")
         if scaler_state and hasattr(scaler, "load_state_dict"):
             scaler.load_state_dict(scaler_state)
 

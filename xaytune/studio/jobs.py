@@ -320,9 +320,54 @@ class JobManager:
             last_step_time.append(time.time())
 
             components = setup_training(config, callback_manager=cb)
+
+            loss_fn: Any = None
+            if config.recipe == "align":
+                import copy
+
+                from xaytune.recipes.align.loss_dispatch import (
+                    _RL_METHODS,
+                    create_alignment_loss_fn,
+                    is_alignment_method,
+                    needs_ref_model,
+                )
+
+                if is_alignment_method(config.method):
+                    ref_model = None
+                    if needs_ref_model(
+                        config.method,
+                        config.method_params,
+                        online_rl_enabled=config.online_rl.enabled,
+                    ):
+                        ref_model = copy.deepcopy(components.model)
+                        ref_model.eval()
+                        for param in ref_model.parameters():
+                            param.requires_grad = False
+
+                    if config.online_rl.enabled and config.method in _RL_METHODS:
+                        from xaytune.recipes.align.online_step import OnlineRLStep
+
+                        loss_fn = OnlineRLStep(
+                            ref_model=ref_model,
+                            tokenizer=components.tokenizer,
+                            method=config.method,
+                            generation_config=config.online_rl.generation,
+                            reward_name=config.online_rl.reward_name,
+                            reward_kwargs=config.online_rl.reward_kwargs,
+                            kl_coeff=config.method_params.get("kl_coeff", 0.04),
+                            clip_eps=config.method_params.get("clip_eps", 0.2),
+                        )
+                    else:
+                        loss_fn = create_alignment_loss_fn(
+                            method=config.method,
+                            ref_model=ref_model,
+                            **config.method_params,
+                        )
+
             final_state = components.trainer.train(
                 model=components.model,
                 train_dataloader=components.train_dataloader,
+                loss_fn=loss_fn,
                 resume_state=components.resume_state,
             )
 

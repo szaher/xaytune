@@ -49,7 +49,8 @@ def init_distributed() -> DistributedContext:
     import torch.distributed as dist
 
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl")
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend)
     torch.cuda.set_device(local_rank)
 
     return DistributedContext(rank=rank, world_size=world_size, local_rank=local_rank)
@@ -206,7 +207,11 @@ def wrap_model_distributed(
                     "train_micro_batch_size_per_gpu": "auto",
                 }
 
-            engine, _, _, _ = ds.initialize(model=model, config=config_dict)
+            engine, _, _, _ = ds.initialize(
+                model=model,
+                config=config_dict,
+                model_parameters=model.parameters(),
+            )
             return engine
         return model
 

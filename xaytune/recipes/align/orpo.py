@@ -12,10 +12,9 @@ def orpo_loss(
     lambda_weight: float = 1.0,
 ) -> torch.Tensor:
     """Compute Odds Ratio Preference Optimization loss (Hong et al., 2024)."""
-    chosen_odds = policy_chosen_logps.exp() / (1 - policy_chosen_logps.exp())
-    rejected_odds = policy_rejected_logps.exp() / (1 - policy_rejected_logps.exp())
-
-    log_odds_ratio = torch.log(chosen_odds / rejected_odds)
+    log_odds_ratio = (policy_chosen_logps - policy_rejected_logps) - (
+        torch.log1p(-policy_chosen_logps.exp()) - torch.log1p(-policy_rejected_logps.exp())
+    )
 
     or_loss = -F.logsigmoid(log_odds_ratio).mean()
 

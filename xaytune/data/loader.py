@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import random
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +21,10 @@ def _load_jsonl(path: str) -> list[dict[str, Any]]:
 
 
 def _split_dataset(data: list[dict], eval_split: float) -> tuple[list[dict], list[dict]]:
-    split_idx = len(data) - int(len(data) * eval_split)
-    return data[:split_idx], data[split_idx:]
+    shuffled = list(data)
+    random.Random(42).shuffle(shuffled)
+    split_idx = len(shuffled) - int(len(shuffled) * eval_split)
+    return shuffled[:split_idx], shuffled[split_idx:]
 
 
 def _load_huggingface(
@@ -45,9 +49,12 @@ def _load_huggingface(
     if streaming:
         ds = datasets.load_dataset(path, split="train", streaming=True)
         if eval_split > 0:
-            ds = ds.shuffle(seed=42)
-            # Can't truly split a stream; take/skip as approximation
-            return ds.map(format_fn), None
+            warnings.warn(
+                "eval_split is not supported with streaming=True; "
+                "evaluation data will not be available. Use streaming=False "
+                "or provide a separate eval_path.",
+                stacklevel=3,
+            )
         return ds.map(format_fn)
 
     ds = datasets.load_dataset(path, split="train")

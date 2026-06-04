@@ -108,9 +108,11 @@ class OnlineRLStep:
     ) -> torch.Tensor:
         from xaytune.recipes.align.grpo import grpo_loss
 
-        with torch.no_grad():
-            ref_out = self._ref_model(input_ids=full_ids, attention_mask=full_mask)
-            ref_logprobs = get_sequence_logps(ref_out.logits, full_ids, full_mask)
+        ref_logprobs = None
+        if self._ref_model is not None and self._kl_coeff > 0:
+            with torch.no_grad():
+                ref_out = self._ref_model(input_ids=full_ids, attention_mask=full_mask)
+                ref_logprobs = get_sequence_logps(ref_out.logits, full_ids, full_mask)
 
         return grpo_loss(
             logprobs=logprobs,

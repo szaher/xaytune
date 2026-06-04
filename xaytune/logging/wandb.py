@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None  # type: ignore[assignment]
 
 from xaytune.logging.base import LoggingBackend
 
@@ -13,6 +16,11 @@ class WandbBackend(LoggingBackend):
         project: str = "xaytune",
         run_name: str | None = None,
     ) -> None:
+        if wandb is None:
+            raise ImportError(
+                "wandb is required for WandbBackend. "
+                "Install it with: pip install wandb or pip install xaytune[wandb]"
+            )
         wandb.init(project=project, name=run_name)
 
     def log_scalar(self, key: str, value: float, step: int) -> None:

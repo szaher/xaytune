@@ -43,6 +43,14 @@ class Trainer:
             total = min(total, self.config.max_steps)
         return total
 
+    @staticmethod
+    def _is_deepspeed_engine(model: Any) -> bool:
+        try:
+            import deepspeed
+            return isinstance(model, deepspeed.DeepSpeedEngine)
+        except ImportError:
+            return False
+
     def train(
         self,
         *,
@@ -54,7 +62,11 @@ class Trainer:
         resume_state: TrainState | None = None,
         resume_checkpoint_dir: str | None = None,
     ) -> TrainState:
-        if optimizer is None:
+        self._is_ds = self._is_deepspeed_engine(model)
+
+        if self._is_ds:
+            optimizer = None
+        elif optimizer is None:
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=self.config.learning_rate,
@@ -66,18 +78,19 @@ class Trainer:
         # Determine device type for autocast
         self._device_type = detect_device_type_from_model(model)
 
-        # Set up mixed precision
+        # Set up mixed precision — skip for DeepSpeed (handles its own AMP)
         self._amp_dtype: torch.dtype | None = None
         self._scaler: torch.amp.GradScaler | None = None
-        if self.config.mixed_precision == "fp16":
-            self._amp_dtype = torch.float16
-        elif self.config.mixed_precision == "bf16":
-            self._amp_dtype = torch.bfloat16
+        if not self._is_ds:
+            if self.config.mixed_precision == "fp16":
+                self._amp_dtype = torch.float16
+            elif self.config.mixed_precision == "bf16":
+                self._amp_dtype = torch.bfloat16
 
-        if self._amp_dtype is not None and not supports_amp(self._device_type):
-            self._amp_dtype = None
-        if supports_grad_scaler(self._device_type, self._amp_dtype):
-            self._scaler = torch.amp.GradScaler()
+            if self._amp_dtype is not None and not supports_amp(self._device_type):
+                self._amp_dtype = None
+            if supports_grad_scaler(self._device_type, self._amp_dtype):
+                self._scaler = torch.amp.GradScaler()
 
         # Create learning rate scheduler
         if scheduler is None:
@@ -105,13 +118,13 @@ class Trainer:
 
             opt_path = Path(resume_checkpoint_dir) / "optimizer.pt"
             if opt_path.exists():
-                optimizer.load_state_dict(torch.load(opt_path, weights_only=True))
+                optimizer.load_state_dict(torch.load(opt_path, weights_only=True, map_location="cpu"))
             scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"
             if self._scaler is not None and scaler_path.exists():
-                self._scaler.load_state_dict(torch.load(scaler_path, weights_only=True))
+                self._scaler.load_state_dict(torch.load(scaler_path, weights_only=True, map_location="cpu"))
             scheduler_path = Path(resume_checkpoint_dir) / "scheduler.pt"
             if self._scheduler is not None and scheduler_path.exists():
-                self._scheduler.load_state_dict(torch.load(scheduler_path, weights_only=True))
+                self._scheduler.load_state_dict(torch.load(scheduler_path, weights_only=True, map_location="cpu"))
 
         if resume_state is not None:
             state = TrainState(
@@ -149,12 +162,13 @@ class Trainer:
 
                 loss = self.training_step(model, batch, optimizer, state)
                 state.metrics["loss"] = loss
-                state.global_step += 1
 
-                self.callback_manager.fire("step_end", state)
+                if self._accum_count % self.config.gradient_accumulation == 0:
+                    state.global_step += 1
+                    self.callback_manager.fire("step_end", state)
 
-                if self.config.max_steps > 0 and state.global_step >= self.config.max_steps:
-                    state.stop_training()
+                    if self.config.max_steps > 0 and state.global_step >= self.config.max_steps:
+                        state.stop_training()
 
                 if state.should_stop:
                     break
@@ -214,6 +228,14 @@ class Trainer:
                 outputs = model(batch)
                 loss = outputs.loss if hasattr(outputs, "loss") else outputs
 
+        loss_value = loss.item() if hasattr(loss, "item") else float(loss)
+
+        if self._is_ds:
+            model.backward(loss)
+            model.step()
+            self._accum_count += 1
+            return loss_value
+
         if self.config.gradient_accumulation > 1:
             loss = loss / self.config.gradient_accumulation
 
@@ -242,4 +264,4 @@ class Trainer:
                 if last_lr:
                     state.metrics["learning_rate"] = last_lr[0]
 
-        return loss.item() if hasattr(loss, "item") else float(loss)
+        return loss_value

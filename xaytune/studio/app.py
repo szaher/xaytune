@@ -208,10 +208,11 @@ def _status_badge(status: str) -> str:
 
 def create_app(
     job_manager: JobManager | None = None,
+    theme: gr.Theme | None = None,
 ) -> gr.Blocks:
     mgr = job_manager or JobManager()
 
-    with gr.Blocks(title="xaytune Studio") as app:
+    with gr.Blocks(title="xaytune Studio", theme=theme) as app:
         gr.Markdown("# xaytune Studio\nConfigure, launch, and monitor LLM training jobs.")
 
         # ── Train Tab ──────────────────────────────────────────────
@@ -339,10 +340,10 @@ def create_app(
                         info="Path to training data file or HuggingFace dataset name.",
                     )
                     data_format = gr.Dropdown(
-                        choices=["alpaca", "sharegpt", "completion", "pretrain"],
+                        choices=["alpaca", "sharegpt", "chat", "text", "preference"],
                         value="alpaca",
                         label="Data Format",
-                        info="alpaca: instruction/output. sharegpt: chat. completion: raw text.",
+                        info="alpaca: instruction/output. sharegpt: chat. text: raw text. preference: RLHF.",
                     )
                     source = gr.Dropdown(
                         choices=["local", "huggingface"],

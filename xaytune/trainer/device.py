@@ -23,13 +23,19 @@ def get_device(local_rank: int = 0, *, device_type: str | None = None) -> torch.
 
 
 def seed_all(seed: int) -> None:
-    """Seed Python, PyTorch CPU, CUDA, and MPS random generators."""
+    """Seed Python, PyTorch CPU, CUDA, MPS, and NumPy random generators."""
     random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         torch.mps.manual_seed(seed)
+    try:
+        import numpy
+
+        numpy.random.seed(seed)
+    except ImportError:
+        pass
 
 
 def supports_amp(device_type: str) -> bool:

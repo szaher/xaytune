@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,9 @@ def load_preference_dataset(
             items.append(format_preference(sample))
 
     if eval_split > 0:
-        split_idx = len(items) - int(len(items) * eval_split)
-        return items[:split_idx], items[split_idx:]
+        shuffled = list(items)
+        random.Random(42).shuffle(shuffled)
+        split_idx = len(shuffled) - int(len(shuffled) * eval_split)
+        return shuffled[:split_idx], shuffled[split_idx:]
 
     return items

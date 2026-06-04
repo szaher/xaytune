@@ -21,5 +21,5 @@ def launch(
     )
     persist_dir = Path("~/.xaytune/studio/jobs").expanduser()
     mgr = JobManager(persist_dir=persist_dir)
-    app = create_app(job_manager=mgr)
-    app.launch(server_name=host, server_port=port, share=share, theme=theme)
+    app = create_app(job_manager=mgr, theme=theme)
+    app.launch(server_name=host, server_port=port, share=share)

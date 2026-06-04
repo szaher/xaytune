@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 
+from xaytune.data.tokenizer import IGNORE_INDEX
 from xaytune.recipes.align.dpo import dpo_loss
 from xaytune.recipes.align.grpo import grpo_loss
 from xaytune.recipes.align.logprobs import get_sequence_logps
@@ -16,6 +17,7 @@ ALIGNMENT_METHODS = {"dpo", "grpo", "ppo", "orpo", "simpo", "reinforce"}
 
 _PAIR_METHODS = {"dpo", "orpo", "simpo"}
 _RL_METHODS = {"grpo", "ppo", "reinforce"}
+_NEEDS_REF_MODEL = {"dpo"}
 
 
 def _has_alignment_fields(method: str, batch: dict[str, Any]) -> bool:
@@ -29,6 +31,27 @@ def _has_alignment_fields(method: str, batch: dict[str, Any]) -> bool:
 def is_alignment_method(method: str) -> bool:
     """Return whether *method* is a known alignment method."""
     return method in ALIGNMENT_METHODS
+
+
+def needs_ref_model(
+    method: str,
+    method_params: dict[str, Any] | None = None,
+    online_rl_enabled: bool = False,
+) -> bool:
+    """Return whether *method* requires a frozen reference model copy.
+
+    DPO always needs one.  GRPO only needs one when ``kl_coeff > 0``
+    (opt-in KL regularisation).  PPO needs one in the online-RL path
+    for old-policy log-probs.  Everything else is reference-free.
+    """
+    if method in _NEEDS_REF_MODEL:
+        return True
+    params = method_params or {}
+    if method == "grpo" and params.get("kl_coeff", 0.0) > 0:
+        return True
+    if method == "ppo" and online_rl_enabled:
+        return True
+    return False
 
 
 def create_alignment_loss_fn(
@@ -85,19 +108,26 @@ def _dpo_step(
     chosen_mask = batch.get("chosen_attention_mask")
     rejected_ids = batch["rejected_input_ids"]
     rejected_mask = batch.get("rejected_attention_mask")
+    prompt_len = batch.get("prompt_length", 0)
 
     chosen_out = model(input_ids=chosen_ids, attention_mask=chosen_mask)
     rejected_out = model(input_ids=rejected_ids, attention_mask=rejected_mask)
 
-    policy_chosen_logps = get_sequence_logps(chosen_out.logits, chosen_ids, chosen_mask)
-    policy_rejected_logps = get_sequence_logps(rejected_out.logits, rejected_ids, rejected_mask)
+    policy_chosen_logps = get_sequence_logps(
+        chosen_out.logits, chosen_ids, chosen_mask, prompt_length=prompt_len
+    )
+    policy_rejected_logps = get_sequence_logps(
+        rejected_out.logits, rejected_ids, rejected_mask, prompt_length=prompt_len
+    )
 
     with torch.no_grad():
         ref_chosen_out = ref_model(input_ids=chosen_ids, attention_mask=chosen_mask)
         ref_rejected_out = ref_model(input_ids=rejected_ids, attention_mask=rejected_mask)
-        ref_chosen_logps = get_sequence_logps(ref_chosen_out.logits, chosen_ids, chosen_mask)
+        ref_chosen_logps = get_sequence_logps(
+            ref_chosen_out.logits, chosen_ids, chosen_mask, prompt_length=prompt_len
+        )
         ref_rejected_logps = get_sequence_logps(
-            ref_rejected_out.logits, rejected_ids, rejected_mask
+            ref_rejected_out.logits, rejected_ids, rejected_mask, prompt_length=prompt_len
         )
 
     return dpo_loss(
@@ -112,7 +142,7 @@ def _dpo_step(
 def _grpo_step(
     model: Any,
     batch: dict[str, Any],
-    ref_model: Any,
+    ref_model: Any | None,
     *,
     kl_coeff: float,
 ) -> torch.Tensor:
@@ -123,9 +153,11 @@ def _grpo_step(
     outputs = model(input_ids=input_ids, attention_mask=mask)
     logprobs = get_sequence_logps(outputs.logits, input_ids, mask)
 
-    with torch.no_grad():
-        ref_outputs = ref_model(input_ids=input_ids, attention_mask=mask)
-        ref_logprobs = get_sequence_logps(ref_outputs.logits, input_ids, mask)
+    ref_logprobs = None
+    if ref_model is not None and kl_coeff > 0:
+        with torch.no_grad():
+            ref_outputs = ref_model(input_ids=input_ids, attention_mask=mask)
+            ref_logprobs = get_sequence_logps(ref_outputs.logits, input_ids, mask)
 
     return grpo_loss(
         logprobs=logprobs,
@@ -146,14 +178,33 @@ def _orpo_step(
     chosen_mask = batch.get("chosen_attention_mask")
     rejected_ids = batch["rejected_input_ids"]
     rejected_mask = batch.get("rejected_attention_mask")
-
-    sft_loss = outputs.loss if hasattr(outputs, "loss") else outputs
+    prompt_len = batch.get("prompt_length", 0)
 
     chosen_out = model(input_ids=chosen_ids, attention_mask=chosen_mask)
+
+    if outputs is not None and hasattr(outputs, "loss") and outputs.loss is not None:
+        sft_loss = outputs.loss
+    else:
+        chosen_labels = chosen_ids.clone()
+        if isinstance(prompt_len, torch.Tensor) and prompt_len.any():
+            for i, pl in enumerate(prompt_len):
+                if pl > 0:
+                    chosen_labels[i, : int(pl.item())] = IGNORE_INDEX
+        elif isinstance(prompt_len, int) and prompt_len > 0:
+            chosen_labels[:, :prompt_len] = IGNORE_INDEX
+        sft_out = model(
+            input_ids=chosen_ids, attention_mask=chosen_mask, labels=chosen_labels
+        )
+        sft_loss = sft_out.loss
+
     rejected_out = model(input_ids=rejected_ids, attention_mask=rejected_mask)
 
-    policy_chosen_logps = get_sequence_logps(chosen_out.logits, chosen_ids, chosen_mask)
-    policy_rejected_logps = get_sequence_logps(rejected_out.logits, rejected_ids, rejected_mask)
+    policy_chosen_logps = get_sequence_logps(
+        chosen_out.logits, chosen_ids, chosen_mask, prompt_length=prompt_len
+    )
+    policy_rejected_logps = get_sequence_logps(
+        rejected_out.logits, rejected_ids, rejected_mask, prompt_length=prompt_len
+    )
 
     return orpo_loss(
         sft_loss=sft_loss,
@@ -174,12 +225,17 @@ def _simpo_step(
     chosen_mask = batch.get("chosen_attention_mask")
     rejected_ids = batch["rejected_input_ids"]
     rejected_mask = batch.get("rejected_attention_mask")
+    prompt_len = batch.get("prompt_length", 0)
 
     chosen_out = model(input_ids=chosen_ids, attention_mask=chosen_mask)
     rejected_out = model(input_ids=rejected_ids, attention_mask=rejected_mask)
 
-    policy_chosen_logps = get_sequence_logps(chosen_out.logits, chosen_ids, chosen_mask)
-    policy_rejected_logps = get_sequence_logps(rejected_out.logits, rejected_ids, rejected_mask)
+    policy_chosen_logps = get_sequence_logps(
+        chosen_out.logits, chosen_ids, chosen_mask, prompt_length=prompt_len
+    )
+    policy_rejected_logps = get_sequence_logps(
+        rejected_out.logits, rejected_ids, rejected_mask, prompt_length=prompt_len
+    )
 
     chosen_lengths = (
         chosen_mask.sum(dim=-1)

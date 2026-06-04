@@ -86,6 +86,12 @@ def finetune(
             if k in trainer_param_names:
                 trainer_fields[k] = kwargs.pop(k)
 
+        if kwargs:
+            raise TypeError(
+                f"finetune() got unexpected keyword arguments: {', '.join(sorted(kwargs))}. "
+                f"Valid TrainerConfig fields: {', '.join(sorted(trainer_param_names))}"
+            )
+
         config = TrainConfig(
             recipe="finetune",
             method=method,

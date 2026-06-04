@@ -18,11 +18,22 @@ def get_sequence_logps(
     logits: torch.Tensor,
     labels: torch.Tensor,
     mask: torch.Tensor | None = None,
+    prompt_length: torch.Tensor | int = 0,
 ) -> torch.Tensor:
-    """Sum per-token log probabilities into a sequence-level log probability."""
+    """Sum per-token log probabilities into a sequence-level log probability.
+
+    When ``prompt_length`` is provided, tokens before that position are
+    excluded from the sum so only response tokens contribute.
+    """
     per_token = get_per_token_logps(logits, labels)
     if mask is not None:
         per_token = per_token * mask[:, 1:]
+    if isinstance(prompt_length, int) and prompt_length > 0:
+        per_token[:, :prompt_length] = 0.0
+    elif isinstance(prompt_length, torch.Tensor) and prompt_length.any():
+        for i, pl in enumerate(prompt_length):
+            if pl > 0:
+                per_token[i, : int(pl.item())] = 0.0
     return per_token.sum(dim=-1)
 
 

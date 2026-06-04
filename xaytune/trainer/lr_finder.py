@@ -90,10 +90,13 @@ def lr_find(
 
     batches = islice(_cycle(train_dataloader), num_iterations)
 
+    device = next(model.parameters()).device
+
     for batch in batches:
         current_lr = optimizer.param_groups[0]["lr"]
 
         if isinstance(batch, dict):
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             outputs = model(**batch)
         else:
             outputs = model(batch)

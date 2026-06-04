@@ -37,6 +37,8 @@ def register_eval_callbacks(
             model.eval()
 
         losses: list[float] = []
+        all_preds: list[Any] = []
+        all_refs: list[Any] = []
         try:
             device = next(iter(model.parameters())).device
         except (StopIteration, AttributeError, TypeError):
@@ -55,13 +57,21 @@ def register_eval_callbacks(
                     raw = outputs.loss
                     loss_val = raw.item() if hasattr(raw, "item") else float(raw)
                     losses.append(loss_val)
+                # Collect predictions and references for non-loss metrics
+                if hasattr(outputs, "logits") and isinstance(batch, dict) and "labels" in batch:
+                    logits = outputs.logits
+                    labels = batch["labels"]
+                    preds = logits.argmax(dim=-1)
+                    mask = labels != -100
+                    all_preds.extend(preds[mask].cpu().tolist())
+                    all_refs.extend(labels[mask].cpu().tolist())
 
         for metric_name in metrics:
             compute_fn = metric_registry.get(metric_name)
             if metric_name in ("loss", "perplexity"):
                 state.metrics[f"eval_{metric_name}"] = compute_fn(losses)
             else:
-                state.metrics[f"eval_{metric_name}"] = compute_fn([], [])
+                state.metrics[f"eval_{metric_name}"] = compute_fn(all_preds, all_refs)
 
         if was_training and hasattr(model, "train"):
             model.train()

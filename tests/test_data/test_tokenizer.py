@@ -71,11 +71,19 @@ class TestTokenizeDataset:
         result = tokenize_dataset(data, tok)
         assert result == []
 
-    def test_tokenize_labels_equal_input_ids(self):
+    def test_tokenize_labels_equal_input_ids_for_text_format(self):
         data = [{"text": "hello world foo"}]
         tok = _make_tokenizer()
         result = tokenize_dataset(data, tok)
         assert result[0]["labels"] == result[0]["input_ids"]
+
+    def test_tokenize_labels_masked_when_prompt_text_present(self):
+        data = [{"text": "prompt response", "prompt_text": "prompt"}]
+        tok = _make_tokenizer()
+        result = tokenize_dataset(data, tok)
+        labels = result[0]["labels"]
+        assert any(l == -100 for l in labels), "Prompt tokens should be masked"
+        assert any(l != -100 for l in labels), "Response tokens should be trainable"
 
     def test_tokenize_empty_data(self):
         tok = _make_tokenizer()

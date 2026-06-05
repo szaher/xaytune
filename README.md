@@ -205,7 +205,7 @@ logging:
 | ORPO | **Experimental** | Numerically stable, needs real-world validation |
 | SimPO | **Experimental** | Length-normalized, reference-free |
 | REINFORCE | **Experimental** | Vanilla policy gradient |
-| PPO | **Experimental** | Simplified clipped PG — not full PPO (no rollout buffer, GAE, value model) |
+| PPO | **Experimental** | Full PPO trainer with value head, rollout buffer, multi-epoch training. Requires `online_rl.enabled=True` |
 | DeepSpeed | **Experimental** | ZeRO via `ds.initialize`, engine-aware loop |
 | FSDP | **Experimental** | Sharding, offload, mixed precision wrapping |
 | GGUF export | **Experimental** | Requires llama.cpp tools installed separately |

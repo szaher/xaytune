@@ -29,6 +29,26 @@ from xaytune.trainer.callbacks import CallbackManager, TrainState
 logger = logging.getLogger(__name__)
 
 
+def _extract_prompts(
+    batch: dict[str, torch.Tensor], device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract prompt IDs and mask from whatever batch format the dataloader provides."""
+    if "prompt_input_ids" in batch:
+        return batch["prompt_input_ids"].to(device), batch["prompt_attention_mask"].to(device)
+    if "input_ids" in batch:
+        return batch["input_ids"].to(device), batch.get(
+            "attention_mask", torch.ones_like(batch["input_ids"])
+        ).to(device)
+    if "chosen_input_ids" in batch:
+        return batch["chosen_input_ids"].to(device), batch.get(
+            "chosen_attention_mask", torch.ones_like(batch["chosen_input_ids"])
+        ).to(device)
+    raise KeyError(
+        f"PPO batch must contain 'prompt_input_ids', 'input_ids', or 'chosen_input_ids'. "
+        f"Got keys: {list(batch.keys())}"
+    )
+
+
 class PPOTrainer:
     """PPO training loop for LLM alignment.
 
@@ -85,12 +105,10 @@ class PPOTrainer:
         """
         device = next(self.model.parameters()).device
 
-        policy_params = list(self.model.parameters())
-        value_params = list(self.value_head.parameters())
         optimizer = torch.optim.AdamW(
             [
-                {"params": policy_params, "lr": self.trainer_config.learning_rate},
-                {"params": value_params, "lr": self.trainer_config.learning_rate},
+                {"params": self.model.parameters(), "lr": self.trainer_config.learning_rate},
+                {"params": self.value_head.parameters(), "lr": self.trainer_config.learning_rate},
             ],
             weight_decay=self.trainer_config.weight_decay,
         )
@@ -119,8 +137,7 @@ class PPOTrainer:
                 prompt_iter = iter(prompt_dataloader)
                 prompt_batch = next(prompt_iter)
 
-            prompt_ids = prompt_batch["prompt_input_ids"].to(device)
-            prompt_mask = prompt_batch["prompt_attention_mask"].to(device)
+            prompt_ids, prompt_mask = _extract_prompts(prompt_batch, device)
 
             rollout = self._collect_rollout(
                 prompt_ids,
@@ -291,11 +308,11 @@ class PPOTrainer:
         optimizer.zero_grad()
         total_loss.backward()
         if self.ppo_config.max_grad_norm > 0:
-            all_params = list(self.model.parameters()) + list(
-                self.value_head.parameters()
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.ppo_config.max_grad_norm
             )
             torch.nn.utils.clip_grad_norm_(
-                all_params, self.ppo_config.max_grad_norm
+                self.value_head.parameters(), self.ppo_config.max_grad_norm
             )
         optimizer.step()
 

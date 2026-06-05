@@ -1,0 +1,67 @@
+# Full PPO alignment with online generation and reward scoring.
+#
+# This runs the complete PPO algorithm:
+# 1. Generate responses from prompts using the current policy
+# 2. Score responses with a reward function
+# 3. Estimate values with a learned value head
+# 4. Compute advantages (reward - value, normalized)
+# 5. Train for K epochs over the collected rollout with clipped policy
+#    + value loss + optional KL penalty
+#
+# Prerequisites:
+#   - An SFT-trained model (from finetune recipe)
+#   - A prompt-only dataset (JSONL with "prompt" field)
+#   - A registered reward function (or use "default")
+#
+# Usage:
+#   xaytune train --config configs/examples/ppo_online.yaml
+#
+# Note: Requires significant GPU memory (model + value head + generation buffer).
+# For smaller GPUs, reduce batch_size and rollout_size.
+
+recipe: align
+method: ppo
+
+model:
+  name: output/sft-model     # Start from an SFT model
+  dtype: bfloat16
+
+data:
+  path: data/prompts.jsonl    # One prompt per line: {"prompt": "..."}
+  format: text                # Prompts are loaded as text, tokenized as prompt-only
+  max_seq_length: 512
+
+trainer:
+  batch_size: 4
+  learning_rate: 1e-6         # Low LR for policy fine-tuning
+  num_epochs: 1
+  max_steps: 200              # Number of PPO iterations
+  mixed_precision: bf16
+
+# Online RL: enable generation + reward scoring
+online_rl:
+  enabled: true
+  reward_name: default        # Replace with your reward function
+  generation:
+    max_new_tokens: 128
+    temperature: 0.8
+    top_p: 0.95
+    do_sample: true
+    group_size: 4             # 4 responses per prompt
+
+# PPO-specific hyperparameters
+ppo:
+  ppo_epochs: 4               # K optimization epochs per rollout
+  mini_batch_size: 4           # Mini-batch size within each PPO epoch
+  clip_eps: 0.2                # Clipping epsilon
+  value_coeff: 0.5             # Value loss weight
+  kl_coeff: 0.0                # KL penalty (0 = pure clipping)
+  max_grad_norm: 0.5           # Gradient clipping
+  rollout_size: 16             # Prompts per rollout collection
+  value_head_dropout: 0.0
+
+logging:
+  backends: [console]
+
+output:
+  dir: output/ppo-aligned

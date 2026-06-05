@@ -284,6 +284,15 @@ class JobManager:
                     state.stop_training()
 
                 metrics = state.to_dict().get("metrics", {})
+
+                from xaytune.studio.gpu_metrics import get_gpu_metrics
+
+                gpu = get_gpu_metrics()
+                if gpu:
+                    metrics["gpu_memory_mb"] = gpu.get("gpu_memory_allocated_mb", 0)
+                    metrics["gpu_memory_peak_mb"] = gpu.get("gpu_memory_peak_mb", 0)
+                    metrics["gpu_utilization"] = gpu.get("gpu_utilization", 0)
+
                 entry: dict[str, Any] = {
                     "step": state.global_step,
                     "timestamp": now,
@@ -293,6 +302,7 @@ class JobManager:
                     dt = now - last_step_time[0]
                     if dt > 0:
                         entry["samples_per_sec"] = config.trainer.batch_size / dt
+                        entry["steps_per_sec"] = 1.0 / dt
 
                 job.metrics_history.append(entry)
                 self._append_metrics(job_id, entry)

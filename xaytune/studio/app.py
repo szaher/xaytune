@@ -21,7 +21,7 @@ from xaytune.studio.codegen import METHOD_PARAMS_SPEC, generate_code
 from xaytune.studio.data_preview import preview_dataset
 from xaytune.studio.dataset_browser import get_dataset_info, preview_hf_dataset, search_datasets
 from xaytune.studio.examples import EXAMPLES, load_example_values
-from xaytune.studio.gpu_metrics import get_gpu_metrics
+from xaytune.studio.gpu_metrics import get_gpu_metrics  # noqa: F401
 from xaytune.studio.hub_browser import search_models
 from xaytune.studio.jobs import JobManager, JobStatus
 
@@ -1192,32 +1192,38 @@ def create_app(
             )
 
             monitor_status = gr.Markdown("Select a job to monitor.")
-            loss_plot = gr.Plot(label="Training Loss")
-            metrics_display = gr.Markdown("")
-            gpu_display = gr.Markdown("")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    loss_plot = gr.Plot(label="Loss & Learning Rate")
+                with gr.Column(scale=1):
+                    gpu_plot = gr.Plot(label="GPU Memory & Utilization")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    throughput_display = gr.Markdown("")
+                with gr.Column(scale=1):
+                    metrics_display = gr.Markdown("")
             log_output = gr.Code(label="Training Logs", language=None, lines=12)
-            history_state = gr.State([])
 
             timer = gr.Timer(value=2, active=False)
 
             timer.tick(
-                fn=lambda job_id, history: _poll(mgr, job_id, history),
-                inputs=[job_dropdown, history_state],
+                fn=lambda job_id: _poll(mgr, job_id),
+                inputs=[job_dropdown],
                 outputs=[
                     monitor_status,
                     loss_plot,
+                    gpu_plot,
+                    throughput_display,
                     metrics_display,
-                    history_state,
                     cancel_btn,
-                    gpu_display,
                     log_output,
                 ],
             )
 
             job_dropdown.change(
-                fn=lambda _: ([], True),
+                fn=lambda _: True,
                 inputs=[job_dropdown],
-                outputs=[history_state, timer],
+                outputs=[timer],
             )
 
         # ── History Tab ────────────────────────────────────────────
@@ -1578,51 +1584,37 @@ def create_app(
     return app  # type: ignore[no-any-return]
 
 
-_PollResult = tuple[str, go.Figure, str, list[dict[str, Any]], Any, str, str]
+_PollResult = tuple[str, go.Figure, go.Figure, str, str, Any, str]
 
 
 def _poll(
     mgr: JobManager,
     job_id: str | None,
-    history: list[dict[str, Any]],
-) -> _PollResult:
+) -> tuple:
     import gradio as gr
 
-    empty: _PollResult = (
-        "Select a job to monitor.",
-        _empty_plot(),
-        "",
-        history,
-        gr.update(visible=False),
-        "",
-        "",
-    )
+    empty_fig = _empty_plot("Loss")
+    empty = ("Select a job to monitor.", empty_fig, empty_fig, "", "", gr.update(visible=False), "")
     if not job_id:
         return empty
 
     try:
         job = mgr.get_status(job_id)
     except KeyError:
-        return (
-            f"Unknown job: {job_id}",
-            _empty_plot(),
-            "",
-            history,
-            gr.update(visible=False),
-            "",
-            "",
-        )
+        return (f"Unknown job: {job_id}", empty_fig, empty_fig, "", "", gr.update(visible=False), "")
 
     is_running = job.status == JobStatus.RUNNING
     cancel_update = gr.update(visible=is_running)
+    history = job.metrics_history
 
+    # --- Status + Progress ---
     badge = _status_badge(job.status.value)
     status_md = f"### {badge}"
 
     if job.error:
-        import html
+        import html as _html
 
-        escaped = html.escape(job.error)
+        escaped = _html.escape(job.error)
         status_md += (
             '\n\n<details open><summary style="color:#dc2626; font-weight:600;">'
             "Error Details</summary>"
@@ -1631,12 +1623,12 @@ def _poll(
             f'font-size:0.85em; white-space:pre-wrap;">{escaped}</pre></details>'
         )
 
-    if job.started_at and is_running:
+    if job.started_at:
         elapsed = time.time() - job.started_at
         mins, secs = divmod(int(elapsed), 60)
         status_md += f"\n\nElapsed: **{mins}m {secs}s**"
 
-    if job.state and is_running:
+    if job.state:
         step = job.state.get("global_step", 0)
         max_steps = job.state.get("max_steps", -1)
         num_epochs = job.state.get("num_epochs", 0)
@@ -1645,11 +1637,12 @@ def _poll(
         if max_steps > 0 and step > 0:
             pct = min(100, int(step / max_steps * 100))
             eta_str = ""
-            if job.started_at:
-                elapsed_s = time.time() - job.started_at
-                eta_seconds = int(elapsed_s / step * (max_steps - step))
-                eta_m, eta_s = divmod(eta_seconds, 60)
-                eta_str = f" | ETA: {eta_m}m {eta_s}s"
+            if history and len(history) >= 2:
+                avg_dt = (history[-1]["timestamp"] - history[0]["timestamp"]) / len(history)
+                remaining = max_steps - step
+                eta_s = int(remaining * avg_dt)
+                eta_m, eta_sec = divmod(eta_s, 60)
+                eta_str = f" | ETA: {eta_m}m {eta_sec}s"
             status_md += (
                 '\n\n<div style="background:#e5e7eb; border-radius:8px; '
                 'height:20px; margin:8px 0;">'
@@ -1662,94 +1655,29 @@ def _poll(
             pct = min(100, int((epoch + 1) / num_epochs * 100))
             status_md += f"\n\n**Epoch {epoch + 1} / {num_epochs}** ({pct}%)"
 
+    # --- Loss & LR Plot ---
+    loss_fig = _make_loss_plot(history)
+
+    # --- GPU Plot ---
+    gpu_fig = _make_gpu_plot(history)
+
+    # --- Throughput ---
+    throughput_md = _make_throughput_md(history)
+
+    # --- Metrics ---
+    metrics_md = ""
     if job.state and "global_step" in job.state:
         step = job.state["global_step"]
         metrics = job.state.get("metrics", {})
-
-        seen_steps = {h["step"] for h in history}
-        if step not in seen_steps and "loss" in metrics:
-            gpu_snap = get_gpu_metrics()
-            history = [
-                *history,
-                {
-                    "step": step,
-                    "loss": metrics["loss"],
-                    "gpu_memory_mb": gpu_snap.get("gpu_memory_allocated_mb") if gpu_snap else None,
-                },
-            ]
-
-        metrics_lines = [f"**Step:** {step}"]
+        parts = [f"**Step:** {step}"]
         for k, v in metrics.items():
             if isinstance(v, float):
-                metrics_lines.append(f"**{k}:** {v:.4f}")
+                parts.append(f"**{k}:** {v:.4f}")
             else:
-                metrics_lines.append(f"**{k}:** {v}")
+                parts.append(f"**{k}:** {v}")
+        metrics_md = " | ".join(parts)
 
-        if job.metrics_history:
-            last = job.metrics_history[-1]
-            sps = last.get("samples_per_sec")
-            if sps is not None:
-                metrics_lines.append(f"**samples/sec:** {sps:.1f}")
-
-        metrics_md = " | ".join(metrics_lines)
-    else:
-        metrics_md = ""
-
-    if history:
-        steps = [h["step"] for h in history]
-        losses = [h["loss"] for h in history]
-        gpu_mem = [h.get("gpu_memory_mb") for h in history]
-
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=steps,
-                y=losses,
-                mode="lines+markers",
-                name="Loss",
-                line={"color": "#4f46e5", "width": 2},
-                marker={"size": 4},
-                yaxis="y",
-            )
-        )
-
-        if any(v is not None for v in gpu_mem):
-            fig.add_trace(
-                go.Scatter(
-                    x=steps,
-                    y=gpu_mem,
-                    mode="lines",
-                    name="GPU Memory (MB)",
-                    line={"color": "#dc2626", "width": 1, "dash": "dot"},
-                    yaxis="y2",
-                )
-            )
-
-        fig.update_layout(
-            title="Training Loss",
-            xaxis_title="Step",
-            yaxis={"title": "Loss", "side": "left"},
-            yaxis2={
-                "title": "GPU Memory (MB)",
-                "side": "right",
-                "overlaying": "y",
-            },
-            template="plotly_white",
-            margin={"l": 40, "r": 60, "t": 40, "b": 40},
-        )
-    else:
-        fig = _empty_plot()
-
-    gpu = get_gpu_metrics()
-    if gpu:
-        gpu_md = (
-            f"**GPU Memory:** {gpu['gpu_memory_allocated_mb']:.0f} MB allocated"
-            f" / {gpu['gpu_memory_reserved_mb']:.0f} MB reserved"
-            f" / {gpu['gpu_memory_peak_mb']:.0f} MB peak"
-        )
-    else:
-        gpu_md = ""
-
+    # --- Logs ---
     log_lines = job.log_buffer.get_all()
     if log_lines:
         log_text = "\n".join(log_lines[-200:])
@@ -1758,15 +1686,163 @@ def _poll(
         lines = logs_from_disk.splitlines()[-200:] if logs_from_disk else []
         log_text = "\n".join(lines)
 
-    return status_md, fig, metrics_md, history, cancel_update, gpu_md, log_text
+    return status_md, loss_fig, gpu_fig, throughput_md, metrics_md, cancel_update, log_text
 
 
-def _empty_plot() -> go.Figure:
+def _make_loss_plot(history: list[dict[str, Any]]) -> go.Figure:
+    if not history:
+        return _empty_plot("Loss & Learning Rate")
+
+    steps = [h["step"] for h in history]
+    losses = [h.get("loss") for h in history]
+    eval_losses = [h.get("eval_loss") for h in history]
+    lrs = [h.get("learning_rate") for h in history]
+
+    fig = go.Figure()
+
+    if any(v is not None for v in losses):
+        fig.add_trace(go.Scatter(
+            x=steps, y=losses, mode="lines",
+            name="Loss", line={"color": "#4f46e5", "width": 2}, yaxis="y",
+        ))
+
+    if any(v is not None for v in eval_losses):
+        eval_steps = [s for s, v in zip(steps, eval_losses) if v is not None]
+        eval_vals = [v for v in eval_losses if v is not None]
+        fig.add_trace(go.Scatter(
+            x=eval_steps, y=eval_vals, mode="markers",
+            name="Eval Loss", marker={"color": "#dc2626", "size": 8, "symbol": "diamond"},
+            yaxis="y",
+        ))
+
+    if any(v is not None for v in lrs):
+        fig.add_trace(go.Scatter(
+            x=steps, y=lrs, mode="lines",
+            name="Learning Rate", line={"color": "#059669", "width": 1, "dash": "dash"},
+            yaxis="y2",
+        ))
+
+    fig.update_layout(
+        title="Loss & Learning Rate",
+        xaxis_title="Step",
+        yaxis={"title": "Loss", "side": "left"},
+        yaxis2={"title": "Learning Rate", "side": "right", "overlaying": "y"},
+        template="plotly_white",
+        margin={"l": 40, "r": 60, "t": 40, "b": 40},
+        legend={"x": 0.01, "y": 0.99, "bgcolor": "rgba(255,255,255,0.8)"},
+    )
+    return fig
+
+
+def _make_gpu_plot(history: list[dict[str, Any]]) -> go.Figure:
+    if not history:
+        return _empty_plot("GPU")
+
+    steps = [h["step"] for h in history]
+    mem = [h.get("gpu_memory_mb") for h in history]
+    peak = [h.get("gpu_memory_peak_mb") for h in history]
+    util = [h.get("gpu_utilization") for h in history]
+
+    has_mem = any(v is not None for v in mem)
+    has_util = any(v is not None for v in util)
+
+    if not has_mem and not has_util:
+        fig = _empty_plot("GPU")
+        fig.add_annotation(text="No GPU metrics available", xref="paper", yref="paper",
+                           x=0.5, y=0.5, showarrow=False, font={"size": 14, "color": "#9ca3af"})
+        return fig
+
+    fig = go.Figure()
+
+    if has_mem:
+        fig.add_trace(go.Scatter(
+            x=steps, y=mem, mode="lines", fill="tozeroy",
+            name="GPU Memory (MB)", line={"color": "#4f46e5", "width": 1},
+            fillcolor="rgba(79, 70, 229, 0.15)", yaxis="y",
+        ))
+        if any(v is not None for v in peak):
+            fig.add_trace(go.Scatter(
+                x=steps, y=peak, mode="lines",
+                name="Peak (MB)", line={"color": "#dc2626", "width": 1, "dash": "dot"},
+                yaxis="y",
+            ))
+
+    if has_util:
+        fig.add_trace(go.Scatter(
+            x=steps, y=util, mode="lines",
+            name="Utilization (%)", line={"color": "#059669", "width": 2},
+            yaxis="y2" if has_mem else "y",
+        ))
+
+    layout_kwargs: dict[str, Any] = {
+        "title": "GPU Memory & Utilization",
+        "xaxis_title": "Step",
+        "template": "plotly_white",
+        "margin": {"l": 40, "r": 60, "t": 40, "b": 40},
+        "legend": {"x": 0.01, "y": 0.99, "bgcolor": "rgba(255,255,255,0.8)"},
+    }
+    if has_mem:
+        layout_kwargs["yaxis"] = {"title": "Memory (MB)", "side": "left"}
+    if has_util and has_mem:
+        layout_kwargs["yaxis2"] = {
+            "title": "Utilization (%)", "side": "right",
+            "overlaying": "y", "range": [0, 100],
+        }
+    elif has_util:
+        layout_kwargs["yaxis"] = {"title": "Utilization (%)", "range": [0, 100]}
+
+    fig.update_layout(**layout_kwargs)
+    return fig
+
+
+def _make_throughput_md(history: list[dict[str, Any]]) -> str:
+    if not history:
+        return ""
+
+    parts = ["### Throughput"]
+    last = history[-1]
+
+    sps = last.get("samples_per_sec")
+    if sps is not None:
+        parts.append(f"**Samples/sec:** {sps:.1f}")
+
+    steps_sec = last.get("steps_per_sec")
+    if steps_sec is not None:
+        parts.append(f"**Steps/sec:** {steps_sec:.2f}")
+
+    if len(history) >= 2:
+        total_time = history[-1]["timestamp"] - history[0]["timestamp"]
+        total_steps = len(history)
+        if total_time > 0:
+            avg_sps = total_steps / total_time
+            parts.append(f"**Avg steps/sec:** {avg_sps:.2f}")
+
+            step = last.get("step", 0)
+            max_steps_h = [h for h in history if h.get("step", 0) > 0]
+            if max_steps_h:
+                avg_step_time = total_time / total_steps
+                parts.append(f"**Avg step time:** {avg_step_time:.2f}s")
+
+    gpu_mem = last.get("gpu_memory_mb")
+    if gpu_mem is not None:
+        parts.append(f"**GPU Memory:** {gpu_mem:.0f} MB")
+        peak = last.get("gpu_memory_peak_mb")
+        if peak is not None:
+            parts.append(f"**Peak:** {peak:.0f} MB")
+
+    gpu_util = last.get("gpu_utilization")
+    if gpu_util is not None:
+        parts.append(f"**GPU Utilization:** {gpu_util:.0f}%")
+
+    return "\n\n".join(parts)
+
+
+def _empty_plot(title: str = "Training Loss") -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
-        title="Training Loss",
+        title=title,
         xaxis_title="Step",
-        yaxis_title="Loss",
+        yaxis_title="",
         template="plotly_white",
         margin={"l": 40, "r": 20, "t": 40, "b": 40},
     )

@@ -179,6 +179,33 @@ def align(
             for param in ref_model.parameters():
                 param.requires_grad = False
 
+        if config.online_rl.enabled and config.method == "ppo":
+            from xaytune.recipes.align.ppo_trainer import PPOTrainer
+            from xaytune.recipes.align.value_head import ValueHead
+
+            hidden_size = getattr(
+                getattr(components.model, "config", None), "hidden_size", 4096
+            )
+            value_head = ValueHead(
+                hidden_size, dropout=config.ppo.value_head_dropout
+            )
+
+            ppo = PPOTrainer(
+                model=components.model,
+                ref_model=ref_model,
+                value_head=value_head,
+                tokenizer=components.tokenizer,
+                config=config,
+                callback_manager=components.trainer.callback_manager,
+            )
+            state = ppo.train(
+                prompt_dataloader=components.train_dataloader,
+                generation_config=config.online_rl.generation,
+                reward_name=config.online_rl.reward_name,
+                reward_kwargs=config.online_rl.reward_kwargs,
+            )
+            return state
+
         if config.online_rl.enabled and config.method in _RL_METHODS:
             from xaytune.recipes.align.online_step import OnlineRLStep
 

@@ -281,6 +281,32 @@ class OnlineRLConfig(BaseModel):
     eval_every_n_steps: int = 100
 
 
+class PPOConfig(BaseModel):
+    """PPO-specific training configuration.
+
+    Attributes:
+        ppo_epochs: Number of optimization epochs per rollout collection.
+        mini_batch_size: Mini-batch size within each PPO epoch.
+        clip_eps: Clipping epsilon for the policy surrogate objective.
+        value_coeff: Coefficient for the value function loss.
+        kl_coeff: KL penalty coefficient (0 = pure clipping, no KL).
+        max_grad_norm: Gradient clipping norm for PPO updates.
+        gamma: Discount factor (1.0 for single-step sequence-level PPO).
+        rollout_size: Number of prompts per rollout collection phase.
+        value_head_dropout: Dropout on the value head linear layer.
+    """
+
+    ppo_epochs: int = 4
+    mini_batch_size: int = 8
+    clip_eps: float = 0.2
+    value_coeff: float = 0.5
+    kl_coeff: float = 0.0
+    max_grad_norm: float = 0.5
+    gamma: float = 1.0
+    rollout_size: int = 128
+    value_head_dropout: float = 0.0
+
+
 class DataPrepStepConfig(BaseModel):
     """A single data preparation step.
 
@@ -327,6 +353,7 @@ class TrainConfig(BaseModel):
     output: OutputConfig = OutputConfig()
     method_params: dict[str, Any] = {}
     online_rl: OnlineRLConfig = OnlineRLConfig()
+    ppo: PPOConfig = PPOConfig()
     data_prep: list[dict[str, Any]] = []
     fsdp: FSDPConfig = FSDPConfig()
     deepspeed_config: DeepSpeedConfig = DeepSpeedConfig()

@@ -44,6 +44,22 @@ total steps → DS config → `initialize`) or the optimizer and scheduler are
 constructed externally and passed in. That ordering question is why this is its
 own task rather than a patch to PR #16.
 
+**Checkpoint ownership belongs to the same task.** Nothing in the tree calls
+`engine.load_checkpoint()` or `engine.save_checkpoint()` — the only
+`save_checkpoint`/`load_checkpoint` are xaytune's own trainer-side helpers. So
+a DeepSpeed resume does not relocate optimizer state to the engine, it **loses
+it**, and training silently continues from a fresh optimizer. PR #16 made the
+warning say that instead of implying a restore happens elsewhere, but the fix
+is here. Whoever settles ownership must settle save and restore with it:
+
+- R6: optimizer state saved and restored through the engine's checkpoint API.
+- R7: scheduler state likewise, once the engine owns a schedule.
+- R8: a resume test that asserts state is *restored*, not merely that the
+  trainer-side skip does not crash.
+
+The existing test is named `test_deepspeed_skips_trainer_optimizer_restore`
+precisely so it cannot be mistaken for R8.
+
 Everything else in this file is a historical record of work that has landed,
 and TASK-007 and TASK-008 still carry the dependency ordering described in
 `dependencies.md`.

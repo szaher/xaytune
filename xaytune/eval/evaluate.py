@@ -45,8 +45,7 @@ def evaluate(
         for batch in dataset:
             if isinstance(batch, dict):
                 batch = {
-                    k: v.to(device) if isinstance(v, torch.Tensor) else v
-                    for k, v in batch.items()
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
                 }
                 outputs = model(**batch)
             else:
@@ -55,13 +54,14 @@ def evaluate(
             if hasattr(outputs, "loss") and outputs.loss is not None:
                 losses.append(outputs.loss.item())
 
-            if (
-                hasattr(outputs, "logits")
-                and isinstance(batch, dict)
-                and "labels" in batch
-            ):
+            if hasattr(outputs, "logits") and isinstance(batch, dict) and "labels" in batch:
                 preds = outputs.logits.argmax(dim=-1)
                 labels = batch["labels"]
+                # Batch values are not required to be tensors on the way in
+                # (see the device-move above, which passes non-tensors through),
+                # but masking them is only meaningful once they are.
+                if not isinstance(labels, torch.Tensor):
+                    labels = torch.as_tensor(labels)
                 mask = labels != -100
                 all_predictions.extend(preds[mask].cpu().tolist())
                 all_references.extend(labels[mask].cpu().tolist())

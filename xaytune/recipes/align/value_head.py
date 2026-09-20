@@ -44,7 +44,8 @@ class ValueHead(nn.Module):
         seq_lens = seq_lens.clamp(min=0)
         batch_idx = torch.arange(hidden_states.size(0), device=hidden_states.device)
         last_hidden = hidden_states[batch_idx, seq_lens]
-        return self.linear(self.dropout(last_hidden)).squeeze(-1)
+        values: torch.Tensor = self.linear(self.dropout(last_hidden)).squeeze(-1)
+        return values
 
 
 def get_values(
@@ -61,4 +62,5 @@ def get_values(
             output_hidden_states=True,
         )
     hidden = outputs.hidden_states[-1]
-    return value_head(hidden, attention_mask)
+    values: torch.Tensor = value_head(hidden, attention_mask)
+    return values

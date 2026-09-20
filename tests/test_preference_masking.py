@@ -5,11 +5,12 @@ Covers:
 - tokenize_preference_dataset includes prompt_length in output.
 """
 
-import torch
 from unittest.mock import MagicMock
 
-from xaytune.recipes.align.logprobs import get_sequence_logps
+import torch
+
 from xaytune.data.tokenizer import tokenize_preference_dataset
+from xaytune.recipes.align.logprobs import get_sequence_logps
 
 
 class TestPreferencePromptMasking:

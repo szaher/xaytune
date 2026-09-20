@@ -96,7 +96,9 @@ def lr_find(
         current_lr = optimizer.param_groups[0]["lr"]
 
         if isinstance(batch, dict):
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()
+            }
             outputs = model(**batch)
         else:
             outputs = model(batch)

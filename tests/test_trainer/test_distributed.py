@@ -75,10 +75,18 @@ class TestInitDistributed:
         assert not ctx.is_distributed
         assert ctx.rank == 0
 
+    @patch("torch.cuda.is_available", return_value=True)
     @patch("torch.cuda.set_device")
     @patch("torch.distributed.is_initialized", return_value=False)
     @patch("torch.distributed.init_process_group")
-    def test_multi_gpu_initializes_process_group(self, mock_init, mock_is_init, mock_set_device):
+    def test_multi_gpu_initializes_process_group(
+        self, mock_init, mock_is_init, mock_set_device, mock_cuda
+    ):
+        """Backend selection follows CUDA availability, so it must be mocked.
+
+        Without patching ``torch.cuda.is_available`` this asserted ``nccl`` on
+        any host and could only pass on a GPU machine — never on CI runners.
+        """
         env = {"RANK": "1", "WORLD_SIZE": "4", "LOCAL_RANK": "1"}
         with patch.dict(os.environ, env, clear=True):
             ctx = init_distributed()
@@ -88,6 +96,17 @@ class TestInitDistributed:
         assert ctx.local_rank == 1
         mock_init.assert_called_once_with(backend="nccl")
         mock_set_device.assert_called_once_with(1)
+
+    @patch("torch.cuda.is_available", return_value=False)
+    @patch("torch.distributed.is_initialized", return_value=False)
+    @patch("torch.distributed.init_process_group")
+    def test_cpu_only_uses_gloo_backend(self, mock_init, mock_is_init, mock_cuda):
+        """CPU-only distributed must not touch the CUDA device API."""
+        env = {"RANK": "1", "WORLD_SIZE": "4", "LOCAL_RANK": "1"}
+        with patch.dict(os.environ, env, clear=True):
+            ctx = init_distributed()
+        assert ctx.is_distributed
+        mock_init.assert_called_once_with(backend="gloo")
 
     @patch("torch.cuda.set_device")
     @patch("torch.distributed.is_initialized", return_value=True)

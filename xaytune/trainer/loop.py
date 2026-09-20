@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import torch
@@ -12,6 +13,8 @@ from xaytune.trainer.device import (
     supports_grad_scaler,
 )
 from xaytune.trainer.scheduler import create_scheduler, resolve_warmup_steps
+
+logger = logging.getLogger(__name__)
 
 
 class Trainer:
@@ -47,6 +50,7 @@ class Trainer:
     def _is_deepspeed_engine(model: Any) -> bool:
         try:
             import deepspeed
+
             return isinstance(model, deepspeed.DeepSpeedEngine)
         except ImportError:
             return False
@@ -118,13 +122,30 @@ class Trainer:
 
             opt_path = Path(resume_checkpoint_dir) / "optimizer.pt"
             if opt_path.exists():
-                optimizer.load_state_dict(torch.load(opt_path, weights_only=True, map_location="cpu"))
+                if optimizer is not None:
+                    optimizer.load_state_dict(
+                        torch.load(opt_path, weights_only=True, map_location="cpu")
+                    )
+                else:
+                    # DeepSpeed owns the optimizer, so there is nothing to
+                    # restore here; its state comes back through the engine's
+                    # own checkpoint API. Say so rather than resume silently
+                    # from a fresh optimizer.
+                    logger.warning(
+                        "Skipping optimizer state restore from %s: DeepSpeed manages "
+                        "optimizer state through its own checkpoint API.",
+                        opt_path,
+                    )
             scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"
             if self._scaler is not None and scaler_path.exists():
-                self._scaler.load_state_dict(torch.load(scaler_path, weights_only=True, map_location="cpu"))
+                self._scaler.load_state_dict(
+                    torch.load(scaler_path, weights_only=True, map_location="cpu")
+                )
             scheduler_path = Path(resume_checkpoint_dir) / "scheduler.pt"
             if self._scheduler is not None and scheduler_path.exists():
-                self._scheduler.load_state_dict(torch.load(scheduler_path, weights_only=True, map_location="cpu"))
+                self._scheduler.load_state_dict(
+                    torch.load(scheduler_path, weights_only=True, map_location="cpu")
+                )
 
         if resume_state is not None:
             state = TrainState(

@@ -1,5 +1,4 @@
 import json
-import random
 import tempfile
 import warnings
 from unittest.mock import MagicMock
@@ -27,8 +26,7 @@ class TestFormatTextWarning:
             result = format_text({"text": "hello"})
             assert result["text"] == "hello"
             format_warnings = [
-                x for x in w
-                if "key" in str(x.message).lower() and "text" in str(x.message).lower()
+                x for x in w if "key" in str(x.message).lower() and "text" in str(x.message).lower()
             ]
             assert len(format_warnings) == 0
 
@@ -37,10 +35,7 @@ class TestFormatTextWarning:
             warnings.simplefilter("always")
             result = format_text({"content": "hello"})
             assert result["text"] == "hello"
-            format_warnings = [
-                x for x in w
-                if "no 'text'" in str(x.message).lower()
-            ]
+            format_warnings = [x for x in w if "no 'text'" in str(x.message).lower()]
             assert len(format_warnings) == 0
 
     def test_warns_only_once_per_keyset(self):
@@ -49,10 +44,7 @@ class TestFormatTextWarning:
             warnings.simplefilter("always")
             format_text({"body": "a"})
             format_text({"body": "b"})
-            key_warnings = [
-                x for x in w
-                if "body" in str(x.message)
-            ]
+            key_warnings = [x for x in w if "body" in str(x.message)]
             assert len(key_warnings) == 1
 
 
@@ -60,11 +52,13 @@ class TestPreferenceShuffle:
     def test_eval_split_shuffles_before_split(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             for i in range(100):
-                line = json.dumps({
-                    "prompt": f"prompt-{i}",
-                    "chosen": f"chosen-{i}",
-                    "rejected": f"rejected-{i}",
-                })
+                line = json.dumps(
+                    {
+                        "prompt": f"prompt-{i}",
+                        "chosen": f"chosen-{i}",
+                        "rejected": f"rejected-{i}",
+                    }
+                )
                 f.write(line + "\n")
             path = f.name
 
@@ -79,11 +73,13 @@ class TestPreferenceShuffle:
     def test_shuffle_is_deterministic(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
             for i in range(50):
-                line = json.dumps({
-                    "prompt": f"p-{i}",
-                    "chosen": f"c-{i}",
-                    "rejected": f"r-{i}",
-                })
+                line = json.dumps(
+                    {
+                        "prompt": f"p-{i}",
+                        "chosen": f"c-{i}",
+                        "rejected": f"r-{i}",
+                    }
+                )
                 f.write(line + "\n")
             path = f.name
 
@@ -144,5 +140,5 @@ class TestAgentBOS:
         # First message (user, non-trainable) should be masked
         # Second message (assistant, trainable) should have real IDs
         user_len = 2  # BOS + ord('a')
-        assert all(l == IGNORE_INDEX for l in labels[:user_len])
-        assert all(l != IGNORE_INDEX for l in labels[user_len:])
+        assert all(label == IGNORE_INDEX for label in labels[:user_len])
+        assert all(label != IGNORE_INDEX for label in labels[user_len:])

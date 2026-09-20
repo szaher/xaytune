@@ -112,8 +112,7 @@ def tokenize_multiturn(
     )
 
     use_chat_template = bool(
-        data[0].get("_use_chat_template")
-        and hasattr(tokenizer, "apply_chat_template")
+        data[0].get("_use_chat_template") and hasattr(tokenizer, "apply_chat_template")
     )
 
     tokenized = []
@@ -128,11 +127,16 @@ def tokenize_multiturn(
         if use_chat_template:
             messages = [{"role": t["role"], "content": t["content"]} for t in turns]
             full_text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False,
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
             )
             full_enc = tokenizer(
-                full_text, truncation=True, max_length=max_length,
-                padding=False, return_attention_mask=False,
+                full_text,
+                truncation=True,
+                max_length=max_length,
+                padding=False,
+                return_attention_mask=False,
             )
             all_ids = full_enc["input_ids"]
             all_labels = list(all_ids)
@@ -141,11 +145,16 @@ def tokenize_multiturn(
             for turn in turns:
                 prompt_msgs = messages[: cursor + 1]
                 prefix = tokenizer.apply_chat_template(
-                    prompt_msgs, tokenize=False, add_generation_prompt=False,
+                    prompt_msgs,
+                    tokenize=False,
+                    add_generation_prompt=False,
                 )
                 prefix_enc = tokenizer(
-                    prefix, truncation=True, max_length=max_length,
-                    padding=False, return_attention_mask=False,
+                    prefix,
+                    truncation=True,
+                    max_length=max_length,
+                    padding=False,
+                    return_attention_mask=False,
                 )
                 turn_end = len(prefix_enc["input_ids"])
 
@@ -154,11 +163,16 @@ def tokenize_multiturn(
                 else:
                     prev_msgs = messages[:cursor]
                     prev_text = tokenizer.apply_chat_template(
-                        prev_msgs, tokenize=False, add_generation_prompt=False,
+                        prev_msgs,
+                        tokenize=False,
+                        add_generation_prompt=False,
                     )
                     prev_enc = tokenizer(
-                        prev_text, truncation=True, max_length=max_length,
-                        padding=False, return_attention_mask=False,
+                        prev_text,
+                        truncation=True,
+                        max_length=max_length,
+                        padding=False,
+                        return_attention_mask=False,
                     )
                     prev_end = len(prev_enc["input_ids"])
 
@@ -550,9 +564,7 @@ class StreamingTokenizedDataset(IterableDataset):
     def __iter__(self) -> Iterator[dict[str, list[int]]]:
         for sample in self._dataset:
             if "turns" in sample:
-                batch = tokenize_multiturn(
-                    [sample], self._tokenizer, self._max_seq_length
-                )
+                batch = tokenize_multiturn([sample], self._tokenizer, self._max_seq_length)
                 if batch:
                     yield batch[0]
             else:

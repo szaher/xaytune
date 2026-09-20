@@ -39,12 +39,27 @@ class TestExampleConfigs:
     def test_reinforce_align_exists(self):
         assert (EXAMPLES_DIR / "reinforce_align.yaml").is_file()
 
-    def test_all_examples_are_valid_yaml(self):
+    def test_all_training_examples_are_valid_yaml(self):
+        """Every training config must declare a model and a dataset.
+
+        ``pipeline.yaml`` is a ``PipelineConfig``, not a ``TrainConfig`` — it
+        declares stages instead, so it is validated separately below.
+        """
         for f in EXAMPLES_DIR.glob("*.yaml"):
             data = yaml.safe_load(f.read_text())
             assert isinstance(data, dict), f"{f.name} is not a valid YAML mapping"
+            if "stages" in data:
+                continue
             assert "model" in data, f"{f.name} missing 'model' key"
             assert "data" in data, f"{f.name} missing 'data' key"
+
+    def test_pipeline_example_is_valid_yaml(self):
+        data = yaml.safe_load((EXAMPLES_DIR / "pipeline.yaml").read_text())
+        assert isinstance(data, dict)
+        assert "name" in data
+        assert isinstance(data.get("stages"), list) and data["stages"]
+        for stage in data["stages"]:
+            assert "name" in stage, f"pipeline stage missing 'name': {stage}"
 
     def test_all_alignment_examples_have_method(self):
         alignment_configs = [
@@ -74,6 +89,18 @@ class TestExampleConfigs:
         found = {f.name for f in EXAMPLES_DIR.glob("*finetune.yaml")}
         assert found == expected
 
-    def test_ten_examples_total(self):
-        examples = list(EXAMPLES_DIR.glob("*.yaml"))
-        assert len(examples) == 11
+    def test_every_example_is_a_recognised_kind(self):
+        """Guards against a stray or half-finished file landing in examples/.
+
+        A hardcoded file count was previously asserted here; it went stale as
+        soon as new examples were added, without catching anything a shipped
+        example could actually get wrong.
+        """
+        for f in EXAMPLES_DIR.glob("*.yaml"):
+            data = yaml.safe_load(f.read_text())
+            is_pipeline = "stages" in data
+            is_training = "model" in data and "data" in data
+            assert is_pipeline or is_training, (
+                f"{f.name} is neither a training config (model + data) "
+                f"nor a pipeline config (stages)"
+            )

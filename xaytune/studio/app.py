@@ -343,7 +343,10 @@ def create_app(
                         choices=["alpaca", "sharegpt", "chat", "text", "preference"],
                         value="alpaca",
                         label="Data Format",
-                        info="alpaca: instruction/output. sharegpt: chat. text: raw text. preference: RLHF.",
+                        info=(
+                            "alpaca: instruction/output. sharegpt: chat. "
+                            "text: raw text. preference: RLHF."
+                        ),
                     )
                     source = gr.Dropdown(
                         choices=["local", "huggingface"],
@@ -1601,7 +1604,15 @@ def _poll(
     try:
         job = mgr.get_status(job_id)
     except KeyError:
-        return (f"Unknown job: {job_id}", empty_fig, empty_fig, "", "", gr.update(visible=False), "")
+        return (
+            f"Unknown job: {job_id}",
+            empty_fig,
+            empty_fig,
+            "",
+            "",
+            gr.update(visible=False),
+            "",
+        )
 
     is_running = job.status == JobStatus.RUNNING
     cancel_update = gr.update(visible=is_running)
@@ -1701,26 +1712,42 @@ def _make_loss_plot(history: list[dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
 
     if any(v is not None for v in losses):
-        fig.add_trace(go.Scatter(
-            x=steps, y=losses, mode="lines",
-            name="Loss", line={"color": "#4f46e5", "width": 2}, yaxis="y",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=losses,
+                mode="lines",
+                name="Loss",
+                line={"color": "#4f46e5", "width": 2},
+                yaxis="y",
+            )
+        )
 
     if any(v is not None for v in eval_losses):
         eval_steps = [s for s, v in zip(steps, eval_losses) if v is not None]
         eval_vals = [v for v in eval_losses if v is not None]
-        fig.add_trace(go.Scatter(
-            x=eval_steps, y=eval_vals, mode="markers",
-            name="Eval Loss", marker={"color": "#dc2626", "size": 8, "symbol": "diamond"},
-            yaxis="y",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=eval_steps,
+                y=eval_vals,
+                mode="markers",
+                name="Eval Loss",
+                marker={"color": "#dc2626", "size": 8, "symbol": "diamond"},
+                yaxis="y",
+            )
+        )
 
     if any(v is not None for v in lrs):
-        fig.add_trace(go.Scatter(
-            x=steps, y=lrs, mode="lines",
-            name="Learning Rate", line={"color": "#059669", "width": 1, "dash": "dash"},
-            yaxis="y2",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=lrs,
+                mode="lines",
+                name="Learning Rate",
+                line={"color": "#059669", "width": 1, "dash": "dash"},
+                yaxis="y2",
+            )
+        )
 
     fig.update_layout(
         title="Loss & Learning Rate",
@@ -1748,31 +1775,55 @@ def _make_gpu_plot(history: list[dict[str, Any]]) -> go.Figure:
 
     if not has_mem and not has_util:
         fig = _empty_plot("GPU")
-        fig.add_annotation(text="No GPU metrics available", xref="paper", yref="paper",
-                           x=0.5, y=0.5, showarrow=False, font={"size": 14, "color": "#9ca3af"})
+        fig.add_annotation(
+            text="No GPU metrics available",
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            showarrow=False,
+            font={"size": 14, "color": "#9ca3af"},
+        )
         return fig
 
     fig = go.Figure()
 
     if has_mem:
-        fig.add_trace(go.Scatter(
-            x=steps, y=mem, mode="lines", fill="tozeroy",
-            name="GPU Memory (MB)", line={"color": "#4f46e5", "width": 1},
-            fillcolor="rgba(79, 70, 229, 0.15)", yaxis="y",
-        ))
-        if any(v is not None for v in peak):
-            fig.add_trace(go.Scatter(
-                x=steps, y=peak, mode="lines",
-                name="Peak (MB)", line={"color": "#dc2626", "width": 1, "dash": "dot"},
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=mem,
+                mode="lines",
+                fill="tozeroy",
+                name="GPU Memory (MB)",
+                line={"color": "#4f46e5", "width": 1},
+                fillcolor="rgba(79, 70, 229, 0.15)",
                 yaxis="y",
-            ))
+            )
+        )
+        if any(v is not None for v in peak):
+            fig.add_trace(
+                go.Scatter(
+                    x=steps,
+                    y=peak,
+                    mode="lines",
+                    name="Peak (MB)",
+                    line={"color": "#dc2626", "width": 1, "dash": "dot"},
+                    yaxis="y",
+                )
+            )
 
     if has_util:
-        fig.add_trace(go.Scatter(
-            x=steps, y=util, mode="lines",
-            name="Utilization (%)", line={"color": "#059669", "width": 2},
-            yaxis="y2" if has_mem else "y",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=steps,
+                y=util,
+                mode="lines",
+                name="Utilization (%)",
+                line={"color": "#059669", "width": 2},
+                yaxis="y2" if has_mem else "y",
+            )
+        )
 
     layout_kwargs: dict[str, Any] = {
         "title": "GPU Memory & Utilization",
@@ -1785,8 +1836,10 @@ def _make_gpu_plot(history: list[dict[str, Any]]) -> go.Figure:
         layout_kwargs["yaxis"] = {"title": "Memory (MB)", "side": "left"}
     if has_util and has_mem:
         layout_kwargs["yaxis2"] = {
-            "title": "Utilization (%)", "side": "right",
-            "overlaying": "y", "range": [0, 100],
+            "title": "Utilization (%)",
+            "side": "right",
+            "overlaying": "y",
+            "range": [0, 100],
         }
     elif has_util:
         layout_kwargs["yaxis"] = {"title": "Utilization (%)", "range": [0, 100]}
@@ -1817,7 +1870,6 @@ def _make_throughput_md(history: list[dict[str, Any]]) -> str:
             avg_sps = total_steps / total_time
             parts.append(f"**Avg steps/sec:** {avg_sps:.2f}")
 
-            step = last.get("step", 0)
             max_steps_h = [h for h in history if h.get("step", 0) > 0]
             if max_steps_h:
                 avg_step_time = total_time / total_steps

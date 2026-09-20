@@ -7,11 +7,12 @@ Covers:
 - model.backward(loss) called instead of loss.backward().
 """
 
-import torch
+import logging
 from unittest.mock import MagicMock, patch
 
+import torch
+
 from xaytune.config.schema import TrainerConfig
-from xaytune.trainer.callbacks import CallbackManager, TrainState
 from xaytune.trainer.loop import Trainer
 
 
@@ -76,6 +77,77 @@ class TestDeepSpeedOptimizerSkip:
         assert state.global_step == 1
 
 
+class TestDeepSpeedResume:
+    def test_resume_does_not_crash_when_deepspeed_owns_the_optimizer(self, tmp_path, caplog):
+        """The DS path sets optimizer to None; restoring state must not crash.
+
+        Regression: train() called optimizer.load_state_dict() unguarded while
+        the adjacent scaler and scheduler branches both checked for None, so
+        DeepSpeed + resume_checkpoint_dir raised AttributeError.
+        """
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+
+        mock_model = MagicMock()
+        mock_loss = MagicMock()
+        mock_loss.item.return_value = 0.42
+        mock_output = MagicMock()
+        mock_output.loss = mock_loss
+        mock_model.return_value = mock_output
+
+        # A checkpoint that does contain optimizer state, so the branch is taken.
+        torch.save({"state": {}, "param_groups": []}, tmp_path / "optimizer.pt")
+
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            with caplog.at_level(logging.WARNING):
+                state = trainer.train(
+                    model=mock_model,
+                    train_dataloader=dl,
+                    scheduler=MagicMock(),
+                    resume_checkpoint_dir=str(tmp_path),
+                )
+
+        assert state.global_step == 1
+        assert trainer._optimizer is None
+        # The skip is reported rather than silently resuming from a fresh optimizer.
+        assert any("DeepSpeed manages optimizer state" in r.message for r in caplog.records)
+
+    def test_non_deepspeed_resume_restores_optimizer_state(self, tmp_path):
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        torch.save(optimizer.state_dict(), tmp_path / "optimizer.pt")
+
+        target = MagicMock()
+        target.load_state_dict = MagicMock()
+        target.param_groups = optimizer.param_groups
+        target.zero_grad = MagicMock()
+        target.step = MagicMock()
+
+        mock_model = MagicMock()
+        mock_output = MagicMock()
+        mock_output.loss = MagicMock()
+        mock_output.loss.item.return_value = 0.1
+        mock_model.return_value = mock_output
+
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=False):
+            trainer.train(
+                model=mock_model,
+                train_dataloader=dl,
+                optimizer=target,
+                scheduler=MagicMock(),
+                resume_checkpoint_dir=str(tmp_path),
+            )
+
+        target.load_state_dict.assert_called_once()
+
+
 class TestDeepSpeedBackwardDelegation:
     def test_deepspeed_calls_model_backward(self):
         """DS engine should use model.backward(loss) not loss.backward()."""
@@ -92,7 +164,7 @@ class TestDeepSpeedBackwardDelegation:
         dl = [{"input_ids": torch.tensor([1, 2, 3])}]
 
         with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
-            state = trainer.train(
+            trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
                 scheduler=MagicMock(),

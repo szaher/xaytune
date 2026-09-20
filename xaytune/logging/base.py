@@ -34,6 +34,7 @@ class LoggingManager:
                 backend.log_scalar(key, value, step)
             except Exception as e:
                 import warnings
+
                 warnings.warn(f"Logging backend {type(backend).__name__} failed: {e}")
 
     def log_config(self, config: dict[str, Any]) -> None:
@@ -44,6 +45,7 @@ class LoggingManager:
                 backend.log_config(config)
             except Exception as e:
                 import warnings
+
                 warnings.warn(f"Logging backend {type(backend).__name__} failed: {e}")
 
     def close(self) -> None:

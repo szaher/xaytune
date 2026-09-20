@@ -18,6 +18,9 @@ class TestModelMergeCLI:
         with (
             patch("transformers.AutoTokenizer.from_pretrained") as mock_tok,
             patch("transformers.AutoModelForCausalLM.from_pretrained") as mock_model,
+            # _save_merged() also reads the source config; without this the
+            # test falls through to a real Hub download and 404s.
+            patch("transformers.AutoConfig.from_pretrained"),
             patch("torch.save"),
         ):
             mock_model_inst = MagicMock()
@@ -45,6 +48,9 @@ class TestModelMergeCLI:
         with (
             patch("transformers.AutoTokenizer.from_pretrained") as mock_tok,
             patch("transformers.AutoModelForCausalLM.from_pretrained") as mock_model,
+            # _save_merged() also reads the source config; without this the
+            # test falls through to a real Hub download and 404s.
+            patch("transformers.AutoConfig.from_pretrained"),
             patch("torch.save"),
         ):
             mock_model_inst = MagicMock()
@@ -74,6 +80,9 @@ class TestModelMergeCLI:
         with (
             patch("transformers.AutoTokenizer.from_pretrained") as mock_tok,
             patch("transformers.AutoModelForCausalLM.from_pretrained") as mock_model,
+            # _save_merged() also reads the source config; without this the
+            # test falls through to a real Hub download and 404s.
+            patch("transformers.AutoConfig.from_pretrained"),
             patch("torch.save"),
         ):
             mock_model_inst = MagicMock()

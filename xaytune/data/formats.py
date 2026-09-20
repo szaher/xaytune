@@ -15,10 +15,7 @@ def format_alpaca(sample: dict[str, Any]) -> dict[str, str]:
     input_text = sample.get("input", "")
     output = sample.get("output", "")
     if input_text:
-        prompt = (
-            f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}"
-            f"\n\n### Response:\n"
-        )
+        prompt = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n"
     else:
         prompt = f"### Instruction:\n{instruction}\n\n### Response:\n"
     text = prompt + output

@@ -93,8 +93,8 @@ class TestMlflowFlatten:
 
 class TestImportGuards:
     def test_peft_import_error_message(self):
-        from xaytune.models.peft import apply_lora
         from xaytune.models.loader import ModelResult
+        from xaytune.models.peft import apply_lora
 
         mock_model = MagicMock()
         mock_model.parameters.return_value = iter([MagicMock()])
@@ -128,6 +128,7 @@ class TestImportGuards:
         if mlflow_mod.mlflow is None:
             with pytest.raises(ImportError, match="pip install"):
                 from xaytune.logging.mlflow import MLflowBackend
+
                 MLflowBackend()
         else:
             import inspect

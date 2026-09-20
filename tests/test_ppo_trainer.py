@@ -9,10 +9,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import torch
-import torch.nn as nn
 
 from xaytune.recipes.align.ppo import ppo_clip_loss, ppo_value_loss
 from xaytune.recipes.align.rollout_buffer import Rollout, RolloutBuffer
@@ -58,6 +55,7 @@ class TestValueHead:
         vh.train()
         v1 = vh(hidden, mask)
         v2 = vh(hidden, mask)
+        assert not torch.equal(v1, v2), "Train mode should apply dropout"
         vh.eval()
         v3 = vh(hidden, mask)
         v4 = vh(hidden, mask)
@@ -125,8 +123,14 @@ class TestRolloutBuffer:
         buf.store(self._make_rollout(8))
         batches = buf.iterate(4)
         expected_keys = {
-            "input_ids", "attention_mask", "old_logprobs", "rewards",
-            "values", "advantages", "returns", "prompt_lengths",
+            "input_ids",
+            "attention_mask",
+            "old_logprobs",
+            "rewards",
+            "values",
+            "advantages",
+            "returns",
+            "prompt_lengths",
         }
         assert set(batches[0].keys()) == expected_keys
 
@@ -143,7 +147,9 @@ class TestPPOLosses:
         logprobs = torch.tensor([0.0])
         old_logprobs = torch.tensor([-5.0])
         advantages = torch.tensor([1.0])
-        loss = ppo_clip_loss(logprobs=logprobs, old_logprobs=old_logprobs, advantages=advantages, clip_eps=0.2)
+        loss = ppo_clip_loss(
+            logprobs=logprobs, old_logprobs=old_logprobs, advantages=advantages, clip_eps=0.2
+        )
         assert torch.isfinite(loss)
 
     def test_value_loss(self):

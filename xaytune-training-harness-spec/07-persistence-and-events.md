@@ -1,0 +1,215 @@
+# Persistence, Events, Outbox, and Concurrency
+
+## 1. Design
+
+Do not implement independent state writes and event writes.
+
+Use a single repository transaction for local storage.
+
+SQLite is authoritative for the MVP.
+
+## 2. Tables
+
+Recommended initial schema:
+
+```text
+experiments
+experiment_nodes
+runs
+run_attempts
+actions
+incidents
+decisions
+evaluations
+artifacts
+checkpoints
+budget_ledger
+events
+outbox
+controller_leases
+```
+
+Each mutable aggregate table has:
+
+```text
+id
+state/status
+revision
+created_at
+updated_at
+payload_json
+```
+
+## 3. Atomic transition
+
+Example:
+
+```text
+BEGIN IMMEDIATE;
+
+SELECT revision FROM run_attempts WHERE id = ?;
+
+validate expected revision
+validate transition
+
+UPDATE run_attempts
+SET status = ?,
+    revision = revision + 1,
+    payload_json = ?
+WHERE id = ? AND revision = ?;
+
+INSERT INTO events (...);
+
+INSERT INTO outbox (...);
+
+COMMIT;
+```
+
+If the revision update affects zero rows, raise `ConcurrentModificationError`.
+
+## 4. Repository API
+
+```python
+class ExperimentRepository(Protocol):
+    def create_experiment(...) -> Experiment:
+        ...
+
+    def transition_experiment(
+        self,
+        id: ExperimentId,
+        expected_revision: int,
+        transition: ExperimentTransition,
+    ) -> Experiment:
+        ...
+
+    def transition_node(...):
+        ...
+
+    def transition_run(...):
+        ...
+
+    def transition_attempt(...):
+        ...
+
+    def append_metric(...):
+        ...
+
+    def record_incident(...):
+        ...
+```
+
+The repository emits events as part of transitions.
+
+## 5. Event
+
+```python
+class Event(BaseModel):
+    id: EventId
+    sequence: int
+
+    aggregate_type: str
+    aggregate_id: str
+    aggregate_revision: int
+
+    event_type: str
+
+    experiment_id: str
+
+    occurred_at: datetime
+
+    actor: Actor
+
+    payload: dict[str, Any]
+
+    schema_version: str
+```
+
+## 6. Event ordering
+
+Guarantees:
+
+- total ordering per SQLite database through `sequence`
+- strict revision ordering per aggregate
+- no guarantee of wall-clock ordering across remote runtime sources
+
+Consumers should use `sequence`.
+
+## 7. Outbox
+
+Purpose:
+
+- MLflow sink
+- W&B sink
+- external event bus
+- webhook integration
+- remote monitoring
+
+Outbox row:
+
+```python
+class OutboxRecord:
+    id: str
+    event_id: str
+    destination: str
+    state: Literal["pending", "sending", "sent", "failed"]
+    attempts: int
+    next_attempt_at: datetime | None
+```
+
+Core state does not depend on outbox delivery success.
+
+## 8. External event bus
+
+Optional later:
+
+- Kafka
+- NATS
+- Redis streams
+
+External bus consumes from the outbox.
+
+Do not make distributed messaging required for core execution.
+
+## 9. Snapshots
+
+Do not implement full event sourcing in the MVP.
+
+Materialized SQLite state is authoritative.
+
+Events are the durable audit/provenance stream.
+
+## 10. Controller leases
+
+For LocalDaemon:
+
+```text
+controller_id
+heartbeat_at
+lease_expires_at
+```
+
+Prevent two local daemons controlling the same database.
+
+Remote distributed controller locking is deferred.
+
+## 11. Database migrations
+
+Use a migration mechanism.
+
+Requirements:
+
+- monotonic schema version
+- forward migration
+- migration test from prior release fixture
+- no destructive migration without explicit release note
+
+## 12. Crash tests
+
+Required integration cases:
+
+1. crash after transition before outbox delivery
+2. crash during runtime submit before runtime ID persist
+3. runtime accepts idempotent operation but controller dies
+4. crash after event insert but before transaction commit
+5. concurrent transition with stale revision
+6. controller restart during recovery

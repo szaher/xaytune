@@ -194,10 +194,15 @@ ADR-011 was **accepted on 2026-09-20**, ahead of ADR-001..010, because PR-005 ca
 define its event schema without it. The rollback question it originally carried is
 decided rather than deferred: an intervention *decision* belongs to the run, each
 *application* is recorded separately, a restore never erases prior applications, and
-re-application is governed by an explicit `InterventionReplayPolicy` rather than by
-position alone — so a one-off emergency adjustment cannot silently become a permanent
+re-application is governed by an explicit, immutable `InterventionReplayPolicy` rather
+than by position alone — so a one-off emergency adjustment cannot silently become a permanent
 schedule after a worker dies. The realization fingerprint hashes applications, which is
 what distinguishes a run that double-applied after a rollback from one that did not.
+
+Triggers are a tagged union and every intervention records one, so `REEVALUATE_TRIGGER`
+has something concrete to re-evaluate. It is restricted to non-monotone conditions:
+pairing it with a step or token trigger would re-match on every restore and silently
+double-apply a change already present in the restored optimizer state.
 
 ### R3 — two competing plan documents in the repo
 

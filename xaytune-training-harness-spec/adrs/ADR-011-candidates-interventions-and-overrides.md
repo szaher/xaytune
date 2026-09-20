@@ -32,6 +32,17 @@ meaningful change applied to a continuing model trajectory.
 
 ## Decision
 
+In brief:
+
+> A `TrainingIntervention` persists both the condition that justified it
+> (`InterventionTrigger`) and an explicit `InterventionReplayPolicy`. Replay policy is
+> never inferred from origin. `REEVALUATE_TRIGGER` is valid only when the persisted
+> trigger is evaluable from restored state *and* can become false again.
+> `InterventionApplication` records each concrete application separately; rollback does
+> not delete previous applications, and re-application produces a new application event.
+> `RunRealizationFingerprint` hashes the ordered sequence of applications, not only
+> decisions.
+
 ### 1. Lineage has four levels, not two
 
 | Level | Represents | Created by |
@@ -156,15 +167,20 @@ class TrainingIntervention(BaseModel):
     action_id: ActionId
 
     origin: InterventionOrigin
-    schedule_ref: ScheduledInterventionId | None
-    derived_from: InterventionId | None      # set when replaying a prior run
+
+    # Why this intervention exists. Required: every intervention records its cause.
+    trigger: InterventionTrigger
+
+    # Explicit. Never inferred from origin. Immutable once created.
+    replay_policy: InterventionReplayPolicy
+
+    schedule_ref: ScheduledInterventionId | None = None
+    derived_from: InterventionId | None = None   # set when replaying a prior run
 
     mutation: TrainingMutation
-    trigger: InterventionTrigger | None      # required for REEVALUATE_TRIGGER
-    replay_policy: InterventionReplayPolicy  # explicit, never inferred
-
     rationale: str
-    evidence_refs: list[str]
+    evidence_refs: list[str] = []
+
     created_at: datetime
 
 
@@ -176,14 +192,69 @@ class InterventionApplication(BaseModel):
     event_sequence: int                      # assigned by the repository at commit
     position: TrainingPosition
 
+    trigger_evaluation: TriggerEvaluation | None
+
     previous_value: Any
     applied_value: Any
     checkpoint_ancestor: CheckpointRef | None
 
     created_at: datetime
+
+
+class TriggerEvaluation(BaseModel):
+    matched: bool
+    observed_values: dict[str, Any]
+    evaluated_at: datetime
 ```
 
-#### Replay policy is explicit and required
+`TriggerEvaluation` is what lets the system answer, months later, *why* an intervention
+re-applied after a rollback — with the observed values it decided on, not a guess.
+
+#### Triggers are a tagged union, not a loose dict
+
+```python
+class StepTrigger(BaseModel):
+    type: Literal["step"]
+    global_step: int
+
+class OptimizerStepTrigger(BaseModel):
+    type: Literal["optimizer-step"]
+    optimizer_step: int
+
+class TokenCountTrigger(BaseModel):
+    type: Literal["tokens"]
+    tokens_seen: int
+
+class MetricTrigger(BaseModel):
+    type: Literal["metric"]
+    metric: str
+    operator: Literal[">", ">=", "<", "<=", "=="]
+    threshold: float
+    window: int | None = None
+    consecutive: int | None = None
+    evaluator_ref: str | None = None
+
+class IncidentTrigger(BaseModel):
+    type: Literal["incident"]
+    incident_category: IncidentCategory
+    incident_id: IncidentId | None = None
+
+class ManualTrigger(BaseModel):
+    type: Literal["manual"]
+    actor: Actor
+
+class PolicyTrigger(BaseModel):
+    type: Literal["policy"]
+    policy_rule_id: str
+
+
+InterventionTrigger = (
+    StepTrigger | OptimizerStepTrigger | TokenCountTrigger
+    | MetricTrigger | IncidentTrigger | ManualTrigger | PolicyTrigger
+)
+```
+
+#### Replay policy is explicit, required and immutable
 
 ```python
 class InterventionReplayPolicy(str, Enum):
@@ -192,26 +263,80 @@ class InterventionReplayPolicy(str, Enum):
     REEVALUATE_TRIGGER = "reevaluate-trigger"
 ```
 
+The field has **no default**. An intervention created without choosing replay semantics
+fails validation.
+
+> **Invariant.** Replay behaviour is part of intervention semantics. It must be explicit,
+> durable and immutable after the intervention is created, and must never be inferred
+> from origin at replay time.
+
 Position alone cannot decide re-application. A scheduled LR stage at step 20,000 is part
 of the declared program and must fire again if the run rewinds past it. A human emergency
-adjustment taken once, in response to a condition that may no longer hold, must not
-silently become a permanent schedule because a worker died.
+adjustment, taken once against a condition that may no longer hold, must not silently
+become permanent automation because a worker died.
 
-| Intervention | Policy |
-|---|---|
-| Scheduled LR stage, declared curriculum transition | `REAPPLY_AFTER_ROLLBACK` |
-| "At exactly token 10B, change the data mixture" | `REAPPLY_AFTER_ROLLBACK` |
-| Reactive human or agent adjustment | `APPLY_ONCE` unless stated otherwise |
-| "If loss exceeds T for 100 steps" | `REEVALUATE_TRIGGER` |
+| Origin | Recommended policy | Reason |
+|---|---|---|
+| `SCHEDULED` | `REAPPLY_AFTER_ROLLBACK` | It was part of the declared training program |
+| `REACTIVE_AGENT` | `REEVALUATE_TRIGGER` | Re-run the condition that justified it |
+| `REACTIVE_POLICY` | `REEVALUATE_TRIGGER` | Evaluate the policy condition against restored state |
+| `REACTIVE_HUMAN` | `APPLY_ONCE` | Do not convert a one-off human judgement into automation |
 
-The field is **required, not derived from `origin`**. Inferring it would mean that
-changing an intervention's origin silently changes its replay behaviour, and the table
-above is guidance for the proposer rather than a rule the system applies behind their
-back.
+These are **recommendations for the proposer, not implicit defaults**. Recording the
+policy explicitly is what stops a later change of origin — say `REACTIVE_HUMAN` to
+`REACTIVE_AGENT` — from quietly changing rollback behaviour.
 
-`REEVALUATE_TRIGGER` requires `trigger` to be set. The condition must itself be durable,
-or there is nothing to re-evaluate after the restore. A validation rule rejects the
-combination at Action time, not at replay time.
+#### `REEVALUATE_TRIGGER` requires a non-monotone trigger
+
+A trigger is only re-evaluable if its condition can become **false** again.
+
+Position, optimizer-step and token triggers are monotone: once `global_step >= 20000`
+holds, it holds forever. Re-evaluating one after a restore always matches, so the
+intervention re-applies even when its effect is already present in the restored optimizer
+state — a silent double-application. The positional guard in `REAPPLY_AFTER_ROLLBACK`
+exists precisely to handle those correctly.
+
+| Trigger | Valid with `REEVALUATE_TRIGGER` | Why |
+|---|---|---|
+| `MetricTrigger` | yes | The metric can fall back below threshold |
+| `PolicyTrigger` | yes, if the rule is state-dependent | Re-evaluable against restored state |
+| `StepTrigger`, `OptimizerStepTrigger`, `TokenCountTrigger` | **no** | Monotone — always re-matches, double-applies |
+| `IncidentTrigger` | **no** | An incident is a past occurrence, not a standing condition |
+| `ManualTrigger` | **no** | A human decision cannot be re-derived from state |
+
+Rejected at Action validation time, not at replay time, so the failure surfaces when the
+intervention is proposed rather than during a recovery.
+
+#### Rollback logic
+
+```python
+for intervention in run.interventions:
+    if intervention.replay_policy is APPLY_ONCE:
+        continue
+
+    if intervention.replay_policy is REAPPLY_AFTER_ROLLBACK:
+        if applied_after(intervention, restored_position):
+            schedule_reapplication(intervention)
+
+    elif intervention.replay_policy is REEVALUATE_TRIGGER:
+        evaluation = evaluate(intervention.trigger, restored_state)
+        if evaluation.matched:
+            schedule_reapplication(intervention, evaluation)
+```
+
+Both identifiers are load-bearing: `event.sequence` orders history, while
+`TrainingPosition` decides whether the restored model state predates an application.
+
+#### Deliberately not split: cause versus effective-from
+
+There are two notions hiding in `trigger` — why an intervention exists, and when it
+should take effect. They usually coincide, but not always: a loss spike at step 14,000
+may justify a change that is applied at the next checkpoint boundary.
+
+For v1 the pair `trigger` (why it exists) and `InterventionApplication.position` (where
+it took effect) carries that distinction without a further abstraction. A separate
+`effective_from` or `ApplicationCondition` is deferred until a case needs it. Recorded
+here so it is a known deferral rather than an oversight.
 
 #### The realization fingerprint hashes applications, not decisions
 

@@ -96,13 +96,24 @@ class Trainer:
             if supports_grad_scaler(self._device_type, self._amp_dtype):
                 self._scaler = torch.amp.GradScaler()
 
-        # Create learning rate scheduler.  DeepSpeed owns its own optimizer and
-        # LR schedule, so there is no optimizer here to attach one to -- building
-        # a trainer-side scheduler would call LambdaLR(None, ...) and raise.
-        if self._is_ds and scheduler is None:
+        # Create learning rate scheduler.  A trainer-side scheduler cannot work
+        # on the DeepSpeed path at all: there is no optimizer to attach one to
+        # (create_scheduler would reach LambdaLR(None, ...) and raise), and
+        # training_step() returns early on the DeepSpeed branch, so
+        # self._scheduler.step() is unreachable even when one exists.  Accepting
+        # a scheduler and silently never stepping it is worse than refusing it.
+        if self._is_ds:
+            if scheduler is not None:
+                raise ValueError(
+                    "A scheduler cannot be supplied to train() for a DeepSpeed "
+                    "engine: the engine owns optimizer stepping, so a "
+                    "trainer-side scheduler would never be stepped. Configure "
+                    "the schedule in the DeepSpeed config, or pass it to "
+                    "deepspeed.initialize() so the engine advances it."
+                )
             logger.info(
-                "DeepSpeed engine detected: delegating backward/step and the LR "
-                "schedule to the engine; no trainer-side scheduler is created."
+                "DeepSpeed engine detected: no trainer-side optimizer or scheduler "
+                "is created; backward/step are delegated to the engine."
             )
         elif scheduler is None:
             try:

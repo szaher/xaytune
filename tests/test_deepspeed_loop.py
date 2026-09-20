@@ -10,6 +10,7 @@ Covers:
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from xaytune.config.schema import TrainerConfig
@@ -49,7 +50,6 @@ class TestDeepSpeedOptimizerSkip:
             state = trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
-                scheduler=MagicMock(),
             )
 
         assert trainer._optimizer is None
@@ -105,7 +105,6 @@ class TestDeepSpeedResume:
                 state = trainer.train(
                     model=mock_model,
                     train_dataloader=dl,
-                    scheduler=MagicMock(),
                     resume_checkpoint_dir=str(tmp_path),
                 )
 
@@ -167,7 +166,6 @@ class TestDeepSpeedBackwardDelegation:
             trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
-                scheduler=MagicMock(),
             )
 
         # DS path calls model.backward(loss) and model.step()
@@ -229,7 +227,6 @@ class TestDeepSpeedLossValue:
             state = trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
-                scheduler=MagicMock(),
             )
 
         # Last loss should be recorded
@@ -242,11 +239,13 @@ class TestDeepSpeedSchedulerSkip:
 
     Every production entrypoint -- ``recipes.finetune``, ``recipes.pretrain``,
     ``recipes.align`` and ``studio.jobs`` -- calls ``train()`` without a
-    ``scheduler``.  The rest of this module passes ``scheduler=MagicMock()``,
-    which is what let the trainer-side scheduler branch go unexercised on the
-    DeepSpeed path: with the optimizer set to None it reached
-    ``LambdaLR(None, ...)`` and raised ``AttributeError: 'NoneType' object has
-    no attribute 'param_groups'`` before the first batch.
+    ``scheduler``.  Every DeepSpeed test in this module used to pass
+    ``scheduler=MagicMock()``, which is what let the trainer-side scheduler
+    branch go unexercised on the DeepSpeed path: with the optimizer set to None
+    it reached ``LambdaLR(None, ...)`` and raised ``AttributeError: 'NoneType'
+    object has no attribute 'param_groups'`` before the first batch.  Those
+    injections are gone, so the DeepSpeed tests now exercise the path that
+    production actually takes.
     """
 
     @staticmethod
@@ -287,21 +286,26 @@ class TestDeepSpeedSchedulerSkip:
 
         mock_create.assert_not_called()
 
-    def test_explicit_scheduler_is_still_honoured_under_deepspeed(self):
-        """Skipping creation must not discard a scheduler the caller supplied."""
+    def test_explicit_scheduler_under_deepspeed_is_refused(self):
+        """Retaining a scheduler is not the same as honouring it.
+
+        ``training_step()`` returns early on the DeepSpeed branch, so
+        ``self._scheduler.step()`` is unreachable no matter how the scheduler
+        got there.  Accepting one and silently never stepping it would leave a
+        caller believing their LR schedule was in effect, so it is refused.
+        The supported routes are the DeepSpeed config or ``ds.initialize()``.
+        """
         config = TrainerConfig(num_epochs=1, max_steps=1)
         trainer = Trainer(config=config)
-        scheduler = MagicMock()
         dl = [{"input_ids": torch.tensor([1, 2, 3])}]
 
         with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
-            trainer.train(
-                model=self._engine(),
-                train_dataloader=dl,
-                scheduler=scheduler,
-            )
-
-        assert trainer._scheduler is scheduler
+            with pytest.raises(ValueError, match="never be stepped"):
+                trainer.train(
+                    model=self._engine(),
+                    train_dataloader=dl,
+                    scheduler=MagicMock(),
+                )
 
     def test_non_deepspeed_without_scheduler_still_builds_one(self):
         """The skip is conditional on DeepSpeed, not a blanket removal."""

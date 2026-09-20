@@ -235,3 +235,87 @@ class TestDeepSpeedLossValue:
         # Last loss should be recorded
         assert abs(state.metrics["loss"] - 0.3) < 1e-5
         assert state.global_step == 2
+
+
+class TestDeepSpeedSchedulerSkip:
+    """A DeepSpeed run supplies no scheduler, and none may be built for it.
+
+    Every production entrypoint -- ``recipes.finetune``, ``recipes.pretrain``,
+    ``recipes.align`` and ``studio.jobs`` -- calls ``train()`` without a
+    ``scheduler``.  The rest of this module passes ``scheduler=MagicMock()``,
+    which is what let the trainer-side scheduler branch go unexercised on the
+    DeepSpeed path: with the optimizer set to None it reached
+    ``LambdaLR(None, ...)`` and raised ``AttributeError: 'NoneType' object has
+    no attribute 'param_groups'`` before the first batch.
+    """
+
+    @staticmethod
+    def _engine() -> MagicMock:
+        model = MagicMock()
+        output = MagicMock()
+        output.loss = MagicMock()
+        output.loss.item.return_value = 0.5
+        model.return_value = output
+        return model
+
+    def test_deepspeed_train_without_scheduler_does_not_raise(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model = self._engine()
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            state = trainer.train(model=model, train_dataloader=dl)
+
+        assert trainer._optimizer is None
+        assert trainer._scheduler is None
+        assert state.global_step == 1
+        model.backward.assert_called()
+        model.step.assert_called()
+
+    def test_deepspeed_train_without_scheduler_never_builds_one(self):
+        """The guard is the absence of the call, not just the absence of a crash."""
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with (
+            patch.object(Trainer, "_is_deepspeed_engine", return_value=True),
+            patch("xaytune.trainer.loop.create_scheduler") as mock_create,
+        ):
+            trainer.train(model=self._engine(), train_dataloader=dl)
+
+        mock_create.assert_not_called()
+
+    def test_explicit_scheduler_is_still_honoured_under_deepspeed(self):
+        """Skipping creation must not discard a scheduler the caller supplied."""
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        scheduler = MagicMock()
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            trainer.train(
+                model=self._engine(),
+                train_dataloader=dl,
+                scheduler=scheduler,
+            )
+
+        assert trainer._scheduler is scheduler
+
+    def test_non_deepspeed_without_scheduler_still_builds_one(self):
+        """The skip is conditional on DeepSpeed, not a blanket removal."""
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+
+        model = MagicMock()
+        model.parameters.return_value = iter([torch.randn(4, requires_grad=True)])
+        output = MagicMock()
+        output.loss = torch.tensor(0.5, requires_grad=True)
+        model.return_value = output
+
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        trainer.train(model=model, train_dataloader=dl)
+
+        assert trainer._scheduler is not None

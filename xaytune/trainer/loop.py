@@ -96,8 +96,15 @@ class Trainer:
             if supports_grad_scaler(self._device_type, self._amp_dtype):
                 self._scaler = torch.amp.GradScaler()
 
-        # Create learning rate scheduler
-        if scheduler is None:
+        # Create learning rate scheduler.  DeepSpeed owns its own optimizer and
+        # LR schedule, so there is no optimizer here to attach one to -- building
+        # a trainer-side scheduler would call LambdaLR(None, ...) and raise.
+        if self._is_ds and scheduler is None:
+            logger.info(
+                "DeepSpeed engine detected: delegating backward/step and the LR "
+                "schedule to the engine; no trainer-side scheduler is created."
+            )
+        elif scheduler is None:
             try:
                 num_batches = len(train_dataloader)
             except TypeError:

@@ -1,8 +1,6 @@
 import json
 import tempfile
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from xaytune.cli import main
 
@@ -56,20 +54,31 @@ class TestCliEvalWithDataset:
             f.write(json.dumps({"text": "hello"}) + "\n")
             path = f.name
 
-        result = main([
-            "eval", "--model", "test-model",
-            "--dataset", path,
-            "--metrics", "loss,token_accuracy",
-        ])
+        result = main(
+            [
+                "eval",
+                "--model",
+                "test-model",
+                "--dataset",
+                path,
+                "--metrics",
+                "loss,token_accuracy",
+            ]
+        )
         assert result == 0
         call_kwargs = mock_evaluate.call_args[1]
         assert call_kwargs["metrics"] == ["loss", "token_accuracy"]
 
     def test_eval_missing_dataset_returns_error(self, capsys):
-        result = main([
-            "eval", "--model", "test-model",
-            "--dataset", "/nonexistent/path/data.jsonl",
-        ])
+        result = main(
+            [
+                "eval",
+                "--model",
+                "test-model",
+                "--dataset",
+                "/nonexistent/path/data.jsonl",
+            ]
+        )
         assert result == 1
         captured = capsys.readouterr()
         assert "not found" in captured.err.lower() or "error" in captured.err.lower()

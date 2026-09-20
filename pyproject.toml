@@ -81,7 +81,12 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-exclude = ["examples/**/*.ipynb"]
+exclude = [
+    "examples/**/*.ipynb",
+    # Documentation snippets are illustrative; ruff's Markdown code-block
+    # formatting adds PEP8 blank lines that hurt readability in docs.
+    "**/*.md",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
@@ -91,7 +96,7 @@ ignore = ["N812"]  # Allow lowercase imports as non-lowercase (e.g., torch.nn.fu
 "examples/*.py" = ["E402", "I001"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

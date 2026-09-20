@@ -401,7 +401,9 @@ def _handle_eval(args: argparse.Namespace) -> int:
             return 1
 
         data = [json.loads(line) for line in dataset_path.read_text().splitlines() if line.strip()]
-        metrics = [m.strip() for m in args.metrics.split(",")] if args.metrics else ["loss", "perplexity"]
+        metrics = (
+            [m.strip() for m in args.metrics.split(",")] if args.metrics else ["loss", "perplexity"]
+        )
 
         results = evaluate(model=args.model, dataset=data, metrics=metrics)  # type: ignore[assignment]
 
@@ -748,7 +750,9 @@ def _handle_pipeline(args: argparse.Namespace) -> int:
     for name, stage in result.stages.items():
         status = stage.status
         if stage.type == "eval" and stage.metrics:
-            metrics_str = ", ".join(f"{k}={v:.4f}" for k, v in stage.metrics.items() if isinstance(v, float))
+            metrics_str = ", ".join(
+                f"{k}={v:.4f}" for k, v in stage.metrics.items() if isinstance(v, float)
+            )
             print(f"  {name}: {status} ({metrics_str})")
         elif stage.output:
             print(f"  {name}: {status} → {stage.output}")

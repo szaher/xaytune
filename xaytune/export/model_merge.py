@@ -155,7 +155,9 @@ def _load_tokenizer(path: str) -> Any:
     return AutoTokenizer.from_pretrained(path)
 
 
-def _save_merged(state_dict: dict[str, Tensor], tokenizer: Any, output: str, model_paths: list[str] | None = None) -> None:
+def _save_merged(
+    state_dict: dict[str, Tensor], tokenizer: Any, output: str, model_paths: list[str] | None = None
+) -> None:
     from transformers import AutoConfig
 
     path = Path(output)

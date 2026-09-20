@@ -183,12 +183,8 @@ def align(
             from xaytune.recipes.align.ppo_trainer import PPOTrainer
             from xaytune.recipes.align.value_head import ValueHead
 
-            hidden_size = getattr(
-                getattr(components.model, "config", None), "hidden_size", 4096
-            )
-            value_head = ValueHead(
-                hidden_size, dropout=config.ppo.value_head_dropout
-            )
+            hidden_size = getattr(getattr(components.model, "config", None), "hidden_size", 4096)
+            value_head = ValueHead(hidden_size, dropout=config.ppo.value_head_dropout)
 
             ppo = PPOTrainer(
                 model=components.model,

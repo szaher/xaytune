@@ -192,9 +192,7 @@ def _orpo_step(
                     chosen_labels[i, : int(pl.item())] = IGNORE_INDEX
         elif isinstance(prompt_len, int) and prompt_len > 0:
             chosen_labels[:, :prompt_len] = IGNORE_INDEX
-        sft_out = model(
-            input_ids=chosen_ids, attention_mask=chosen_mask, labels=chosen_labels
-        )
+        sft_out = model(input_ids=chosen_ids, attention_mask=chosen_mask, labels=chosen_labels)
         sft_loss = sft_out.loss
 
     rejected_out = model(input_ids=rejected_ids, attention_mask=rejected_mask)

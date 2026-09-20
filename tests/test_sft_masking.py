@@ -12,8 +12,6 @@ from __future__ import annotations
 import warnings
 from unittest.mock import MagicMock
 
-import torch
-
 from xaytune.data.formats import (
     apply_chat_template,
     format_alpaca,
@@ -42,7 +40,11 @@ def _make_tokenizer(bos_token_id: int = 1) -> MagicMock:
         add_special_tokens=True,
     ):
         words = text.split()
-        ids = [bos_token_id] + [hash(w) % 1000 + 2 for w in words] if add_special_tokens else [hash(w) % 1000 + 2 for w in words]
+        ids = (
+            [bos_token_id] + [hash(w) % 1000 + 2 for w in words]
+            if add_special_tokens
+            else [hash(w) % 1000 + 2 for w in words]
+        )
         ids = ids[:max_length]
         result = {"input_ids": ids}
         if return_attention_mask:
@@ -147,6 +149,7 @@ class TestTextFormatNoMasking:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             from xaytune.data.formats import _warned_text_keys
+
             _warned_text_keys.clear()
             result = format_text({"body": "Hello"})
             assert result["text"] == ""
@@ -174,9 +177,7 @@ class TestApplyChatTemplateMasking:
 
 class TestTokenizeDatasetMasking:
     def test_alpaca_masks_prompt(self):
-        sample = format_alpaca(
-            {"instruction": "Say hi", "input": "", "output": "Hello!"}
-        )
+        sample = format_alpaca({"instruction": "Say hi", "input": "", "output": "Hello!"})
         tok = _make_tokenizer()
         result = tokenize_dataset([sample], tok)
         assert len(result) == 1
@@ -185,8 +186,8 @@ class TestTokenizeDatasetMasking:
         input_ids = result[0]["input_ids"]
         assert len(labels) == len(input_ids)
 
-        masked_count = sum(1 for l in labels if l == IGNORE_INDEX)
-        trainable_count = sum(1 for l in labels if l != IGNORE_INDEX)
+        masked_count = sum(1 for label in labels if label == IGNORE_INDEX)
+        trainable_count = sum(1 for label in labels if label != IGNORE_INDEX)
         assert masked_count > 0, "Prompt tokens should be masked"
         assert trainable_count > 0, "Output tokens should be trainable"
 
@@ -195,7 +196,7 @@ class TestTokenizeDatasetMasking:
         tok = _make_tokenizer()
         result = tokenize_dataset([sample], tok)
         labels = result[0]["labels"]
-        assert all(l != IGNORE_INDEX for l in labels), "Text format should have no masking"
+        assert all(label != IGNORE_INDEX for label in labels), "Text format should have no masking"
         assert labels == result[0]["input_ids"]
 
     def test_already_tokenized_passthrough(self):
@@ -207,16 +208,14 @@ class TestTokenizeDatasetMasking:
 
 class TestTokenizeSampleMasking:
     def test_alpaca_masks_prompt(self):
-        sample = format_alpaca(
-            {"instruction": "Translate", "input": "cat", "output": "gato"}
-        )
+        sample = format_alpaca({"instruction": "Translate", "input": "cat", "output": "gato"})
         tok = _make_tokenizer()
         result = tokenize_sample(sample, tok)
         assert result is not None
 
         labels = result["labels"]
-        masked = [i for i, l in enumerate(labels) if l == IGNORE_INDEX]
-        trainable = [i for i, l in enumerate(labels) if l != IGNORE_INDEX]
+        masked = [i for i, label in enumerate(labels) if label == IGNORE_INDEX]
+        trainable = [i for i, label in enumerate(labels) if label != IGNORE_INDEX]
         assert len(masked) > 0
         assert len(trainable) > 0
         assert max(masked) < min(trainable), "Masked tokens should come before trainable"
@@ -226,7 +225,7 @@ class TestTokenizeSampleMasking:
         tok = _make_tokenizer()
         result = tokenize_sample(sample, tok)
         assert result is not None
-        assert all(l != IGNORE_INDEX for l in result["labels"])
+        assert all(label != IGNORE_INDEX for label in result["labels"])
 
 
 # --- Multi-turn masking tests ---
@@ -250,8 +249,8 @@ class TestTokenizeMultiturn:
         input_ids = result[0]["input_ids"]
         assert len(labels) == len(input_ids)
 
-        masked = sum(1 for l in labels if l == IGNORE_INDEX)
-        trainable = sum(1 for l in labels if l != IGNORE_INDEX)
+        masked = sum(1 for label in labels if label == IGNORE_INDEX)
+        trainable = sum(1 for label in labels if label != IGNORE_INDEX)
         assert masked > 0, "User turn should be masked"
         assert trainable > 0, "Assistant turn should be trainable"
 
@@ -270,7 +269,7 @@ class TestTokenizeMultiturn:
         result = tokenize_multiturn(data, tok)
         labels = result[0]["labels"]
 
-        trainable_count = sum(1 for l in labels if l != IGNORE_INDEX)
+        trainable_count = sum(1 for label in labels if label != IGNORE_INDEX)
         assert trainable_count > 2, "Both assistant turns should contribute trainable tokens"
 
     def test_system_turn_masked(self):
@@ -287,9 +286,11 @@ class TestTokenizeMultiturn:
         result = tokenize_multiturn(data, tok)
         labels = result[0]["labels"]
 
-        masked_count = sum(1 for l in labels if l == IGNORE_INDEX)
-        trainable_count = sum(1 for l in labels if l != IGNORE_INDEX)
-        assert masked_count > trainable_count, "System + user should have more masked tokens than assistant trainable"
+        masked_count = sum(1 for label in labels if label == IGNORE_INDEX)
+        trainable_count = sum(1 for label in labels if label != IGNORE_INDEX)
+        assert masked_count > trainable_count, (
+            "System + user should have more masked tokens than assistant trainable"
+        )
 
     def test_no_assistant_all_masked(self):
         data = [
@@ -303,7 +304,7 @@ class TestTokenizeMultiturn:
         tok = _make_tokenizer()
         result = tokenize_multiturn(data, tok)
         labels = result[0]["labels"]
-        assert all(l == IGNORE_INDEX for l in labels), "No assistant turns = all masked"
+        assert all(label == IGNORE_INDEX for label in labels), "No assistant turns = all masked"
 
     def test_empty_turns_skipped(self):
         data = [{"turns": []}]
@@ -359,7 +360,7 @@ class TestFormatToTokenizePipeline:
         assert len(result) == 1
 
         labels = result[0]["labels"]
-        trainable = sum(1 for l in labels if l != IGNORE_INDEX)
+        trainable = sum(1 for label in labels if label != IGNORE_INDEX)
         assert trainable > 0, "Assistant responses should be trainable"
 
     def test_chat_multi_turn_pipeline(self):
@@ -379,8 +380,8 @@ class TestFormatToTokenizePipeline:
         result = tokenize_multiturn([formatted], tok)
         labels = result[0]["labels"]
 
-        masked = sum(1 for l in labels if l == IGNORE_INDEX)
-        trainable = sum(1 for l in labels if l != IGNORE_INDEX)
+        masked = sum(1 for label in labels if label == IGNORE_INDEX)
+        trainable = sum(1 for label in labels if label != IGNORE_INDEX)
         assert masked > 0, "System + user turns should be masked"
         assert trainable > 0, "Assistant turns should be trainable"
 
@@ -393,7 +394,7 @@ class TestFormatToTokenizePipeline:
         result = tokenize_dataset([formatted], tok)
         labels = result[0]["labels"]
 
-        masked = sum(1 for l in labels if l == IGNORE_INDEX)
-        trainable = sum(1 for l in labels if l != IGNORE_INDEX)
+        masked = sum(1 for label in labels if label == IGNORE_INDEX)
+        trainable = sum(1 for label in labels if label != IGNORE_INDEX)
         assert masked > 0
         assert trainable > 0

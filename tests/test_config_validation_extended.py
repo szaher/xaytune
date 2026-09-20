@@ -2,9 +2,8 @@ import pytest
 
 from xaytune.config.schema import DataConfig, ModelConfig, TrainConfig, TrainerConfig
 from xaytune.config.validation import (
-    ConfigValidationError,
     _ALIGN_METHODS,
-    _FINETUNE_METHODS,
+    ConfigValidationError,
     validate_config,
 )
 

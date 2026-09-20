@@ -217,15 +217,9 @@ class PPOTrainer:
         for i in range(prompt_ids.shape[0]):
             length = int(prompt_mask[i].sum().item())
             ids = prompt_ids[i, :length]
-            prompts_text.append(
-                self.tokenizer.decode(ids, skip_special_tokens=True)
-            )
+            prompts_text.append(self.tokenizer.decode(ids, skip_special_tokens=True))
         if generation_config.group_size > 1:
-            prompts_text = [
-                p
-                for p in prompts_text
-                for _ in range(generation_config.group_size)
-            ]
+            prompts_text = [p for p in prompts_text for _ in range(generation_config.group_size)]
 
         rewards = score_completions(
             prompts=prompts_text,
@@ -282,9 +276,7 @@ class PPOTrainer:
             batch["attention_mask"],
             prompt_length=batch["prompt_lengths"],
         )
-        new_values = self.value_head(
-            outputs.hidden_states[-1], batch["attention_mask"]
-        )
+        new_values = self.value_head(outputs.hidden_states[-1], batch["attention_mask"])
 
         policy_loss = ppo_clip_loss(
             logprobs=new_logprobs,
@@ -300,17 +292,13 @@ class PPOTrainer:
         kl = (new_logprobs - batch["old_logprobs"]).mean()
 
         total_loss = (
-            policy_loss
-            + self.ppo_config.value_coeff * value_loss
-            + self.ppo_config.kl_coeff * kl
+            policy_loss + self.ppo_config.value_coeff * value_loss + self.ppo_config.kl_coeff * kl
         )
 
         optimizer.zero_grad()
         total_loss.backward()
         if self.ppo_config.max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.ppo_config.max_grad_norm
-            )
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.ppo_config.max_grad_norm)
             torch.nn.utils.clip_grad_norm_(
                 self.value_head.parameters(), self.ppo_config.max_grad_norm
             )

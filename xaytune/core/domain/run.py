@@ -5,6 +5,10 @@ own several when seeds or replicates are wanted. A :class:`RunAttempt` is one
 infrastructure attempt at that run. Retry, preemption and checkpoint restore
 produce new attempts under the same run — they are operational events and never
 branch the scientific graph (ADR-003).
+
+A scientifically meaningful change to a run that is still going is neither of
+these: it is a ``TrainingIntervention``, recorded against the run as the outcome
+of an approved action (ADR-011).
 """
 
 from __future__ import annotations
@@ -12,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from xaytune.core.clock import utc_now
 from xaytune.core.ids import (
@@ -22,6 +26,7 @@ from xaytune.core.ids import (
     RunAttemptId,
     RunId,
 )
+from xaytune.core.immutable import AggregateModel, FrozenDict, FrozenDomainModel
 from xaytune.core.refs import ArtifactRef, CheckpointRef, ResourceUsage, RuntimeRef
 from xaytune.core.state.machines import ATTEMPT_MACHINE, RUN_MACHINE
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
@@ -45,12 +50,15 @@ ExecutionOverrideKind = Literal[
 """Operational adjustments that preserve declared training intent.
 
 Changes to learning rate, optimizer, LoRA rank, data, scheduler, reward,
-algorithm or model revision are *not* execution overrides — those are
-scientific mutations and create a new node.
+algorithm or model revision are *not* execution overrides. Depending on
+experimental intent they are either a ``TrainingIntervention`` on a continuing
+trajectory or a new ``ExperimentNode``, decided by the comparability rule in
+ADR-011: fork only when you would want to compare before and after as
+alternatives.
 """
 
 
-class ExecutionOverride(BaseModel):
+class ExecutionOverride(FrozenDomainModel):
     """A policy-approved operational modification to an attempt.
 
     Attributes:
@@ -60,21 +68,17 @@ class ExecutionOverride(BaseModel):
             tell an intent-preserving change from a scientific one.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
     id: str
     kind: ExecutionOverrideKind
     reason: str
-    values: dict[str, Any] = Field(default_factory=dict)
-    preserves: list[str] = Field(default_factory=list)
+    values: FrozenDict = Field(default_factory=FrozenDict)
+    preserves: tuple[str, ...] = Field(default_factory=tuple)
     incident_id: IncidentId | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
-class Run(BaseModel):
+class Run(AggregateModel):
     """A logical execution of a scientific candidate."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: RunId
     node_id: ExperimentNodeId
@@ -86,7 +90,7 @@ class Run(BaseModel):
     training_fingerprint: str
     execution_plan_ref: str | None = None
 
-    attempt_ids: list[RunAttemptId] = Field(default_factory=list)
+    attempt_ids: tuple[RunAttemptId, ...] = Field(default_factory=tuple)
     final_attempt_id: RunAttemptId | None = None
 
     status: RunStatus = RunStatus.CREATED
@@ -102,8 +106,8 @@ class Run(BaseModel):
             InvalidTransitionError: If the transition is not permitted.
         """
         RUN_MACHINE.validate(self.status, new_status)
-        return self.model_copy(
-            update={
+        return self._validated_copy(
+            {
                 "status": new_status,
                 "revision": self.revision + 1,
                 "updated_at": utc_now(),
@@ -116,10 +120,8 @@ class Run(BaseModel):
         return RUN_MACHINE.is_terminal(self.status)
 
 
-class RunAttempt(BaseModel):
+class RunAttempt(AggregateModel):
     """One infrastructure attempt at a run."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: RunAttemptId
     run_id: RunId
@@ -130,12 +132,12 @@ class RunAttempt(BaseModel):
     runtime_ref: RuntimeRef | None = None
     execution_fingerprint: str | None = None
 
-    execution_overrides: list[ExecutionOverride] = Field(default_factory=list)
+    execution_overrides: tuple[ExecutionOverride, ...] = Field(default_factory=tuple)
 
     checkpoint_ref: CheckpointRef | None = None
-    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
+    artifact_refs: tuple[ArtifactRef, ...] = Field(default_factory=tuple)
 
-    incident_ids: list[IncidentId] = Field(default_factory=list)
+    incident_ids: tuple[IncidentId, ...] = Field(default_factory=tuple)
 
     resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
 
@@ -165,7 +167,7 @@ class RunAttempt(BaseModel):
         if ATTEMPT_MACHINE.is_terminal(new_status) and self.ended_at is None:
             update["ended_at"] = utc_now()
 
-        return self.model_copy(update=update)
+        return self._validated_copy(update)
 
     @property
     def is_terminal(self) -> bool:

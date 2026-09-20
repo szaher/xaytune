@@ -4,11 +4,25 @@ Transitions are declared as data so they can be inspected, tested and rendered
 without executing anything. Validation lives here; persistence (revision
 guards, events, outbox) is the repository's job.
 
-The tables below encode exactly the transitions drawn in the architecture
-specification, and nothing beyond them. Where the specification is silent — for
-example a node failing while ``ACTIVE`` rather than at ``DECIDING`` — the
-transition is rejected rather than quietly invented, so the gap surfaces as a
-loud error instead of an undocumented behaviour.
+The first version of these tables encoded only the transitions drawn in the
+architecture specification. That deliberately surfaced the gaps rather than
+inventing behaviour, and the gaps were real: a node could not fail while
+``ACTIVE``, an attempt could not fail while ``STARTING``, ``CHECKPOINTING`` or
+``RECOVERING``, and nothing could be cancelled before it started. Those are
+ordinary events, so the tables now cover them.
+
+Two rules hold for ``ExperimentNode``, ``Run`` and ``RunAttempt``: every
+non-terminal state can reach ``FAILED``, because anything unfinished can still
+break, and every non-terminal state can reach ``CANCELLED``, because an
+operator can stop work at any point.
+
+``Experiment`` is deliberately not covered by the first rule. It has no
+``CREATED -> FAILED`` edge, because experiment-level terminalization is a
+controller policy decision rather than a consequence of one workload breaking:
+an experiment whose nodes have all failed has not necessarily failed. Whether
+an activation failure — a budget reservation that cannot be satisfied, say —
+should terminalize ``CREATED`` as ``FAILED`` is an open question; today such an
+experiment is cancelled.
 """
 
 from __future__ import annotations
@@ -135,21 +149,43 @@ NODE_MACHINE: StateMachine[ExperimentNodeStatus] = StateMachine(
     "ExperimentNode",
     ExperimentNodeStatus.CREATED,
     {
-        ExperimentNodeStatus.CREATED: {ExperimentNodeStatus.PLANNED},
-        ExperimentNodeStatus.PLANNED: {ExperimentNodeStatus.READY},
-        ExperimentNodeStatus.READY: {ExperimentNodeStatus.ACTIVE},
-        ExperimentNodeStatus.ACTIVE: {ExperimentNodeStatus.EVALUATING},
-        ExperimentNodeStatus.EVALUATING: {ExperimentNodeStatus.DECIDING},
+        ExperimentNodeStatus.CREATED: {
+            ExperimentNodeStatus.PLANNED,
+            ExperimentNodeStatus.CANCELLED,
+            ExperimentNodeStatus.FAILED,
+        },
+        ExperimentNodeStatus.PLANNED: {
+            ExperimentNodeStatus.READY,
+            ExperimentNodeStatus.CANCELLED,
+            ExperimentNodeStatus.FAILED,
+        },
+        ExperimentNodeStatus.READY: {
+            ExperimentNodeStatus.ACTIVE,
+            ExperimentNodeStatus.CANCELLED,
+            ExperimentNodeStatus.FAILED,
+        },
+        ExperimentNodeStatus.ACTIVE: {
+            ExperimentNodeStatus.EVALUATING,
+            ExperimentNodeStatus.CANCELLED,
+            ExperimentNodeStatus.FAILED,
+        },
+        ExperimentNodeStatus.EVALUATING: {
+            ExperimentNodeStatus.DECIDING,
+            ExperimentNodeStatus.CANCELLED,
+            ExperimentNodeStatus.FAILED,
+        },
         # A decision may send the node back to ACTIVE for another
         # run/replicate, or close it out.
         ExperimentNodeStatus.DECIDING: {
             ExperimentNodeStatus.ACTIVE,
             ExperimentNodeStatus.COMPLETED,
             ExperimentNodeStatus.REJECTED,
+            ExperimentNodeStatus.CANCELLED,
             ExperimentNodeStatus.FAILED,
         },
         ExperimentNodeStatus.COMPLETED: set(),
         ExperimentNodeStatus.REJECTED: set(),
+        ExperimentNodeStatus.CANCELLED: set(),
         ExperimentNodeStatus.FAILED: set(),
     },
 )
@@ -158,7 +194,7 @@ RUN_MACHINE: StateMachine[RunStatus] = StateMachine(
     "Run",
     RunStatus.CREATED,
     {
-        RunStatus.CREATED: {RunStatus.ACTIVE},
+        RunStatus.CREATED: {RunStatus.ACTIVE, RunStatus.CANCELLED, RunStatus.FAILED},
         RunStatus.ACTIVE: {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED},
         RunStatus.SUCCEEDED: set(),
         RunStatus.FAILED: set(),
@@ -170,19 +206,47 @@ ATTEMPT_MACHINE: StateMachine[RunAttemptStatus] = StateMachine(
     "RunAttempt",
     RunAttemptStatus.CREATED,
     {
-        RunAttemptStatus.CREATED: {RunAttemptStatus.QUEUED},
-        RunAttemptStatus.QUEUED: {RunAttemptStatus.STARTING},
-        RunAttemptStatus.STARTING: {RunAttemptStatus.RUNNING},
+        RunAttemptStatus.CREATED: {
+            RunAttemptStatus.QUEUED,
+            RunAttemptStatus.CANCELLED,
+            RunAttemptStatus.FAILED,
+        },
+        # Preemption is possible from QUEUED onwards: the workload is known to
+        # the runtime and its resources can be reclaimed before it starts.
+        RunAttemptStatus.QUEUED: {
+            RunAttemptStatus.STARTING,
+            RunAttemptStatus.CANCELLED,
+            RunAttemptStatus.FAILED,
+            RunAttemptStatus.PREEMPTED,
+        },
+        RunAttemptStatus.STARTING: {
+            RunAttemptStatus.RUNNING,
+            RunAttemptStatus.CANCELLED,
+            RunAttemptStatus.FAILED,
+            RunAttemptStatus.PREEMPTED,
+        },
         RunAttemptStatus.RUNNING: {
             RunAttemptStatus.CHECKPOINTING,
             RunAttemptStatus.RECOVERING,
             RunAttemptStatus.SUCCEEDED,
+            RunAttemptStatus.CANCELLED,
             RunAttemptStatus.FAILED,
             RunAttemptStatus.PREEMPTED,
-            RunAttemptStatus.CANCELLED,
         },
-        RunAttemptStatus.CHECKPOINTING: {RunAttemptStatus.RUNNING},
-        RunAttemptStatus.RECOVERING: {RunAttemptStatus.RUNNING},
+        # A checkpoint write can fail, and a node can be preempted mid-write.
+        RunAttemptStatus.CHECKPOINTING: {
+            RunAttemptStatus.RUNNING,
+            RunAttemptStatus.RECOVERING,
+            RunAttemptStatus.CANCELLED,
+            RunAttemptStatus.FAILED,
+            RunAttemptStatus.PREEMPTED,
+        },
+        RunAttemptStatus.RECOVERING: {
+            RunAttemptStatus.RUNNING,
+            RunAttemptStatus.CANCELLED,
+            RunAttemptStatus.FAILED,
+            RunAttemptStatus.PREEMPTED,
+        },
         RunAttemptStatus.SUCCEEDED: set(),
         RunAttemptStatus.FAILED: set(),
         RunAttemptStatus.PREEMPTED: set(),

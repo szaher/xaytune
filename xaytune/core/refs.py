@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from xaytune.core.ids import ArtifactId, CheckpointId, EvaluationId, RunAttemptId
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
 __all__ = [
     "Actor",
@@ -45,14 +46,12 @@ ArtifactKind = Literal[
 ]
 
 
-class _Frozen(BaseModel):
+class _Frozen(FrozenDomainModel):
     """Base for immutable value objects.
 
-    ``extra="forbid"`` is deliberate: silently dropping an unknown field would
-    lose provenance rather than surface a schema mismatch.
+    Inherits deep immutability and a validating ``model_copy`` from
+    :class:`FrozenDomainModel`.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class Actor(_Frozen):
@@ -67,7 +66,7 @@ class Actor(_Frozen):
 
     type: ActorType
     id: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class ArtifactRef(_Frozen):
@@ -79,7 +78,7 @@ class ArtifactRef(_Frozen):
     digest: str | None = None
     producer_attempt_id: RunAttemptId | None = None
     producer_evaluation_id: EvaluationId | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class DatasetRef(_Frozen):
@@ -97,7 +96,7 @@ class DatasetRef(_Frozen):
     transform_fingerprint: str | None = None
     tokenizer_fingerprint: str | None = None
     template_fingerprint: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class ModelRef(_Frozen):
@@ -109,7 +108,7 @@ class ModelRef(_Frozen):
     uri: str
     revision: str | None = None
     digest: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class RuntimeRef(_Frozen):
@@ -121,7 +120,7 @@ class RuntimeRef(_Frozen):
     backend: str
     external_id: str
     namespace: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class ControllerHostRef(_Frozen):
@@ -130,7 +129,7 @@ class ControllerHostRef(_Frozen):
     kind: Literal["embedded", "local_daemon", "remote"]
     id: str | None = None
     address: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class CheckpointRef(_Frozen):
@@ -147,7 +146,7 @@ class CheckpointRef(_Frozen):
     digest: str | None = None
     compatibility_key: str | None = None
     created_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class ResourceUsage(_Frozen):
@@ -162,4 +161,4 @@ class ResourceUsage(_Frozen):
     wall_time_seconds: float | None = None
     tokens: int | None = None
     cost: Decimal | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)

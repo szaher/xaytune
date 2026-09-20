@@ -10,6 +10,7 @@ from __future__ import annotations
 __all__ = [
     "ConcurrentModificationError",
     "DomainError",
+    "InvalidDomainValueError",
     "InvalidIdError",
     "InvalidTransitionError",
     "XaytuneError",
@@ -29,6 +30,18 @@ class InvalidIdError(DomainError, ValueError):
 
     Also a :class:`ValueError` so that Pydantic reports it as a validation
     error when it surfaces during model construction.
+    """
+
+
+class InvalidDomainValueError(DomainError, ValueError):
+    """A value cannot be stored in a domain record.
+
+    Domain payloads must be canonically persistable: JSON-shaped, with string
+    keys, no sets (which have no stable order), and no NaN or infinity. Values
+    that are not are rejected at construction rather than at serialization,
+    because a record that cannot round-trip cannot be fingerprinted.
+
+    Also a :class:`ValueError` so Pydantic reports it as a validation error.
     """
 
 

@@ -37,7 +37,8 @@ from xaytune.core import (
     RunStatus,
     TrainingSpecSnapshot,
 )
-from xaytune.core.errors import InvalidTransitionError
+from xaytune.core.errors import InvalidDomainValueError, InvalidTransitionError
+from xaytune.core.immutable import FrozenDict, deep_freeze, thaw
 
 
 def make_experiment(**overrides) -> Experiment:
@@ -142,6 +143,304 @@ class TestSerialization:
         assert restored == attempt
 
 
+class TestDeepImmutability:
+    """Frozen must mean frozen all the way down.
+
+    Pydantic's ``frozen=True`` only blocks attribute assignment. Container
+    fields stayed mutable and kept a reference to whatever the caller passed,
+    so a scientific record could be changed after construction from either
+    side -- which would make any fingerprint taken at construction a lie.
+    """
+
+    def test_caller_cannot_mutate_a_snapshot_through_a_retained_reference(self):
+        source = {"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}}
+        snapshot = TrainingSpecSnapshot(kind="sft", payload=source)
+
+        source["optimizer"]["lr"] = 7
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+    def test_nested_mapping_cannot_be_mutated(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"lr": 2e-5}})
+
+        with pytest.raises(TypeError):
+            snapshot.payload["optimizer"]["lr"] = 7
+        with pytest.raises(TypeError):
+            snapshot.payload["new_key"] = 1
+        with pytest.raises(TypeError):
+            snapshot.payload.update({"new_key": 1})
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+    def test_nested_sequence_cannot_be_mutated(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"betas": [0.9, 0.95]}})
+
+        # Lists become tuples on the way in.
+        assert snapshot.payload["optimizer"]["betas"] == (0.9, 0.95)
+        with pytest.raises(AttributeError):
+            snapshot.payload["optimizer"]["betas"].append(1.0)
+
+    def test_aggregate_id_lists_cannot_be_appended_to(self):
+        """An id list that accepts post-construction appends also skips validation."""
+        experiment = make_experiment()
+        with pytest.raises(AttributeError):
+            experiment.active_node_ids.append("node_bogus")
+
+        node = make_node()
+        with pytest.raises(AttributeError):
+            node.run_ids.append("run_bogus")
+
+    def test_metadata_cannot_be_mutated(self):
+        experiment = make_experiment(metadata={"owner": "team-a"})
+        with pytest.raises(TypeError):
+            experiment.metadata["injected"] = True
+
+        actor = Actor(type="human", id="alex", metadata={"team": "a"})
+        with pytest.raises(TypeError):
+            actor.metadata["team"] = "b"
+
+    def test_execution_override_values_cannot_be_mutated(self):
+        override = ExecutionOverride(
+            id="ovr-1",
+            kind="micro_batch_resize",
+            reason="oom",
+            values={"micro_batch_size": 2},
+        )
+        with pytest.raises(TypeError):
+            override.values["micro_batch_size"] = 8
+
+    def test_frozen_containers_still_round_trip_as_plain_json(self):
+        snapshot = TrainingSpecSnapshot(
+            kind="sft", payload={"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}}
+        )
+        payload = snapshot.model_dump_json()
+
+        assert '"betas":[0.9,0.95]' in payload
+        assert TrainingSpecSnapshot.model_validate_json(payload) == snapshot
+
+    def test_thaw_returns_a_mutable_copy_without_affecting_the_record(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"lr": 2e-5}})
+
+        working = thaw(snapshot.payload)
+        working["optimizer"]["lr"] = 7
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+
+class TestFrozenDictInvariants:
+    """FrozenDict must be deeply immutable by construction, not by usage.
+
+    The first version froze only at validation time, so a caller could build a
+    FrozenDict containing mutable dictionaries and hand it in; validation saw an
+    instance of the right class and passed it through untouched.
+    """
+
+    def test_a_preconstructed_frozen_dict_is_still_deeply_frozen(self):
+        source = FrozenDict({"optimizer": {"lr": 2e-5}})
+        snapshot = TrainingSpecSnapshot(kind="sft", payload=source)
+
+        with pytest.raises(TypeError):
+            source["optimizer"]["lr"] = 7
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+    def test_the_backing_store_cannot_be_reached_through(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"a": 1})
+
+        with pytest.raises(TypeError):
+            snapshot.payload._data["injected"] = True
+
+        assert "injected" not in snapshot.payload
+
+    def test_attributes_cannot_be_replaced_or_deleted(self):
+        frozen = FrozenDict({"a": 1})
+        with pytest.raises(TypeError):
+            frozen._data = {}
+        with pytest.raises(TypeError):
+            del frozen._data
+
+
+class TestValidatedModelCopy:
+    """Value objects may be evolved, but only through validation.
+
+    Pydantic's `model_copy(update=...)` assigns update values untouched, which
+    defeats every guarantee the field types provide.
+    """
+
+    def test_updated_mapping_is_refrozen(self):
+        original = TrainingSpecSnapshot(kind="sft", payload={"a": {"b": 1}})
+
+        copied = original.model_copy(update={"payload": {"a": {"b": 2}}})
+
+        assert isinstance(copied.payload, FrozenDict)
+        with pytest.raises(TypeError):
+            copied.payload["a"]["b"] = 3
+
+    def test_updated_metadata_is_refrozen(self):
+        ref = DatasetRef(uri="s3://x")
+
+        copied = ref.model_copy(update={"metadata": {"nested": []}})
+
+        assert isinstance(copied.metadata, FrozenDict)
+        with pytest.raises(AttributeError):
+            copied.metadata["nested"].append(1)
+
+    def test_the_value_contract_applies_to_updates(self):
+        ref = DatasetRef(uri="s3://x")
+
+        with pytest.raises(ValidationError):
+            ref.model_copy(update={"metadata": {"features": {"a", "b"}}})
+
+    def test_an_invalid_value_is_rejected_on_copy(self):
+        override = ExecutionOverride(id="ovr", kind="checkpoint_restore", reason="r")
+
+        with pytest.raises(ValidationError):
+            override.model_copy(update={"kind": "learning_rate_change"})
+
+    def test_a_plain_copy_is_unchanged(self):
+        ref = DatasetRef(uri="s3://x", revision="v4")
+        assert ref.model_copy() == ref
+        assert ref.model_copy(deep=True) == ref
+
+    def test_typed_ids_survive_the_round_trip(self):
+        ref = ArtifactRef(id=ArtifactId.generate(), kind="adapter", uri="s3://x")
+
+        copied = ref.model_copy(update={"uri": "s3://y"})
+
+        assert isinstance(copied.id, ArtifactId)
+        assert copied.id == ref.id
+
+
+class TestAggregateUpdatesAreRefused:
+    """Schema validation is not enough for an aggregate.
+
+    Re-validating an update checks field types. It cannot check that the
+    transition is legal, that the revision moved, or that the timestamps are
+    consistent -- so an aggregate refuses updates entirely and changes only
+    through its transition methods. Rule 7 forbids direct status mutation, and
+    an unrestricted `model_copy` is that mutation with extra steps.
+    """
+
+    def test_experiment_status_cannot_bypass_the_state_machine(self):
+        experiment = make_experiment()
+        assert experiment.status is ExperimentStatus.CREATED
+
+        with pytest.raises(TypeError, match="with_status"):
+            experiment.model_copy(update={"status": ExperimentStatus.SUCCEEDED})
+
+    def test_attempt_cannot_skip_its_lifecycle(self):
+        """Otherwise: SUCCEEDED with no started_at, no ended_at, revision 0."""
+        attempt = make_attempt()
+
+        with pytest.raises(TypeError):
+            attempt.model_copy(update={"status": RunAttemptStatus.SUCCEEDED})
+
+    def test_node_scientific_identity_cannot_be_rewritten(self):
+        node = make_node()
+
+        with pytest.raises(TypeError):
+            node.model_copy(update={"training_fingerprint": "sha256:different"})
+
+    def test_aggregate_id_cannot_be_rewritten(self):
+        experiment = make_experiment()
+
+        with pytest.raises(TypeError):
+            experiment.model_copy(update={"id": ExperimentId.generate()})
+
+    def test_revision_cannot_be_set_directly(self):
+        run = make_run()
+
+        with pytest.raises(TypeError):
+            run.model_copy(update={"revision": 99})
+
+    @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
+    def test_no_aggregate_accepts_an_update(self, factory, model_type):
+        with pytest.raises(TypeError, match="cannot be updated"):
+            factory().model_copy(update={"revision": 1})
+
+    @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
+    def test_a_plain_copy_is_still_allowed(self, factory, model_type):
+        aggregate = factory()
+        assert aggregate.model_copy() == aggregate
+        assert aggregate.model_copy(deep=True) == aggregate
+
+    def test_the_error_names_the_offending_fields(self):
+        experiment = make_experiment()
+
+        with pytest.raises(TypeError, match="revision"):
+            experiment.model_copy(update={"revision": 3})
+
+    def test_transitions_still_work_and_stay_validated(self):
+        """The supported path keeps every guarantee the refused one skipped."""
+        experiment = make_experiment()
+        active = experiment.with_status(ExperimentStatus.ACTIVE)
+
+        assert active.status is ExperimentStatus.ACTIVE
+        assert active.revision == experiment.revision + 1
+        assert isinstance(active.metadata, FrozenDict)
+        assert isinstance(active.id, ExperimentId)
+        assert active.budget is not None
+        assert active.budget.max_cost == Decimal("125.50")
+
+    def test_transitions_still_refuse_illegal_moves(self):
+        experiment = make_experiment()
+
+        with pytest.raises(InvalidTransitionError):
+            experiment.with_status(ExperimentStatus.SUCCEEDED)
+
+
+class TestDomainValueContract:
+    """Domain payloads must be canonically persistable.
+
+    A record that cannot round-trip cannot be fingerprinted, so the contract is
+    enforced at construction rather than discovered at serialization.
+    """
+
+    def test_non_string_keys_are_rejected(self):
+        """{1: 'x'} serializes to {'1': 'x'} and stops comparing equal."""
+        with pytest.raises(ValidationError):
+            TrainingSpecSnapshot(kind="sft", payload={1: "x"})
+
+    def test_sets_are_rejected(self):
+        """Sets have no stable order, so fingerprints would vary by process."""
+        with pytest.raises(InvalidDomainValueError, match="stable"):
+            deep_freeze({"features": {"a", "b", "c"}})
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_floats_are_rejected(self, value):
+        with pytest.raises(InvalidDomainValueError, match="finite"):
+            deep_freeze({"metric": value})
+
+    def test_arbitrary_objects_are_rejected(self):
+        class Custom:
+            pass
+
+        with pytest.raises(InvalidDomainValueError):
+            deep_freeze({"thing": Custom()})
+
+    def test_bytes_are_rejected(self):
+        with pytest.raises(InvalidDomainValueError):
+            deep_freeze({"blob": b"\x00"})
+
+    def test_the_contract_is_a_value_error_so_pydantic_reports_it(self):
+        assert issubclass(InvalidDomainValueError, ValueError)
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, True, False, 0, -1, 2.5, "text", {"a": {"b": [1, 2]}}, [1, "a", None]],
+    )
+    def test_json_shaped_values_are_accepted(self, value):
+        deep_freeze({"v": value})
+
+    def test_nested_structures_round_trip_unchanged(self):
+        payload = {"a": {"b": [1, {"c": "d"}]}, "e": None, "f": True}
+        snapshot = TrainingSpecSnapshot(kind="sft", payload=payload)
+
+        restored = TrainingSpecSnapshot.model_validate_json(snapshot.model_dump_json())
+        assert restored == snapshot
+        assert restored.payload["a"]["b"][1]["c"] == "d"
+
+
 class TestImmutability:
     @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
     def test_status_cannot_be_assigned_directly(self, factory, model_type):
@@ -200,7 +499,7 @@ class TestNodeLineage:
         parent = make_node()
         child = make_node(parent_ids=[parent.id])
         assert not child.is_root
-        assert child.parent_ids == [parent.id]
+        assert child.parent_ids == (parent.id,)
 
     def test_node_supports_multiple_parents(self):
         first, second = make_node(), make_node()
@@ -300,10 +599,15 @@ class TestExecutionOverride:
         )
         attempt = make_attempt(execution_overrides=[override])
         restored = RunAttempt.model_validate_json(attempt.model_dump_json())
-        assert restored.execution_overrides[0].preserves == ["effective_batch_size"]
+        assert restored.execution_overrides[0].preserves == ("effective_batch_size",)
 
     def test_rejects_a_scientific_change_as_an_override_kind(self):
-        """LR and optimizer changes are new nodes, not execution overrides."""
+        """A scientific change is never an ExecutionOverride.
+
+        Per ADR-011 it is either a TrainingIntervention on a continuing
+        trajectory or a new ExperimentNode, decided by comparability — but
+        either way the override vocabulary must reject it.
+        """
         with pytest.raises(ValidationError):
             ExecutionOverride(
                 id="ovr-2",

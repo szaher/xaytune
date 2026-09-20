@@ -5,7 +5,9 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from xaytune.core.immutable import FrozenDomainModel
 
 __all__ = [
     "BudgetSpec",
@@ -17,8 +19,8 @@ __all__ = [
 ConstraintOperator = Literal["<", "<=", ">", ">=", "==", "!="]
 
 
-class _Frozen(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+class _Frozen(FrozenDomainModel):
+    """Immutable, with a validating ``model_copy``."""
 
 
 class ObjectiveMetric(_Frozen):
@@ -45,7 +47,7 @@ class Objective(_Frozen):
 
     primary: ObjectiveMetric
     target: float | None = None
-    constraints: list[MetricConstraint] = Field(default_factory=list)
+    constraints: tuple[MetricConstraint, ...] = Field(default_factory=tuple)
 
 
 class BudgetSpec(_Frozen):

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`xaytune.core` — control-plane domain foundation.** Typed sortable identifiers (`ExperimentId`, `RunId`, …), the `Experiment` / `ExperimentNode` / `Run` / `RunAttempt` aggregates, their separate state machines, `ExecutionOverride`, and the immutable value objects (`Actor`, `DatasetRef`, `ModelRef`, `ArtifactRef`, `RuntimeRef`, `ControllerHostRef`, `CheckpointRef`, `ResourceUsage`). The package imports without torch, transformers, peft, trl, ray or kubernetes installed, enforced by `tests/test_core/test_architecture.py`. Nothing in the existing training path uses it yet.
+- **`docs/api/core.md`** documenting the new package.
+
+### Changed
+
+- **Top-level imports are now lazy.** `xaytune.finetune`, `.pretrain`, `.align`, `.evaluate`, `.lr_find`, `.JobManager` and `.discover_plugins` resolve on first access (PEP 562) instead of at import time, so `import xaytune` no longer pulls in torch. Every public name behaves as before; `xaytune.pipeline` is still bound eagerly because it collides with the `xaytune/pipeline.py` submodule.
+
+### Fixed
+
+- **`xaytune pipeline` crashed on any stage that omitted `trainer:` or `lora:`.** `_run_train_stage()` used `TrainerConfig()` and `LoraConfig()` above their import, raising `UnboundLocalError`. The `or` short-circuit meant it only fired when a stage left those sections out. `xaytune/pipeline.py` had no test coverage at all; `tests/test_pipeline.py` now covers it.
+- **`import xaytune.trainer` as the first xaytune import raised `ImportError`.** `xaytune.trainer` → `xaytune.eval` → `xaytune.recipes` → `xaytune.trainer` was a circular import masked by the eager package `__init__`; `eval_callback` now resolves the metric registry lazily.
+- **`apply_lora()` skipped `prepare_model_for_kbit_training` silently** if the inline import failed. The import is now hoisted alongside the other peft imports.
+- **`evaluate()` raised `IndexError` on non-tensor `labels`** while explicitly passing non-tensor batch values through the device move. Labels are now coerced before masking.
+- **DeepSpeed + `resume_checkpoint_dir` raised `AttributeError`.** The DeepSpeed path sets `optimizer` to `None`, but the resume branch called `optimizer.load_state_dict()` unguarded while the adjacent scaler and scheduler branches both checked. The skip is now logged rather than passing silently, since DeepSpeed restores optimizer state through its own checkpoint API.
+- **CPU-only distributed training raised `AttributeError`.** `init_distributed()` called `torch.cuda.set_device()` unconditionally, so a gloo process group could not start without CUDA.
+- **ORPO produced `NaN` when a sequence log-probability reached 0** (BUG-011). The odds `p / (1 - p)` diverge as `p` approaches 1, and `p == 1` is reachable: a fully-masked sequence sums to exactly 0. Probabilities are now clamped just below 1; the clamp is a no-op for realistic inputs.
+
+### Known issues
+
+Two tests are recorded as strict `xfail` pending a product decision, not because of a defect:
+
+- `constant` scheduler with `warmup_steps > 0` auto-upgrades to warmup behaviour, while `test_constant_ignores_warmup_steps` asserts warmup is ignored. Deciding for the implementation makes `constant_with_warmup` redundant; deciding for the test means a requested warmup is silently dropped.
+- `global_step` counts optimizer steps, while `test_gradient_accumulation_reduces_optimizer_steps` expects micro-steps. The rest of the loop agrees with the implementation, but `global_step` is user-visible in checkpoints and logs.
+
+### Notes
+
+- `mypy` is configured at `python_version = "3.12"` (was `3.10`); numpy's bundled stubs use 3.12-only syntax, and CI already runs mypy under 3.12. This means mypy no longer verifies 3.10 compatibility while `requires-python` remains `>=3.10`.
+- Markdown is excluded from `ruff`; ruff 0.16 formats Markdown code blocks, which the project never opted into.
+
 ## v0.3.0
 
 ### Added

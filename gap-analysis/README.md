@@ -1,7 +1,7 @@
 # Gap Analysis — xaytune v0.6.0
 
 Original audit: 2026-06-03 15:00
-Reconciled against the tree: 2026-09-20
+Reconciled against the tree: 2026-09-21
 
 ## Scope: which plan governs what
 
@@ -16,7 +16,7 @@ its ADRs, not from here.
 
 ## Current state
 
-**36 of the 37 bugs are fixed. BUG-036 (DeepSpeed) is PARTIAL.** On 2026-09-20
+**36 of the 37 bugs are fixed. BUG-036 (DeepSpeed) is PARTIAL.** On 2026-09-21
 the 27 still marked `OPEN` were re-checked one by one against the tree; 26 had
 already been fixed and the status column had simply never been updated. See
 `bugs.md` for the method.
@@ -43,7 +43,7 @@ Two lessons, both recorded in `bugs.md`, and the second is the load-bearing one:
 
 ### Where live work is tracked
 
-Two files here still list live work, not one:
+**Three** files here still list live work, not one:
 
 | File | Live items |
 |---|---|
@@ -54,9 +54,15 @@ Two files here still list live work, not one:
 Everything else in this directory is a historical baseline of v0.6, useful for
 measuring the refactor against rather than for picking up tasks.
 
+Note the boundary with `implementation-plan/`: six remediation **TASKs** remain
+in `implementation-plan/backlog.md` (TASK-007, 008, 009, 014, 015, 029). The
+enhancement work in `new-features.md` — FEAT-002, 006, 010 — has no TASK ID, so
+"six tasks remain" is not the same as "six pieces of work remain".
+
 ## How to Read This
 
-This gap analysis was performed on 2026-06-03 via systematic static code review of the entire xaytune codebase. No runtime execution was possible (no GPU, no torch/pydantic locally). All findings are verified against source code with file path evidence.
+**The prose below describes the original 2026-06-03 audit, not current state.**
+For current state read the two sections above. This gap analysis was performed on 2026-06-03 via systematic static code review of the entire xaytune codebase. No runtime execution was possible (no GPU, no torch/pydantic locally). All findings are verified against source code with file path evidence.
 
 ## Files
 
@@ -66,10 +72,10 @@ This gap analysis was performed on 2026-06-03 via systematic static code review 
 | 2 | [architecture.md](architecture.md) | C4-style architecture diagram, technology stack, data flows, external integrations |
 | 3 | [feature-inventory.md](feature-inventory.md) | 16 feature areas mapped to entry points, modules, config, tests |
 | 4 | [scorecard.md](scorecard.md) | Quality scorecard: each feature scored 0-5 on 6 dimensions with evidence |
-| 5 | [bugs.md](bugs.md) | 37 bugs (BUG-001 to BUG-037): 7 Critical, 9 High, 14 Medium, 7 Low. 10 already fixed |
-| 6 | [missing-features.md](missing-features.md) | 17 missing/incomplete features (GAP-001 to GAP-017) with acceptance criteria |
-| 7 | [new-features.md](new-features.md) | 10 enhancement ideas (FEAT-001 to FEAT-010), MoSCoW prioritized |
-| 8 | [remediation-roadmap.md](remediation-roadmap.md) | 3-phase plan: Now (0-2w), Next (2-6w), Later (6+w) with sequencing |
+| 5 | [bugs.md](bugs.md) | 37 bugs (BUG-001 to BUG-037). **Now: 36 fixed, BUG-036 partial.** Severity split is the original audit's: 7 Critical, 9 High, 14 Medium, 7 Low |
+| 6 | [missing-features.md](missing-features.md) | 17 missing/incomplete features (GAP-001 to GAP-017) with acceptance criteria. **Now: 5 open (GAP-001..005)** |
+| 7 | [new-features.md](new-features.md) | 10 enhancement ideas (FEAT-001 to FEAT-010), MoSCoW prioritized. **Now: FEAT-002 and FEAT-005 partial, FEAT-006 and FEAT-010 open** |
+| 8 | [remediation-roadmap.md](remediation-roadmap.md) | 3-phase plan: Now (0-2w), Next (2-6w), Later (6+w). **Historical — do not select work from it** |
 | 9 | [risks-and-unknowns.md](risks-and-unknowns.md) | Top 10 technical risks, top 10 product risks, 7 unknowns |
 
 ## ID Cross-Reference
@@ -87,17 +93,20 @@ The `implementation-plan/` directory contains the execution-ready task list deri
 
 ## Summary Statistics
 
-| Category | Count |
-|----------|-------|
-| Bugs found | 37 |
-| Bugs fixed (this session) | 10 |
-| Bugs remaining | 27 |
-| Missing features | 17 |
-| New feature ideas | 10 |
-| Critical/Blocker severity | 7 |
-| High severity | 9 |
-| Medium severity | 14 |
-| Low severity | 7 |
+Two columns, because the difference between them is the point of this
+reconciliation. **Read the right-hand one for current state.**
+
+| Category | Original audit (2026-06-03) | Current (2026-09-21) |
+|----------|---:|---:|
+| Bugs found | 37 | 37 |
+| Bugs fixed | 10 | 36 |
+| Bugs partial | 0 | 1 (BUG-036) |
+| Bugs open | 27 | 0 |
+| Missing features (GAP) | 17 | 17 found, 5 open |
+| New feature ideas (FEAT) | 10 | 10 found, 2 partial, 2 open |
+
+Severity counts below are from the original audit and are not restated, since
+every entry but BUG-036 is now closed: 7 Critical, 9 High, 14 Medium, 7 Low.
 
 ## Key Findings
 

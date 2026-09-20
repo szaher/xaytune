@@ -1,11 +1,14 @@
 # Missing / Incomplete Features
 
 Original audit: 2026-06-03 15:00
-Reconciled against the tree: 2026-09-20
+Reconciled against the tree: 2026-09-21
 
-> **This is the one file in `gap-analysis/` that still lists live work.**
-> 12 of the 17 gaps have shipped. Five remain open, all in config validation
-> and export.
+> **This file tracks the five remaining GAP items.** 12 of the 17 gaps have
+> shipped; five remain open, all in config validation and export.
+>
+> It is not the only live work in `gap-analysis/`. Also open:
+> `bugs.md` — BUG-036 (partial); `new-features.md` — FEAT-002 and FEAT-005
+> (partial), FEAT-006 and FEAT-010 (not started).
 
 ## Still open
 

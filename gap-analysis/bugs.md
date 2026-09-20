@@ -1,7 +1,7 @@
 # Bug List
 
 Original audit: 2026-06-03 15:00
-Reconciled against the tree: 2026-09-20 — **36 of 37 fixed; BUG-036 is
+Reconciled against the tree: 2026-09-21 — **36 of 37 fixed; BUG-036 is
 PARTIAL.**
 
 > **This file is all but closed.** 36 of the 37 entries are verified fixed and
@@ -9,7 +9,7 @@ PARTIAL.**
 > see the correction below. `missing-features.md` tracks the open v0.6 gaps and
 > `new-features.md` the open enhancements.
 
-## Reconciliation, 2026-09-20
+## Reconciliation, 2026-09-21
 
 The 27 bugs previously marked `OPEN` were re-checked one by one against the
 current tree. 26 were already fixed — the status column had simply never been

@@ -2,6 +2,10 @@
 
 Last updated: 2026-06-03 15:00
 
+> **Historical — 2026-06-03 audit baseline.** Kept for reference, not current
+> state. See `gap-analysis/README.md` for what is fixed, partial and open now.
+
+
 Scoring: 0 = broken/absent, 1 = critically flawed, 2 = works sometimes with known bugs, 3 = functional with gaps, 4 = solid with minor issues, 5 = production-ready.
 
 Dimensions: **R** = Reliability, **S** = Security, **P** = Performance, **M** = Maintainability, **UX** = UX Completeness, **O** = Observability.

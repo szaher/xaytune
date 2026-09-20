@@ -1,6 +1,16 @@
 # Executive Summary
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-21
+
+> **This file is the original audit's summary and is kept as a historical
+> record.** Its numbers and verdict describe v0.6 as of 2026-06-03, not the
+> current tree. For current state read `README.md`; for live work see
+> `missing-features.md`, `new-features.md` and `bugs.md` (BUG-036 only).
+>
+> The Declarations below are also historical: they record that the original
+> audit could not run anything. The reconciliation did run the suite — 1542
+> passed, 4 skipped — on Python 3.10, 3.11 and 3.12, plus ruff and mypy.
 
 ## Declarations
 
@@ -57,8 +67,9 @@ Last updated: 2026-06-03 15:00
 | Test files | 102 |
 | Test lines | ~16,000 |
 | Bugs found (total) | 37 |
-| Bugs fixed (this session) | 10 |
-| Bugs remaining | 27 |
+| Bugs fixed (during the original audit) | 10 |
+| Bugs remaining *as of 2026-06-03* | 27 |
+| **Bugs remaining now (2026-09-21)** | **0 open, 1 partial (BUG-036)** |
 | Missing features (GAP) | 6 |
 | New feature ideas (FEAT) | 8 |
 | Critical/Blocker bugs | 7 |

@@ -1,7 +1,7 @@
 # Implementation Plan
 
 Original plan: 2026-06-03 14:00
-Reconciled against the tree: 2026-09-20
+Reconciled against the tree: 2026-09-21
 
 ## Scope: which plan governs what
 
@@ -19,6 +19,10 @@ package's `15-implementation-plan.md`, not this one.
 and 015, all sourced from the open gaps in `gap-analysis/missing-features.md`,
 plus **TASK-029** (DeepSpeed optimizer/scheduler ownership), which an earlier
 pass of this reconciliation wrongly marked done. See `backlog.md`.
+
+Six remaining tasks is not six remaining pieces of work: the enhancement track
+in `gap-analysis/new-features.md` (FEAT-002, 005 partial; FEAT-006, 010 open)
+carries no TASK IDs, because this backlog covers v0.6 remediation only.
 
 `testing-plan.md` and `observability-plan.md` are not tied to specific task IDs
 and remain useful as-is.
@@ -39,11 +43,24 @@ and remain useful as-is.
 
 ## How to Execute
 
-1. **Read `roadmap.md`** to understand phasing.
-2. **Start with NOW milestone** — 6 tasks, all independent, all P0/P1.
-3. **Check `dependencies.md`** before starting any NEXT task — TASK-007 depends on TASK-006, TASK-009 depends on TASK-007.
-4. **Follow each task's Definition of Done** checklist before marking complete.
-5. **Run verification** per `testing-plan.md` after each task.
+**For current work:**
+
+1. **Read the live-task table in `backlog.md`** — TASK-007, 008, 009, 014, 015
+   and 029. That table, not `roadmap.md`, is the list of what is left.
+2. **Check `dependencies.md`** only for dependencies among those six. TASK-007
+   and TASK-008 still carry theirs.
+3. **Follow each task's Definition of Done** checklist before marking complete.
+4. **Run verification** per `testing-plan.md` after each task.
+
+> **Do not select work from `roadmap.md` or from the milestone sections below.**
+> They are the 2026-06-03 planning record and list work — SFT masking, ORPO,
+> QLoRA, the DeepSpeed loop, the PPO rename, Studio alignment, the checkpoint
+> and logging bugs — that has since shipped. An agent following the old
+> instruction to "start with the NOW milestone" would begin on phantom tasks,
+> which is the failure this reconciliation exists to prevent.
+
+`testing-plan.md` and `observability-plan.md` are not tied to task IDs and
+remain useful as-is.
 
 ## Conventions
 

@@ -2,6 +2,9 @@
 
 Last updated: 2026-06-03 15:00
 
+> **Historical — 2026-06-03 audit baseline.** Kept for reference, not current
+> state. See `gap-analysis/README.md` for what is fixed, partial and open now.
+
 ---
 
 ## Top 10 Technical Risks

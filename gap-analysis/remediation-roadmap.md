@@ -1,5 +1,10 @@
 # Remediation Roadmap
 
+> **Status: historical. Do not use this file for task selection.**
+>
+> Most of what follows has shipped. For current state see `README.md`; for live
+> tasks see `implementation-plan/backlog.md`.
+
 Last updated: 2026-06-03 15:00
 
 ## Phase 1: NOW (0-2 weeks) — Correctness & Crashers

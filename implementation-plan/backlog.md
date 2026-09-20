@@ -1,11 +1,16 @@
 # Backlog
 
 Original plan: 2026-06-03
-Reconciled against the tree: 2026-09-20
+Reconciled against the tree: 2026-09-21
 
 > **Six of the 31 tasks are still live.** Five are sourced from the open gaps
 > in `gap-analysis/missing-features.md`; the sixth is TASK-029, which was
 > wrongly marked done in an earlier pass of this reconciliation.
+>
+> Six remaining *tasks* is not six remaining *pieces of work*. The enhancement
+> work in `gap-analysis/new-features.md` — FEAT-002 and FEAT-005 (partial),
+> FEAT-006 and FEAT-010 (not started) — has no TASK ID, deliberately: this
+> backlog tracks v0.6 remediation, not the enhancement track.
 
 | Task | Source | Summary |
 |------|--------|---------|
@@ -47,10 +52,10 @@ own task rather than a patch to PR #16.
 **Checkpoint ownership belongs to the same task.** Nothing in the tree calls
 `engine.load_checkpoint()` or `engine.save_checkpoint()` — the only
 `save_checkpoint`/`load_checkpoint` are xaytune's own trainer-side helpers. So
-a DeepSpeed resume does not relocate optimizer state to the engine, it **loses
-it**, and training silently continues from a fresh optimizer. PR #16 made the
-warning say that instead of implying a restore happens elsewhere, but the fix
-is here. Whoever settles ownership must settle save and restore with it:
+**the xaytune resume path does not restore DeepSpeed engine state, and optimizer
+state is therefore not restored by this resume path.** Whether the engine owns
+an optimizer at all, and which one, is the R3 question above. PR #16 made the
+warning say exactly this much and no more; the fix is here. Whoever settles ownership must settle save and restore with it:
 
 - R6: optimizer state saved and restored through the engine's checkpoint API.
 - R7: scheduler state likewise, once the engine owns a schedule.

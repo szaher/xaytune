@@ -1,11 +1,22 @@
 """Tests for the multi-stage training pipeline runner."""
 
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from xaytune.pipeline import _run_train_stage
 from xaytune.pipeline_schema import StageConfig
+
+# `xaytune/recipes/__init__.py` re-exports the recipe functions, so the name
+# `finetune` on the package is the function, not the `xaytune.recipes.finetune`
+# submodule. A string patch target is resolved by walking getattr on Python
+# 3.10, which lands on the function and raises AttributeError; 3.11+ resolves
+# the dotted path as a module first, so it only fails on 3.10. `import ... as`
+# has the same problem on every version -- import_module is the one form that
+# reliably returns the module. The same shadowing applies to
+# `xaytune.recipes.pretrain`, `xaytune.recipes.align` and `xaytune.eval.evaluate`.
+finetune_module = import_module("xaytune.recipes.finetune")
 
 
 def _fake_state(metrics=None):
@@ -27,7 +38,7 @@ class TestRunTrainStage:
         assert stage.trainer is None
         assert stage.lora is None
 
-        with patch("xaytune.recipes.finetune.finetune") as mock_finetune:
+        with patch.object(finetune_module, "finetune") as mock_finetune:
             mock_finetune.return_value = _fake_state({"loss": 0.25})
             result = _run_train_stage(stage, "base-model", str(tmp_path))
 
@@ -51,7 +62,7 @@ class TestRunTrainStage:
             lora=LoraConfig(rank=8),
         )
 
-        with patch("xaytune.recipes.finetune.finetune") as mock_finetune:
+        with patch.object(finetune_module, "finetune") as mock_finetune:
             mock_finetune.return_value = _fake_state()
             _run_train_stage(stage, "base-model", str(tmp_path))
 

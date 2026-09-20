@@ -2,6 +2,10 @@
 
 Last updated: 2026-06-03 15:00
 
+> **Historical — 2026-06-03 audit baseline.** Kept for reference, not current
+> state. See `gap-analysis/README.md` for what is fixed, partial and open now.
+
+
 ## Feature Table
 
 | Feature Area | User-Facing Behavior | Entry Points | Core Modules | Data Model | Config/Flags | Observability | Test Coverage |

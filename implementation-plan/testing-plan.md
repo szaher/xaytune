@@ -2,6 +2,18 @@
 
 Last updated: 2026-06-03 13:30
 
+> **Status: historical test plan, with strategy worth keeping.**
+>
+> The Constraints below and the "Tests to Add" matrix describe the 2026-06-03
+> audit state and are **not current**. That audit could not install `torch` or
+> `pydantic` and validated syntax with `ast.parse()`; CI now runs the full suite
+> on Python 3.10, 3.11 and 3.12, plus ruff and mypy, and most of the listed
+> tests have since been written.
+>
+> Keep this file for its coverage rationale and its per-epic test strategy. **Do
+> not use it to decide which tests are missing** — for that, see the six live
+> tasks in `backlog.md`.
+
 ## Constraints
 
 - No GPU available locally. Tests requiring CUDA must run on the OpenShift AI cluster.

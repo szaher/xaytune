@@ -439,17 +439,6 @@ class TestGradientAccumulationIntegration:
 
     @patch("xaytune.recipes.base.load_dataset")
     @patch("xaytune.recipes.base.load_model")
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Disagreement over what global_step counts. The implementation "
-            "counts optimizer steps (2); this test expects micro-steps (4). "
-            "The rest of the loop agrees with the implementation: loop.py "
-            "computes total_steps as num_batches // gradient_accumulation, so "
-            "LR scheduling and max_steps are already in optimizer steps. "
-            "Likely the test is wrong, but the definition is a product call."
-        ),
-    )
     def test_gradient_accumulation_reduces_optimizer_steps(
         self, mock_load_model, mock_load_dataset, mock_model_result
     ):
@@ -488,5 +477,12 @@ class TestGradientAccumulationIntegration:
 
         # 8 samples / batch_size(2) = 4 micro-steps
         # 4 micro-steps / gradient_accumulation(2) = 2 optimizer steps
-        # But global_step tracks micro-steps, so should be 4
-        assert state.global_step == 4
+        #
+        # global_step counts optimizer steps, not micro-batches: counting
+        # micro-batches was BUG-004, fixed deliberately (see
+        # gap-analysis/remediation-roadmap.md and
+        # implementation-plan/observability-plan.md). loop.py agrees --
+        # total_steps is num_batches // gradient_accumulation, so LR scheduling
+        # and max_steps are in optimizer steps too. This asserted the pre-fix
+        # value.
+        assert state.global_step == 2

@@ -1,6 +1,34 @@
 # Missing / Incomplete Features
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-21
+
+> **This file tracks the five remaining GAP items.** 12 of the 17 gaps have
+> shipped; five remain open, all in config validation and export.
+>
+> It is not the only live work in `gap-analysis/`. Also open:
+> `bugs.md` — BUG-036 (partial); `new-features.md` — FEAT-002 and FEAT-005
+> (partial), FEAT-006 and FEAT-010 (not started).
+
+## Still open
+
+| ID | Summary | Verified at |
+|----|---------|-------------|
+| GAP-001 | GGUF conversion shells out to `python -m llama_cpp.convert`, which does not exist | `export/gguf.py:35` |
+| GAP-002 | `push_to_hub()` silently skips the tokenizer when a model object is passed without one | `export/hub.py` — no warning emitted |
+| GAP-003 | `validate_config()` runs only from the CLI, so the Python API and Studio skip validation | `recipes/base.py` — no call |
+| GAP-004 | No validation rules for `recipe="pretrain"`; `method="lora"` is accepted silently | `config/validation.py` — no pretrain branch |
+| GAP-005 | `apply_overrides()` silently creates new keys, so `trainer.lerning_rate=1e-4` is accepted and ignored | `config/parser.py` — no unknown-key rejection |
+
+## Shipped since the audit
+
+GAP-006 (helpful optional-dependency errors) and GAP-007 through GAP-017,
+which duplicated bugs now all verified fixed — see `bugs.md`.
+
+---
+
+The original table follows unchanged, for the acceptance criteria and
+complexity estimates.
 
 | ID | Feature / Requirement | Where It Should Appear | Current Behavior | Gap | Evidence | Priority | Acceptance Criteria | Complexity |
 |----|----------------------|----------------------|-----------------|-----|----------|----------|-------------------|------------|

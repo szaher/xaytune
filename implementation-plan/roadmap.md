@@ -2,6 +2,12 @@
 
 Last updated: 2026-06-03 14:00
 
+> **Status: historical roadmap. Do not use this file for task selection.**
+>
+> Most of what follows has shipped. The live tasks are the six in
+> `backlog.md` — TASK-007, 008, 009, 014, 015 and 029. This file is kept as the
+> record of how the remediation was originally phased.
+
 ## Milestone: NOW (Critical / Blockers)
 
 Items that produce wrong results, crash training, or corrupt outputs. Ship before any user runs a training job.

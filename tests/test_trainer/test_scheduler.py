@@ -92,21 +92,38 @@ class TestCreateScheduler:
             opt.step()
             sched.step()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Undecided semantics, not a defect. scheduler.py deliberately "
-            "auto-upgrades 'constant' to warmup behaviour when warmup_steps > 0; "
-            "this test asserts 'constant' ignores warmup. Both are defensible. "
-            "Deciding for the implementation makes 'constant_with_warmup' "
-            "redundant; deciding for the test means a requested warmup is "
-            "silently dropped. Needs a product call."
-        ),
-    )
-    def test_constant_ignores_warmup_steps(self):
-        opt = _make_optimizer(lr=0.5)
-        create_scheduler(opt, "constant", total_steps=10, warmup_steps=5)
+    def test_constant_honours_warmup_steps(self):
+        """`constant` with warmup ramps rather than dropping the request.
 
+        BUG-029 recorded "constant scheduler ignores warmup" as the defect, so
+        a requested warmup must be honoured; create_scheduler auto-upgrades to
+        constant-with-warmup. This previously asserted the pre-fix behaviour.
+        """
+        opt = _make_optimizer(lr=0.5)
+        scheduler = create_scheduler(opt, "constant", total_steps=10, warmup_steps=5)
+
+        # Step 0 of 5 warmup steps: 0/5 of the peak rate.
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.0)
+
+        # Optimizer steps before the scheduler, matching the other tests here
+        # and real usage; the reverse order makes PyTorch warn.
+        for _ in range(5):
+            opt.step()
+            scheduler.step()
+
+        # Warmup complete: back to the constant peak rate, and it stays there.
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.5)
+        opt.step()
+        scheduler.step()
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.5)
+
+    def test_constant_without_warmup_is_flat(self):
+        opt = _make_optimizer(lr=0.5)
+        scheduler = create_scheduler(opt, "constant", total_steps=10, warmup_steps=0)
+
+        assert opt.param_groups[0]["lr"] == pytest.approx(0.5)
+        opt.step()
+        scheduler.step()
         assert opt.param_groups[0]["lr"] == pytest.approx(0.5)
 
     def test_constant_with_warmup(self):

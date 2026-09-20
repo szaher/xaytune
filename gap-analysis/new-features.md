@@ -1,6 +1,94 @@
 # New Features / Enhancements Backlog
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-21
+
+> **This file still contains live work.** FEAT-002 and FEAT-005 are partial,
+> and FEAT-006 and FEAT-010 are not started. Read it alongside
+> `missing-features.md`, not as a historical record.
+
+## Shipped
+
+FEAT-001 (response-only loss masking), FEAT-003 (QLoRA k-bit preparation),
+FEAT-004 (prompt-aware preference tokenization), FEAT-007 (multi-stage
+pipeline, `xaytune/pipeline.py`) and FEAT-008 (real-time Studio monitoring).
+
+## Partial
+
+**FEAT-005 — DeepSpeed-aware training loop.** The loop half shipped:
+`Trainer.train()` detects the engine, delegates `backward`/`step` to it, and
+skips the GradScaler. What did not is the ownership contract underneath.
+`wrap_model_distributed()` builds a DeepSpeed config with no `optimizer` and no
+`scheduler` key, passes no optimizer to `ds.initialize()`, and discards the
+optimizer and scheduler it returns — so neither DeepSpeed nor the trainer owns
+them. Delegating to an engine that has no optimizer is not multi-GPU training.
+Tracked by **BUG-036** and **TASK-029**; see `implementation-plan/backlog.md`
+for the ordering problem that makes it a design change rather than a patch.
+
+**FEAT-002 — full PPO with rollout buffer and GAE.** Most of it shipped:
+`PPOTrainer`, `RolloutBuffer`, `ValueHead`, the clipped policy objective, the
+value loss and multi-epoch optimization over each rollout. **GAE did not.**
+`PPOTrainer._collect_rollout()` computes
+
+```python
+advantages = rewards - values
+returns = rewards.clone()
+```
+
+with no λ recursion and no bootstrapping.
+
+The reason is structural, not an omission to be patched in isolation.
+`ValueHead` projects the last non-padding token's hidden state to **one scalar
+per sequence**, and `score_completions()` returns **one terminal reward per
+sequence**. Over a single-step episode GAE(λ) degenerates to exactly
+`δ₀ = r − V(s₀)`, which is what the code computes — so the present form is not
+wrong for the formulation it implements. But that formulation is a contextual
+bandit, and GAE has nothing to average over in it.
+
+**GAE requires a multi-step trajectory with a value estimate and a reward at
+each timestep.** What counts as a timestep is a design choice this file should
+not foreclose:
+
+| Timestep | Shape of the change |
+|---|---|
+| Token — conventional for LLM PPO | `ValueHead` emits `[B, T]`, plus a per-token reward, typically a KL penalty against the reference policy |
+| Turn, for multi-turn agent training | value and reward per turn |
+| Environment step, for tool use or RL environments | value and reward per environment step |
+
+Whichever is chosen, both the values and the rewards have to be carried through
+`Rollout` and the buffer at that granularity, which is why this is a design
+change rather than a function to drop in.
+
+Until then the honest scope is:
+
+| | |
+|---|---|
+| ✓ | rollout collection, rollout buffer, value head |
+| ✓ | clipped policy objective, value loss, multiple PPO epochs |
+| ✗ | GAE — multi-step advantage estimation not implemented; blocked on values and rewards at whichever timestep granularity is chosen |
+
+Note also that the README's "PPO — simplified clipped policy gradient" refers to
+the **offline/precomputed-advantage** path and remains accurate. The two should
+not be conflated:
+
+```text
+offline PPO path   -> simplified clipped PG
+online PPOTrainer  -> rollout / value head / multi-epoch PPO, sequence-level
+                      advantage, no GAE
+```
+
+## Not started
+
+- **FEAT-006** — evaluation with prompt-masked metrics (Should)
+- **FEAT-010** — AWQ/GPTQ quantization export (Could)
+- **FEAT-009** — experiment comparison, still deliberately Won't (use native
+  MLflow/W&B tooling)
+
+Note FEAT-002, FEAT-007 and FEAT-008 were all rated Could and built anyway, so
+the MoSCoW column below reflects the audit's priorities at the time rather than
+what actually got built.
+
+---
 
 Priority method: **MoSCoW** (Must/Should/Could/Won't for this release cycle)
 
@@ -19,11 +107,34 @@ Priority method: **MoSCoW** (Must/Should/Could/Won't for this release cycle)
 
 ## Summary
 
-| Priority | Count | Focus |
-|----------|-------|-------|
-| Must | 5 | FEAT-001, 003, 004, 005, plus FEAT-002 renamed/documented |
-| Should | 1 | FEAT-006 |
-| Could | 3 | FEAT-007, 008, 010 |
-| Won't | 1 | FEAT-009 (use WandB/MLflow native) |
+Two separate things, kept apart because the old single table mixed them.
 
-The "Must" features are not optional enhancements — they are correctness fixes that happen to require new code. Without them, xaytune's core training paths produce wrong results.
+**Original MoSCoW priorities (2026-06-03)** — what the audit thought mattered:
+
+| Priority | Features |
+|----------|----------|
+| Must | FEAT-001, 003, 004, 005 |
+| Should | FEAT-006 |
+| Could | FEAT-002, 007, 008, 010 |
+| Won't | FEAT-009 (use WandB/MLflow native) |
+
+**Current status (2026-09-21)** — what actually exists:
+
+| Status | Features |
+|--------|----------|
+| Shipped | FEAT-001, 003, 004, 007, 008 |
+| Partial | FEAT-002 (no GAE), FEAT-005 (DeepSpeed ownership) |
+| Not started | FEAT-006, FEAT-010 |
+| Won't | FEAT-009 |
+
+The two diverge: FEAT-002, 007 and 008 were rated Could and were built anyway,
+while FEAT-005 was rated Must and is only partly done. Priority did not predict
+what got built, so read the status table for state and the priority table only
+as a record of the audit's judgement at the time.
+
+The earlier version of this summary put FEAT-002 in the Must row as "renamed/
+documented", folding together its MoSCoW rating, its implementation status, and
+the separate BUG-034 documentation fix (TASK-031, which is done). Those are
+three different things.
+
+The "Must" features were not optional enhancements — they were correctness fixes that happened to require new code. Of those four, three have shipped; FEAT-005 (DeepSpeed) is partial, so that path does not yet work end to end.

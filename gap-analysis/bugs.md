@@ -1,11 +1,83 @@
 # Bug List
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-21 — **36 of 37 fixed; BUG-036 is
+PARTIAL.**
+
+> **This file is all but closed.** 36 of the 37 entries are verified fixed and
+> are a historical record. The exception is **BUG-036**, which is still live —
+> see the correction below. `missing-features.md` tracks the open v0.6 gaps and
+> `new-features.md` the open enhancements.
+
+## Reconciliation, 2026-09-21
+
+The 27 bugs previously marked `OPEN` were re-checked one by one against the
+current tree. 26 were already fixed — the status column had simply never been
+updated as the work landed. Left as-is, this file listed four phantom Critical
+bugs and would have sent anyone triaging from it straight down a dead end.
+
+The 27th, BUG-036, is only partly fixed.
+
+Method: 9 of the 27 have named regression tests in the suite (BUG-011, 013,
+026, 027, 031, 032, 033, 035, 036 — grep the test files for the ID). The
+remaining 18 were verified by reading the code at the evidence location each
+entry cites.
+
+### Correction: BUG-036 is PARTIAL, not FIXED
+
+Review of this reconciliation found BUG-036 closed on weaker evidence than the
+rest, in two layers.
+
+**Layer 1 — fixed in PR #16.** The engine delegation the entry describes was
+genuinely in place, but `Trainer.train()` still constructed a trainer-side LR
+scheduler against the `None` optimizer it had just set, raising
+`AttributeError: 'NoneType' object has no attribute 'param_groups'` before the
+first batch. No production entrypoint passes a scheduler, so this fired on
+every real DeepSpeed run.
+
+**Layer 2 — still open.** `wrap_model_distributed()` generates:
+
+```python
+{"zero_optimization": ..., "train_batch_size": "auto",
+ "train_micro_batch_size_per_gpu": "auto"}
+```
+
+No `optimizer` key, no `scheduler` key, no client optimizer passed to
+`ds.initialize()`, and all three returned objects discarded. DeepSpeed creates
+an optimizer only when the caller supplies one or the config names one, so
+**neither side owns the optimizer or the LR schedule.** Removing the crash did
+not establish that the engine can train. TASK-029 stays open.
+
+Two lessons, and the second is the one worth carrying forward:
+
+1. **A named regression test proves something is covered, not that the
+   production path is.** Every DeepSpeed test injected `scheduler=MagicMock()`;
+   no production caller does. 9 of the 27 entries here were closed on test
+   names alone.
+2. **A bug spanning two modules can be half-fixed in a way no unit test can
+   see.** Every trainer-side DeepSpeed test mocks `_is_deepspeed_engine` and so
+   never reaches `wrap_model_distributed()`. Nothing in the suite sat at the
+   seam between them, which is how they drifted apart — and
+   `test_deepspeed_initializes_engine` had been mocking `initialize()` as
+   returning `(engine, None, None, None)` the whole time without anyone reading
+   it as the finding it was. PR #16 adds
+   `test_generated_config_currently_omits_optimizer_and_scheduler` at that seam;
+   the follow-up must invert it.
+
+Two entries resolved questions that were open in the code at the time of
+reconciliation, which is the reason this file is worth keeping rather than
+deleting:
+
+- **BUG-029** records "constant scheduler ignores warmup" as the defect, so
+  honouring a requested warmup is the intended behaviour. A test asserting the
+  opposite was marked xfail pending a decision; it is now a real test.
+- **BUG-004** records `global_step` counting micro-batches as the defect, so
+  counting optimizer steps is intended. Same story, same resolution.
 
 ## Status Legend
 
-- **FIXED** — Fixed during this audit session. Code committed but not yet pushed.
-- **OPEN** — Confirmed defect, not yet fixed. Has a TASK-### in `implementation-plan/backlog.md`.
+- **FIXED** — Verified fixed in the current tree.
+- **PARTIAL** — Partly fixed; still has a live TASK-###. BUG-036 only.
 
 ---
 
@@ -13,10 +85,10 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-031 | SFT prompt masking missing | Critical | OPEN | TASK-025 |
-| BUG-033 | ORPO crashes end-to-end | Critical | OPEN | TASK-027 |
-| BUG-036 | DeepSpeed training loop broken | Critical | OPEN | TASK-029 |
-| BUG-011 | ORPO numerical instability (NaN/Inf) | Critical | OPEN | TASK-001 |
+| BUG-031 | SFT prompt masking missing | Critical | FIXED | TASK-025 |
+| BUG-033 | ORPO crashes end-to-end | Critical | FIXED | TASK-027 |
+| BUG-036 | DeepSpeed training loop broken | Critical | **PARTIAL** | TASK-029 |
+| BUG-011 | ORPO numerical instability (NaN/Inf) | Critical | FIXED | TASK-001 |
 | BUG-004 | global_step counts micro-batches | Critical | FIXED | — |
 | BUG-005 | Reported loss divided by gradient_accumulation | Critical | FIXED | — |
 | BUG-003 | GRPO OOM — deepcopy for all alignment methods | Critical | FIXED | — |
@@ -25,14 +97,14 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-032 | Preference log-probs include prompt tokens | High | OPEN | TASK-026 |
-| BUG-035 | QLoRA missing prepare_model_for_kbit_training | High | OPEN | TASK-028 |
-| BUG-034 | PPO is not real PPO (misleading name) | High | OPEN | TASK-031 |
-| BUG-037 | Studio bypasses alignment loss setup | High | OPEN | TASK-030 |
-| BUG-012 | model_merge output missing config.json | High | OPEN | TASK-013 |
-| BUG-013 | torch.load missing map_location | High | OPEN | TASK-004 |
-| BUG-014 | reinforce excluded from config validation | High | OPEN | TASK-006 |
-| BUG-022 | Optional backend imports crash without deps | High | OPEN | TASK-012 |
+| BUG-032 | Preference log-probs include prompt tokens | High | FIXED | TASK-026 |
+| BUG-035 | QLoRA missing prepare_model_for_kbit_training | High | FIXED | TASK-028 |
+| BUG-034 | PPO is not real PPO (misleading name) | High | FIXED | TASK-031 |
+| BUG-037 | Studio bypasses alignment loss setup | High | FIXED | TASK-030 |
+| BUG-012 | model_merge output missing config.json | High | FIXED | TASK-013 |
+| BUG-013 | torch.load missing map_location | High | FIXED | TASK-004 |
+| BUG-014 | reinforce excluded from config validation | High | FIXED | TASK-006 |
+| BUG-022 | Optional backend imports crash without deps | High | FIXED | TASK-012 |
 | BUG-006 | token_accuracy always returns 0.0 | High | FIXED | — |
 | BUG-007 | evaluate() device mismatch crash | High | FIXED | — |
 
@@ -40,17 +112,17 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-015 | MLflow log_params crash with nested config | Medium | OPEN | TASK-010 |
-| BUG-016 | Studio data format dropdown wrong choices | Medium | OPEN | TASK-018 |
-| BUG-017 | CLI eval crashes without --metrics | Medium | OPEN | TASK-019 |
-| BUG-018 | seed_all missing numpy | Medium | OPEN | TASK-020 |
-| BUG-019 | Distributed init hardcodes NCCL | Medium | OPEN | TASK-021 |
-| BUG-020 | eval_callback dummy metrics for non-loss | Medium | OPEN | TASK-003 |
-| BUG-021 | LR finder no device transfer | Medium | OPEN | TASK-022 |
-| BUG-023 | Logging log_scalar no exception isolation | Medium | OPEN | TASK-011 |
-| BUG-024 | format_text silent empty for unknown keys | Medium | OPEN | TASK-016 |
-| BUG-025 | preferences.py split without shuffle | Medium | OPEN | TASK-017 |
-| BUG-026 | Checkpoint metadata non-serializable tensors | Medium | OPEN | TASK-005 |
+| BUG-015 | MLflow log_params crash with nested config | Medium | FIXED | TASK-010 |
+| BUG-016 | Studio data format dropdown wrong choices | Medium | FIXED | TASK-018 |
+| BUG-017 | CLI eval crashes without --metrics | Medium | FIXED | TASK-019 |
+| BUG-018 | seed_all missing numpy | Medium | FIXED | TASK-020 |
+| BUG-019 | Distributed init hardcodes NCCL | Medium | FIXED | TASK-021 |
+| BUG-020 | eval_callback dummy metrics for non-loss | Medium | FIXED | TASK-003 |
+| BUG-021 | LR finder no device transfer | Medium | FIXED | TASK-022 |
+| BUG-023 | Logging log_scalar no exception isolation | Medium | FIXED | TASK-011 |
+| BUG-024 | format_text silent empty for unknown keys | Medium | FIXED | TASK-016 |
+| BUG-025 | preferences.py split without shuffle | Medium | FIXED | TASK-017 |
+| BUG-026 | Checkpoint metadata non-serializable tensors | Medium | FIXED | TASK-005 |
 | BUG-008 | Unknown kwargs silently ignored | Medium | FIXED | — |
 | BUG-009 | _split_dataset doesn't shuffle | Medium | FIXED | — |
 | BUG-010 | Streaming+eval_split silently drops eval | Medium | FIXED | — |
@@ -59,10 +131,10 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-027 | SimPO zero-length sequence guard | Low | OPEN | TASK-002 |
-| BUG-028 | Agent tokenizer BOS duplication | Low | OPEN | TASK-024 |
-| BUG-029 | Constant scheduler ignores warmup_steps | Low | OPEN | TASK-023 |
-| BUG-030 | Studio theme not applied | Low | OPEN | — |
+| BUG-027 | SimPO zero-length sequence guard | Low | FIXED | TASK-002 |
+| BUG-028 | Agent tokenizer BOS duplication | Low | FIXED | TASK-024 |
+| BUG-029 | Constant scheduler ignores warmup_steps | Low | FIXED | TASK-023 |
+| BUG-030 | Studio theme not applied | Low | FIXED | — |
 | BUG-001 | trainlib references in example notebooks | Low | FIXED | — |
 | BUG-002 | 22 documentation errors in example notebooks | Low | FIXED | — |
 
@@ -107,6 +179,10 @@ Last updated: 2026-06-03 15:00
 **Proposed fix:** Detect DeepSpeed engine in Trainer. Delegate backward/step/optimizer to engine. Skip GradScaler.
 **Risk:** Medium — training loop complexity increases. Need engine type detection.
 **Tests to add:** `tests/test_deepspeed_loop.py` — verify engine.backward() and engine.step() called.
+**Status: PARTIAL.** Delegation landed first; PR #16 stopped the trainer
+building an LR scheduler against the `None` optimizer on this path. What
+remains is optimizer/scheduler ownership in the generated DeepSpeed config —
+see the correction note at the top of this file. TASK-029 stays open.
 **Owner:** Backend / Distributed
 
 ### BUG-011: ORPO numerical instability

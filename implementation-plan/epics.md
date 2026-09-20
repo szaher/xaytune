@@ -2,6 +2,10 @@
 
 Last updated: 2026-06-03 14:00
 
+> **Historical — 2026-06-03 audit baseline.** Kept for reference, not current
+> state. See `implementation-plan/backlog.md` for what is fixed, partial and open now.
+
+
 ---
 
 ## EPIC-0: Foundational Training Correctness

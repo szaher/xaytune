@@ -2,6 +2,10 @@
 
 Last updated: 2026-06-03 13:30
 
+> **Historical — 2026-06-03 audit baseline.** Kept for reference, not current
+> state. See `implementation-plan/backlog.md` for what is fixed, partial and open now.
+
+
 ## Sources
 
 No `gap-analysis/` directory existed. All findings come from:

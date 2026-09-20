@@ -1,5 +1,83 @@
 # Backlog
 
+Original plan: 2026-06-03
+Reconciled against the tree: 2026-09-21
+
+> **Six of the 31 tasks are still live.** Five are sourced from the open gaps
+> in `gap-analysis/missing-features.md`; the sixth is TASK-029, which was
+> wrongly marked done in an earlier pass of this reconciliation.
+>
+> Six remaining *tasks* is not six remaining *pieces of work*. The enhancement
+> work in `gap-analysis/new-features.md` — FEAT-002 and FEAT-005 (partial),
+> FEAT-006 and FEAT-010 (not started) — has no TASK ID, deliberately: this
+> backlog tracks v0.6 remediation, not the enhancement track.
+
+| Task | Source | Summary |
+|------|--------|---------|
+| TASK-007 | GAP-003 | Run `validate_config()` from the Python API and Studio, not just the CLI |
+| TASK-008 | GAP-005 | Reject unknown config-override keys instead of silently creating them |
+| TASK-009 | GAP-004 | Add validation rules for `recipe="pretrain"` |
+| TASK-014 | GAP-001 | Fix GGUF conversion, which shells out to a module that does not exist |
+| TASK-015 | GAP-002 | Warn when `push_to_hub()` has no tokenizer to upload |
+| TASK-029 | BUG-036 | Settle DeepSpeed optimizer/scheduler ownership (see below) |
+
+### TASK-029 is still open
+
+An earlier pass of this reconciliation marked it done; review corrected that.
+R3 — *"the optimizer must be created by DeepSpeed (`ds.initialize(model=model,
+optimizer=optimizer)` or let DeepSpeed create it from config)"* — is **not
+met**. `wrap_model_distributed()` passes no optimizer and names none in the
+config, and discards the optimizer and scheduler `initialize()` returns.
+DeepSpeed creates an optimizer only when the caller supplies one or the config
+names one, so neither side owns it. R1, R2 and R5 are met; R4 is met by
+delegation.
+
+PR #16 fixed the crash this left in `Trainer.train()` (a scheduler built
+against the `None` optimizer) and added a seam test pinning the config gap. The
+remaining work is the ownership contract:
+
+```text
+DeepSpeed engine owns:  optimizer, scheduler stepping, and both checkpoint states
+Xaytune owns:           scientific optimizer/scheduler intent, and its
+                        translation into DeepSpeed configuration
+```
+
+The awkward part is `total_steps`: `ds.initialize()` runs **before** the
+dataloader is built, so the step count needed for a warmup/decay schedule is
+not known yet. Either the ordering changes (model → dataset → dataloader →
+total steps → DS config → `initialize`) or the optimizer and scheduler are
+constructed externally and passed in. That ordering question is why this is its
+own task rather than a patch to PR #16.
+
+**Checkpoint ownership belongs to the same task.** Nothing in the tree calls
+`engine.load_checkpoint()` or `engine.save_checkpoint()` — the only
+`save_checkpoint`/`load_checkpoint` are xaytune's own trainer-side helpers. So
+**the xaytune resume path does not restore DeepSpeed engine state, and optimizer
+state is therefore not restored by this resume path.** Whether the engine owns
+an optimizer at all, and which one, is the R3 question above. PR #16 made the
+warning say exactly this much and no more; the fix is here. Whoever settles ownership must settle save and restore with it:
+
+- R6: optimizer state saved and restored through the engine's checkpoint API.
+- R7: scheduler state likewise, once the engine owns a schedule.
+- R8: a resume test that asserts state is *restored*, not merely that the
+  trainer-side skip does not crash.
+
+The existing test is named `test_deepspeed_skips_trainer_optimizer_restore`
+precisely so it cannot be mistaken for R8.
+
+One dependency survives among the six live tasks:
+
+```text
+TASK-007 ──→ TASK-009        TASK-008, TASK-014, TASK-015, TASK-029 independent
+```
+
+TASK-007's own prerequisite TASK-006 is complete (BUG-014, fixed), so TASK-007
+is startable now and TASK-009 is the only task that must wait. `dependencies.md`
+is the full historical graph and still contains edges into finished work, so
+prefer this chain over reading it.
+
+Everything else in this file is a historical record of work that has landed.
+
 Last updated: 2026-06-03 14:00
 
 ---

@@ -37,8 +37,8 @@ from xaytune.core import (
     RunStatus,
     TrainingSpecSnapshot,
 )
-from xaytune.core.errors import InvalidTransitionError
-from xaytune.core.immutable import thaw
+from xaytune.core.errors import InvalidDomainValueError, InvalidTransitionError
+from xaytune.core.immutable import FrozenDict, deep_freeze, thaw
 
 
 def make_experiment(**overrides) -> Experiment:
@@ -227,6 +227,91 @@ class TestDeepImmutability:
         assert snapshot.payload["optimizer"]["lr"] == 2e-5
 
 
+class TestFrozenDictInvariants:
+    """FrozenDict must be deeply immutable by construction, not by usage.
+
+    The first version froze only at validation time, so a caller could build a
+    FrozenDict containing mutable dictionaries and hand it in; validation saw an
+    instance of the right class and passed it through untouched.
+    """
+
+    def test_a_preconstructed_frozen_dict_is_still_deeply_frozen(self):
+        source = FrozenDict({"optimizer": {"lr": 2e-5}})
+        snapshot = TrainingSpecSnapshot(kind="sft", payload=source)
+
+        with pytest.raises(TypeError):
+            source["optimizer"]["lr"] = 7
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+    def test_the_backing_store_cannot_be_reached_through(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"a": 1})
+
+        with pytest.raises(TypeError):
+            snapshot.payload._data["injected"] = True
+
+        assert "injected" not in snapshot.payload
+
+    def test_attributes_cannot_be_replaced_or_deleted(self):
+        frozen = FrozenDict({"a": 1})
+        with pytest.raises(TypeError):
+            frozen._data = {}
+        with pytest.raises(TypeError):
+            del frozen._data
+
+
+class TestDomainValueContract:
+    """Domain payloads must be canonically persistable.
+
+    A record that cannot round-trip cannot be fingerprinted, so the contract is
+    enforced at construction rather than discovered at serialization.
+    """
+
+    def test_non_string_keys_are_rejected(self):
+        """{1: 'x'} serializes to {'1': 'x'} and stops comparing equal."""
+        with pytest.raises(ValidationError):
+            TrainingSpecSnapshot(kind="sft", payload={1: "x"})
+
+    def test_sets_are_rejected(self):
+        """Sets have no stable order, so fingerprints would vary by process."""
+        with pytest.raises(InvalidDomainValueError, match="stable"):
+            deep_freeze({"features": {"a", "b", "c"}})
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_floats_are_rejected(self, value):
+        with pytest.raises(InvalidDomainValueError, match="finite"):
+            deep_freeze({"metric": value})
+
+    def test_arbitrary_objects_are_rejected(self):
+        class Custom:
+            pass
+
+        with pytest.raises(InvalidDomainValueError):
+            deep_freeze({"thing": Custom()})
+
+    def test_bytes_are_rejected(self):
+        with pytest.raises(InvalidDomainValueError):
+            deep_freeze({"blob": b"\x00"})
+
+    def test_the_contract_is_a_value_error_so_pydantic_reports_it(self):
+        assert issubclass(InvalidDomainValueError, ValueError)
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, True, False, 0, -1, 2.5, "text", {"a": {"b": [1, 2]}}, [1, "a", None]],
+    )
+    def test_json_shaped_values_are_accepted(self, value):
+        deep_freeze({"v": value})
+
+    def test_nested_structures_round_trip_unchanged(self):
+        payload = {"a": {"b": [1, {"c": "d"}]}, "e": None, "f": True}
+        snapshot = TrainingSpecSnapshot(kind="sft", payload=payload)
+
+        restored = TrainingSpecSnapshot.model_validate_json(snapshot.model_dump_json())
+        assert restored == snapshot
+        assert restored.payload["a"]["b"][1]["c"] == "d"
+
+
 class TestImmutability:
     @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
     def test_status_cannot_be_assigned_directly(self, factory, model_type):
@@ -388,7 +473,12 @@ class TestExecutionOverride:
         assert restored.execution_overrides[0].preserves == ("effective_batch_size",)
 
     def test_rejects_a_scientific_change_as_an_override_kind(self):
-        """LR and optimizer changes are new nodes, not execution overrides."""
+        """A scientific change is never an ExecutionOverride.
+
+        Per ADR-011 it is either a TrainingIntervention on a continuing
+        trajectory or a new ExperimentNode, decided by comparability — but
+        either way the override vocabulary must reject it.
+        """
         with pytest.raises(ValidationError):
             ExecutionOverride(
                 id="ovr-2",

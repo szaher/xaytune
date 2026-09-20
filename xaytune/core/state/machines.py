@@ -11,9 +11,18 @@ inventing behaviour, and the gaps were real: a node could not fail while
 ``RECOVERING``, and nothing could be cancelled before it started. Those are
 ordinary events, so the tables now cover them.
 
-Two rules hold throughout. Every non-terminal state can reach ``FAILED``,
-because anything that has not finished can still break. Every non-terminal
-state can reach ``CANCELLED``, because an operator can stop work at any point.
+Two rules hold for ``ExperimentNode``, ``Run`` and ``RunAttempt``: every
+non-terminal state can reach ``FAILED``, because anything unfinished can still
+break, and every non-terminal state can reach ``CANCELLED``, because an
+operator can stop work at any point.
+
+``Experiment`` is deliberately not covered by the first rule. It has no
+``CREATED -> FAILED`` edge, because experiment-level terminalization is a
+controller policy decision rather than a consequence of one workload breaking:
+an experiment whose nodes have all failed has not necessarily failed. Whether
+an activation failure — a budget reservation that cannot be satisfied, say —
+should terminalize ``CREATED`` as ``FAILED`` is an open question; today such an
+experiment is cancelled.
 """
 
 from __future__ import annotations

@@ -5,6 +5,10 @@ own several when seeds or replicates are wanted. A :class:`RunAttempt` is one
 infrastructure attempt at that run. Retry, preemption and checkpoint restore
 produce new attempts under the same run — they are operational events and never
 branch the scientific graph (ADR-003).
+
+A scientifically meaningful change to a run that is still going is neither of
+these: it is a ``TrainingIntervention``, recorded against the run as the outcome
+of an approved action (ADR-011).
 """
 
 from __future__ import annotations
@@ -46,8 +50,11 @@ ExecutionOverrideKind = Literal[
 """Operational adjustments that preserve declared training intent.
 
 Changes to learning rate, optimizer, LoRA rank, data, scheduler, reward,
-algorithm or model revision are *not* execution overrides — those are
-scientific mutations and create a new node.
+algorithm or model revision are *not* execution overrides. Depending on
+experimental intent they are either a ``TrainingIntervention`` on a continuing
+trajectory or a new ``ExperimentNode``, decided by the comparability rule in
+ADR-011: fork only when you would want to compare before and after as
+alternatives.
 """
 
 

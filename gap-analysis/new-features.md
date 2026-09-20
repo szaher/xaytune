@@ -65,7 +65,7 @@ Until then the honest scope is:
 |---|---|
 | ✓ | rollout collection, rollout buffer, value head |
 | ✓ | clipped policy objective, value loss, multiple PPO epochs |
-| ✗ | GAE — blocked on per-token values and per-token rewards |
+| ✗ | GAE — multi-step advantage estimation not implemented; blocked on values and rewards at whichever timestep granularity is chosen |
 
 Note also that the README's "PPO — simplified clipped policy gradient" refers to
 the **offline/precomputed-advantage** path and remains accurate. The two should

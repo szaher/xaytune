@@ -2,6 +2,15 @@
 
 Last updated: 2026-06-03 13:30
 
+> **Status: historical plan, with instrumentation guidance worth keeping.**
+>
+> Several entries below are written as future work ("Add …") for instrumentation
+> that has since shipped, and the per-epic FIXED markers are the 2026-06-03
+> audit's, not current. Keep this file for how it reasons about metrics, logs
+> and warnings in a library rather than a service. **Do not use it to decide
+> what instrumentation is missing** — check the code, or `backlog.md` for the
+> six live tasks.
+
 ## Overview
 
 xaytune is a library, not a service. Observability means: correct metrics reported to users, clear warnings/errors, and logging backends that don't crash.

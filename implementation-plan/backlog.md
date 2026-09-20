@@ -65,9 +65,18 @@ warning say exactly this much and no more; the fix is here. Whoever settles owne
 The existing test is named `test_deepspeed_skips_trainer_optimizer_restore`
 precisely so it cannot be mistaken for R8.
 
-Everything else in this file is a historical record of work that has landed,
-and TASK-007 and TASK-008 still carry the dependency ordering described in
-`dependencies.md`.
+One dependency survives among the six live tasks:
+
+```text
+TASK-007 ──→ TASK-009        TASK-008, TASK-014, TASK-015, TASK-029 independent
+```
+
+TASK-007's own prerequisite TASK-006 is complete (BUG-014, fixed), so TASK-007
+is startable now and TASK-009 is the only task that must wait. `dependencies.md`
+is the full historical graph and still contains edges into finished work, so
+prefer this chain over reading it.
+
+Everything else in this file is a historical record of work that has landed.
 
 Last updated: 2026-06-03 14:00
 

@@ -10,7 +10,9 @@ Experiment
   │     │     ├── TrainingIntervention*
   │     │     │     └── InterventionApplication*
   │     │     └── RunRealization (projection)
-  │     ├── EvaluationResult*
+  │     ├── EvaluationRun*
+  │     │     ├── EvaluationAttempt*
+  │     │     └── EvaluationResult
   │     └── Decision*
   ├── Action*
   ├── Incident*
@@ -64,7 +66,7 @@ class ExperimentNode(BaseModel):
     status: ExperimentNodeStatus
 
     run_ids: list[RunId]
-    evaluation_ids: list[EvaluationId]
+    evaluation_run_ids: list[EvaluationRunId]
     decision_ids: list[DecisionId]
 
     created_by: Actor
@@ -306,6 +308,49 @@ divergence that atomic state-and-event commits exist to prevent.
 
 `node.candidate` answers "what did we intend to test?"; `run.realization()` answers
 "what actually trained this?"
+
+
+## 5a. EvaluationRun and EvaluationAttempt
+
+Evaluation is a workload, not a function call, so it has the same Run/Attempt
+split as training (ADR-015):
+
+```python
+class EvaluationRun(AggregateModel):
+    id: EvaluationRunId
+    node_id: ExperimentNodeId
+
+    spec: EvaluationSpec
+    subject: ArtifactRef              # the checkpoint or model being evaluated
+    fingerprint: str                  # EvaluationFingerprint
+    replicate: int | None
+
+    attempt_ids: list[EvaluationAttemptId]
+    result: EvaluationResult | None   # set only when terminal and SUCCEEDED
+
+    status: EvaluationRunStatus
+
+class EvaluationAttempt(AggregateModel):
+    id: EvaluationAttemptId
+    evaluation_run_id: EvaluationRunId
+    attempt_number: int
+
+    runtime_ref: RuntimeRef | None
+    status: EvaluationAttemptStatus
+```
+
+The state machines are **not** copies of `Run`/`RunAttempt`. Evaluation produces
+no checkpoints, so there is no `CHECKPOINTING` and nothing to recover into, so
+no `RECOVERING`; a failed evaluation is retried as a new attempt. The tables are
+in ADR-015.
+
+`EvaluationSpec` is deliberately not part of `CandidateSpec` — see §4. An
+evaluation attaches to a node, run or artifact, and contributes only to
+`EvaluationFingerprint`.
+
+**Invariant.** `ExperimentNode.EVALUATING` implies at least one non-terminal
+`EvaluationRun`. Without it a node sits in `EVALUATING` forever when the
+evaluation process dies, because there is no attempt to time out.
 
 ## 7. Objective
 

@@ -1,7 +1,11 @@
 # ADR-002 — Separate aggregate state machines
 
 ## Status
-Proposed
+Ratified by merged implementation — 2026-09-21.
+
+Implemented in `xaytune/core/state/machines.py` and under test on `main`. The
+transition tables in `04-state-machines.md` are verified equal to that module;
+where the two disagree, the code is authoritative.
 
 ## Decision
 

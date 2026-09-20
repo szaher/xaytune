@@ -5,8 +5,16 @@
 > `EvaluationSpec → EvaluationResult` shape below describes the *scientific*
 > contract. Operationally an evaluation is a workload: it queues, fails, gets
 > preempted, is retried and can be in flight across a controller restart. It
-> therefore has `EvaluationRun` and `EvaluationAttempt` with the same state
-> machines as `Run` and `RunAttempt`.
+> therefore has `EvaluationRun` and `EvaluationAttempt`, which follow the same
+> **lifecycle principles** as `Run` and `RunAttempt` — every non-terminal state
+> reaches `FAILED` and `CANCELLED`, and `PREEMPTED` applies from `QUEUED`
+> onwards — using the evaluation-specific tables in ADR-015. They are not the
+> same tables: evaluation produces no checkpoints, so it has neither
+> `CHECKPOINTING` nor `RECOVERING`.
+>
+> Reuse of a completed result depends on the evaluator's declared determinism
+> class, not on the fingerprint alone — a stochastic evaluator's result is a
+> sample, not the answer (ADR-015 §3).
 >
 > The invariant that makes this worth having: `ExperimentNode.EVALUATING` must
 > correspond to at least one non-terminal `EvaluationRun`. Without it a node

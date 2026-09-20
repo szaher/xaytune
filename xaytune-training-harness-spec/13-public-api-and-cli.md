@@ -25,25 +25,27 @@ experiment = xaytune.Experiment(
         "task_success",
         target=0.85,
     ),
-    training=xaytune.SFT(
+    candidate=xaytune.Candidate(
         model=xaytune.ModelRef(
             uri="Qwen/Qwen3-8B",
             revision="...",
         ),
-        dataset=xaytune.DatasetRef(
+        data=xaytune.DatasetRef(
             uri="s3://datasets/support-v4",
             revision="sha256:...",
             split="train",
         ),
-        adapter=xaytune.LoRA(
-            rank=16,
-            alpha=32,
+        training=xaytune.SFT(
+            adapter=xaytune.LoRA(
+                rank=16,
+                alpha=32,
+            ),
+            learning_rate=2e-5,
+            micro_batch_size=4,
+            gradient_accumulation=8,
+            precision="bf16",
+            epochs=3,
         ),
-        learning_rate=2e-5,
-        micro_batch_size=4,
-        gradient_accumulation=8,
-        precision="bf16",
-        epochs=3,
     ),
     evaluation=xaytune.EvaluationSpec(
         evaluators=[
@@ -70,6 +72,17 @@ print(handle.experiment_id)
 
 result = handle.wait()
 ```
+
+### Candidate structure mirrors the durable model
+
+`xaytune.Candidate(model=..., data=..., training=...)` has the same shape as
+`CandidateSpec`: model and data are **siblings of** the training program, not
+fields inside it, and there is no `seed` — that belongs to the `Run`.
+
+The flatter `xaytune.SFT(model=..., dataset=...)` spelling is accepted as
+convenience and normalized into a `CandidateSpec` on the way in. It is sugar,
+and it is documented as sugar, because an API that teaches different ownership
+from the durable model is how the two drift apart.
 
 ### What is actually persisted
 

@@ -1,7 +1,10 @@
 # ADR-010 — Control-plane core has no ML runtime dependency
 
 ## Status
-Proposed
+Ratified by merged implementation — 2026-09-21.
+
+Implemented and verified: `xaytune/core/` imports on a bare interpreter with
+only `pydantic` and `pyyaml` installed, with no ML stack present.
 
 ## Decision
 

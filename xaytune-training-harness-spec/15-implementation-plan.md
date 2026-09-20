@@ -50,9 +50,9 @@ a note about which wins:
 | E Action / Policy / Budget | 4 |
 | F checkpoint, recovery, interventions | 5 |
 | G planner and branching | 6 |
-| H daemon, kill/restart MVP | 6 |
-| I LLM planner | 7 |
-| J Ray / TorchFT / Training Hub | 8, 9 |
+| H daemon, kill/restart MVP | 7 |
+| I LLM planner | 8 |
+| J Ray / TorchFT / Training Hub | 9, 10 |
 
 ## Phase 0 — Architecture hardening
 
@@ -270,31 +270,10 @@ Phase exit:
 
 ### PR-023 — PolicyEngine
 
-### PR-024 — RuleBasedPlanner
+Budget authorization pieces land here too: recovery in Phase 5 proposes Actions,
+and an Action that cannot be authorized cannot be applied.
 
-Rules:
-
-- objective reached → stop
-- plateau → propose evaluation/stop
-- OOM → recovery path
-- failed constraint → reject candidate
-
-### PR-025 — experiment branching
-
-An alternative candidate creates a new node; an in-run scientific change records a
-`TrainingIntervention` (ADR-011).
-
-### PR-026 — end-to-end MVP test
-
-Reference scenario in `18-mvp-reference-scenario.md`.
-
-Phase exit:
-
-- full adaptive experiment works locally without LLM
-
----
-
-## Phase 5 — Resilience
+## Phase 5 — Resilience, recovery and interventions
 
 ### PR-017 — incident model and detectors
 
@@ -332,7 +311,38 @@ Phase exit:
 
 ---
 
-## Phase 6 — Durable local controller
+## Phase 6 — Planner, branching and local MVP
+
+> Moved after resilience. The end-to-end MVP scenario is *adaptive* training —
+> it OOMs, recovers with an execution override and continues — so it cannot be
+> demonstrated before recovery exists. Previously PR-026 sat two phases ahead of
+> the machinery it exercises.
+
+### PR-024 — RuleBasedPlanner
+
+Rules:
+
+- objective reached → stop
+- plateau → propose evaluation/stop
+- OOM → recovery path
+- failed constraint → reject candidate
+
+### PR-025 — experiment branching
+
+An alternative candidate creates a new node; an in-run scientific change records a
+`TrainingIntervention` (ADR-011).
+
+### PR-026 — end-to-end MVP test
+
+Reference scenario in `18-mvp-reference-scenario.md`.
+
+Phase exit:
+
+- full adaptive experiment works locally without LLM
+
+---
+
+## Phase 7 — Durable local controller
 
 ### PR-027 — LocalDaemonControllerHost
 
@@ -349,7 +359,7 @@ Exit:
 
 ---
 
-## Phase 7 — LLM planner
+## Phase 8 — LLM planner
 
 ### PR-030 — AgentModel protocol
 
@@ -367,7 +377,7 @@ Exit:
 
 ---
 
-## Phase 8 — Ray and TorchFT
+## Phase 9 — Ray and TorchFT
 
 ### PR-033 — RayTrainRuntime
 
@@ -388,7 +398,7 @@ Exit:
 
 ---
 
-## Phase 9 — Training Hub
+## Phase 10 — Training Hub
 
 ### PR-037 — TrainingHubRuntime
 
@@ -409,7 +419,7 @@ Xaytune
 
 ---
 
-## Phase 10 — Search/memory/agent training
+## Phase 11 — Search/memory/agent training
 
 After core stabilizes:
 

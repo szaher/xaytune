@@ -19,38 +19,56 @@ budget:
   maxParallelRuns: 2
   maxGpuHours: 20
 
-training:
-  kind: sft
-
+# The scientific proposition. Mirrors CandidateSpec (ADR-011): model and data
+# are siblings of training, not fields inside it, and `seed` is absent because
+# it belongs to the Run, not the candidate.
+candidate:
   model:
     uri: Qwen/Qwen3-8B
     revision: main
 
-  dataset:
+  data:
     uri: s3://datasets/support-v4
     revision: sha256:replace-me
     split: train
 
-  adapter:
-    type: lora
-    rank: 16
-    alpha: 32
+  # The training program only.
+  training:
+    kind: sft
 
-  optimization:
-    optimizer: adamw
-    learningRate: 2e-5
-    microBatchSize: 4
-    gradientAccumulation: 8
-    epochs: 3
-    scheduler: cosine
-    warmupRatio: 0.03
+    adapter:
+      type: lora
+      rank: 16
+      alpha: 32
 
-  precision:
-    mode: bf16
+    optimization:
+      optimizer: adamw
+      learningRate: 2e-5
+      microBatchSize: 4
+      gradientAccumulation: 8
+      epochs: 3
+      scheduler: cosine
+      warmupRatio: 0.03
 
-  checkpoint:
-    everySteps: 200
-    keepLast: 3
+    precision:
+      mode: bf16
+
+    checkpoint:
+      everySteps: 200
+      keepLast: 3
+
+  # Present for RL/agent candidates; null for SFT.
+  reward: null
+  environment: null
+
+  # Pre-registered interventions, part of candidate identity (ADR-011).
+  schedule: null
+
+# Replicates. Seed lives here, not on the candidate: two replicates differing
+# only by seed are the same candidate run twice.
+runs:
+  replicates: 1
+  seed: 1234
 
 evaluation:
   evaluators:

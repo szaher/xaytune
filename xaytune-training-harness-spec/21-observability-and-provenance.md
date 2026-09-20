@@ -107,13 +107,20 @@ xaytune.recovery_count
 
 ## 5. Provenance bundle
 
-Every promoted artifact should be able to export:
+Every promoted artifact should be able to export the following. Note the three
+separate identity documents: `candidate-spec.json` is what was *declared*,
+`run-realization.json` is what actually *happened* — the ordered intervention
+applications that ADR-011 hashes into `RunRealizationFingerprint` — and
+`execution-plan.json` is *how* it was run. A candidate spec alone no longer
+represents the scientific result, because two runs of the same candidate can
+have different realizations.
 
 ```text
 provenance/
   experiment.json
   graph.json
-  training-spec.json
+  candidate-spec.json
+  run-realization.json
   execution-plan.json
   runtime.json
   evaluations.json
@@ -156,7 +163,9 @@ structured search by:
 - dataset
 - algorithm
 - adapter
-- training fingerprint
+- candidate fingerprint — "has this hypothesis been explored?"
+- run realization fingerprint — "do we have *this exact* trajectory?"
+- execution fingerprint — "was it run on this software/hardware?"
 - result
 - incident category
 

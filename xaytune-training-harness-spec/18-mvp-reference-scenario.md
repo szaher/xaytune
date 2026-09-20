@@ -37,26 +37,27 @@ budget:
   maxRuns: 4
   maxGpuHours: 8
 
-training:
-  kind: sft
-
+candidate:
   model:
     uri: Qwen/Qwen3-8B
 
-  dataset:
+  data:
     uri: ./data/support-v4.jsonl
     revision: sha256:example
 
-  adapter:
-    type: lora
-    rank: 16
-    alpha: 32
+  training:
+    kind: sft
 
-  optimization:
-    learningRate: 2e-5
-    microBatchSize: 4
-    gradientAccumulation: 8
-    epochs: 2
+    adapter:
+      type: lora
+      rank: 16
+      alpha: 32
+
+    optimization:
+      learningRate: 2e-5
+      microBatchSize: 4
+      gradientAccumulation: 8
+      epochs: 2
 
 evaluation:
   evaluators:

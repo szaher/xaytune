@@ -217,6 +217,6 @@ A successful Xaytune experiment can:
 9. apply approved execution overrides or create a new scientific candidate
 10. evaluate the result with versioned metrics
 11. use policy, budget, prior experiments, rules, search, or an LLM to propose the next action
-12. create a new experiment branch when training semantics change
+12. apply an approved `TrainingIntervention` when a semantic change continues the same trajectory, or create a new node when it represents an alternative candidate to compare against (ADR-011 — the test is comparability, not which parameter changed)
 13. stop when the objective is met or budget is exhausted
 14. return artifact, full lineage, metrics, incidents, recovery history, cost/resource accounting, and decision provenance

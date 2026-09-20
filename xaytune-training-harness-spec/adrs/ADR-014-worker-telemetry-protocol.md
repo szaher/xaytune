@@ -86,6 +86,24 @@ Consequences worth stating plainly:
 - `sequence` says nothing about wall-clock simultaneity across ranks, and no
   consumer may assume it does.
 
+#### If the supervisor dies
+
+The replacement supervisor for the same `RunAttempt` **must recover the next
+sequence from durable or runtime-retained state.** Restarting at 0 would
+re-issue keys the controller has already applied, and since deduplication is on
+`(attempt_id, sequence)`, the controller would silently discard the new events
+as duplicates — the worst available outcome, because it looks like silence
+rather than an error.
+
+Where sequence continuity cannot be guaranteed, the runtime **must create a new
+`RunAttempt`** rather than resume the old attempt's stream. A new attempt is
+cheap and honest; a reused attempt id with a restarted counter corrupts the
+record.
+
+This makes `(attempt_id, sequence)` a durable identity contract rather than an
+in-process counter, which is what the controller's deduplication has been
+assuming all along.
+
 The rejected alternative was per-producer sequences
 (`producer_id` + `producer_sequence`), which pushes ordering into every consumer
 and gives the controller no total order for the attempt — which is the one thing
@@ -181,6 +199,9 @@ orders them through the RunAttempt state machine.
    `attempt_id`, `sequence` and `type`.
 1a. Exactly one telemetry supervisor per attempt assigns `sequence`; individual
    ranks never emit `WorkerEvent`s directly.
+1b. A replacement supervisor for the same attempt resumes the sequence from
+   durable state; if it cannot, the runtime creates a new `RunAttempt` rather
+   than restarting the counter.
 2. `sequence` is monotonic and gapless per attempt, starting at 0.
 3. Duplicate `(attempt_id, sequence)` is a no-op in every handler.
 4. `CheckpointCommitted` carries a complete `DataCursor` and `ResumeGuarantee`

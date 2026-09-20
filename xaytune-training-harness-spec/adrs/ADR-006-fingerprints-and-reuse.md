@@ -1,7 +1,12 @@
 # ADR-006 — Identity is split across training, execution, evaluation, and checkpoint compatibility
 
 ## Status
-Proposed — `TrainingSpecFingerprint` is replaced by two fingerprints in ADR-011.
+Proposed — partially superseded by ADR-011.
+
+`TrainingSpecFingerprint` is replaced by the layered identity model in ADR-011
+(`CandidateFingerprint`, `RunRealizationFingerprint`, `ExecutionFingerprint`,
+`EvaluationFingerprint`, `CheckpointCompatibilityKey`). **The reuse-policy half
+of this ADR is still open** and gates band G — planner reuse decisions.
 
 A single training fingerprint cannot describe a run whose training semantics changed
 partway through. ADR-011 splits it into `CandidateFingerprint` (what was declared,

@@ -112,7 +112,7 @@ A trainer integration must not own remote execution.
 
 ### Invariant B — scientific, in-run and operational lineage
 
-Lineage has three levels, not two (ADR-011).
+Lineage has four levels, not two (ADR-011).
 
 Operational recovery creates a new `RunAttempt` or `ExecutionOverride`. An alternative
 scientific candidate creates a new `ExperimentNode`. A scientifically meaningful change

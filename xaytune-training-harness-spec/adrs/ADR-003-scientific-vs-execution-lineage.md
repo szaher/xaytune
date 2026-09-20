@@ -1,7 +1,12 @@
 # ADR-003 — Scientific lineage and execution lineage are separate
 
 ## Status
-Proposed — extended by ADR-011.
+Superseded in substance by ADR-011 — 2026-09-20.
+
+Its two-level lineage model (node vs attempt) is replaced by the four levels in
+ADR-011: `ExperimentNode`, `TrainingIntervention`, `ExecutionOverride` and
+`RunAttempt`. Retained for the reasoning that led there. **Read ADR-011 for the
+current model** — this is not an equally current alternative.
 
 The two-level split below is correct for changes made *between* runs. It has no
 category for a scientifically meaningful change applied to a run that is still

@@ -132,8 +132,8 @@ as `Run`/`RunAttempt` and deliberately does **not** unify them under a generic
 
 Two aggregates with the same shape are not yet evidence of a shared
 abstraction, and the differences are real: training produces checkpoints and
-accepts interventions mid-flight; evaluation is a pure function of
-`(subject, spec)` and does neither.
+accepts interventions mid-flight; evaluation consumes a subject and a spec
+without mutating training state, and has neither lifecycle.
 
 Revisit when a third workload type appears. The likely candidates are a
 data-preparation job or a reward-model scoring pass. Unifying before then would

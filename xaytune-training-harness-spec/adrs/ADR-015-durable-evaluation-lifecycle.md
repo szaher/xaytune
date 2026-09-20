@@ -104,8 +104,9 @@ The obvious move is to unify training and evaluation under
 
 Two aggregates with the same shape are not yet evidence of a shared
 abstraction, and the differences are real: training produces checkpoints and
-supports interventions mid-flight; evaluation is a pure function of
-`(subject, spec)` and supports neither. Unifying now would mean carrying
+accepts interventions mid-flight; evaluation consumes a subject and a spec
+without mutating training state, and has neither a checkpoint nor an
+intervention lifecycle. Unifying now would mean carrying
 training-only concepts into evaluation and weakening the type of both.
 
 Revisit when a third workload type appears — a data-preparation job or a reward

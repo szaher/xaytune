@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.objective import BudgetSpec, Objective
@@ -21,7 +21,7 @@ from xaytune.core.ids import (
     ExperimentNodeId,
     RunId,
 )
-from xaytune.core.immutable import FrozenDict
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.refs import Actor, ControllerHostRef, DatasetRef, ModelRef
 from xaytune.core.state.machines import EXPERIMENT_MACHINE, NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
@@ -33,7 +33,7 @@ __all__ = [
 ]
 
 
-class TrainingSpecSnapshot(BaseModel):
+class TrainingSpecSnapshot(FrozenDomainModel):
     """Immutable snapshot of the training intent attached to a node.
 
     Frozen on purpose: a scientific change creates a child node rather than
@@ -45,8 +45,6 @@ class TrainingSpecSnapshot(BaseModel):
     field names.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
     kind: str
     spec_version: str = "0"
     model: ModelRef | None = None
@@ -54,14 +52,12 @@ class TrainingSpecSnapshot(BaseModel):
     payload: FrozenDict = Field(default_factory=FrozenDict)
 
 
-class Experiment(BaseModel):
+class Experiment(FrozenDomainModel):
     """The complete optimization objective and its control-plane state.
 
     Frozen: status changes go through :meth:`with_status`, never through
     attribute assignment (Rule 7).
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: ExperimentId
     name: str
@@ -101,14 +97,12 @@ class Experiment(BaseModel):
         return EXPERIMENT_MACHINE.is_terminal(self.status)
 
 
-class ExperimentNode(BaseModel):
+class ExperimentNode(FrozenDomainModel):
     """One scientific candidate within an experiment.
 
     ``parent_ids`` is a list rather than a single parent so that a candidate
     can be derived from more than one predecessor.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: ExperimentNodeId
     experiment_id: ExperimentId

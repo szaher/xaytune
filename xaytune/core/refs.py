@@ -12,10 +12,10 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from xaytune.core.ids import ArtifactId, CheckpointId, EvaluationId, RunAttemptId
-from xaytune.core.immutable import FrozenDict
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
 __all__ = [
     "Actor",
@@ -46,14 +46,12 @@ ArtifactKind = Literal[
 ]
 
 
-class _Frozen(BaseModel):
+class _Frozen(FrozenDomainModel):
     """Base for immutable value objects.
 
-    ``extra="forbid"`` is deliberate: silently dropping an unknown field would
-    lose provenance rather than surface a schema mismatch.
+    Inherits deep immutability and a validating ``model_copy`` from
+    :class:`FrozenDomainModel`.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class Actor(_Frozen):

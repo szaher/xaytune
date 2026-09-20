@@ -260,6 +260,86 @@ class TestFrozenDictInvariants:
             del frozen._data
 
 
+class TestValidatedModelCopy:
+    """`model_copy(update=...)` must re-validate, not assign.
+
+    Pydantic's version assigns update values untouched, which defeats every
+    guarantee the field types provide. It is not an obscure corner either:
+    `with_status` is built on it, and the docs recommend it for deriving one
+    record from another.
+    """
+
+    def test_updated_mapping_is_refrozen(self):
+        original = TrainingSpecSnapshot(kind="sft", payload={"a": {"b": 1}})
+
+        copied = original.model_copy(update={"payload": {"a": {"b": 2}}})
+
+        assert isinstance(copied.payload, FrozenDict)
+        with pytest.raises(TypeError):
+            copied.payload["a"]["b"] = 3
+
+    def test_updated_id_sequences_are_revalidated(self):
+        experiment = make_experiment()
+
+        with pytest.raises(ValidationError):
+            experiment.model_copy(update={"active_node_ids": ["node_bogus"]})
+
+    def test_updated_metadata_is_refrozen(self):
+        experiment = make_experiment()
+
+        copied = experiment.model_copy(update={"metadata": {"nested": []}})
+
+        assert isinstance(copied.metadata, FrozenDict)
+        with pytest.raises(AttributeError):
+            copied.metadata["nested"].append(1)
+
+    def test_the_value_contract_applies_to_updates(self):
+        experiment = make_experiment()
+
+        with pytest.raises(ValidationError):
+            experiment.model_copy(update={"metadata": {"features": {"a", "b"}}})
+
+    def test_an_invalid_status_is_rejected_on_copy(self):
+        experiment = make_experiment()
+
+        with pytest.raises(ValidationError):
+            experiment.model_copy(update={"status": "not-a-status"})
+
+    def test_a_plain_copy_is_unchanged(self):
+        experiment = make_experiment()
+        assert experiment.model_copy() == experiment
+        assert experiment.model_copy(deep=True) == experiment
+
+    @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
+    def test_round_trip_through_copy_preserves_every_field(self, factory, model_type):
+        """Re-validating must not quietly change types on the way through."""
+        original = factory()
+        assert original.model_copy(update={"revision": 5}).revision == 5
+        assert (
+            original.model_copy(update={"revision": 5}).model_copy(
+                update={"revision": original.revision}
+            )
+            == original
+        )
+
+    def test_decimal_and_typed_ids_survive_the_round_trip(self):
+        experiment = make_experiment()
+        copied = experiment.model_copy(update={"revision": 1})
+
+        assert copied.budget is not None
+        assert copied.budget.max_cost == Decimal("125.50")
+        assert isinstance(copied.id, ExperimentId)
+        assert isinstance(copied.objective.constraints, tuple)
+
+    def test_with_status_goes_through_the_validated_path(self):
+        """The transition API is built on model_copy, so it inherits this."""
+        experiment = make_experiment()
+        active = experiment.with_status(ExperimentStatus.ACTIVE)
+
+        assert isinstance(active.metadata, FrozenDict)
+        assert isinstance(active.id, ExperimentId)
+
+
 class TestDomainValueContract:
     """Domain payloads must be canonically persistable.
 

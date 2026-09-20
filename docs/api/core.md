@@ -85,6 +85,12 @@ Freezing also enforces a canonical value contract, because a record that cannot 
 
 Violations raise `InvalidDomainValueError`, which is also a `ValueError`, so Pydantic reports it as a validation error.
 
+!!! warning "Canonical values are not canonical encoding"
+
+    The value contract makes records *representable*; it does not make their serialization *canonical*. Two equal `FrozenDict`s can differ in insertion order, so `model_dump_json()` may emit their keys in different orders, and Python's built-in `hash()` is randomized per process.
+
+    Fingerprints must therefore be computed from a canonical encoder — sorted keys, deterministic number and string encoding, UTF-8 bytes, then a stable digest — never from `hash()` or a naive JSON dump.
+
 Status changes go through `with_status()`, which validates the transition and returns a new instance with the revision bumped:
 
 ```python
@@ -110,11 +116,34 @@ experiment.with_status(ExperimentStatus.SUCCEEDED)
 
 This split is the reason the graph stays meaningful instead of degenerating into an infrastructure log.
 
-A **scientific** change — learning rate, LoRA rank, optimizer, dataset, reward — creates a new `ExperimentNode`.
+Lineage has four levels:
+
+| Level | Represents |
+|---|---|
+| `ExperimentNode` | An alternative scientific candidate |
+| `TrainingIntervention` | A scientific change to a continuing model trajectory |
+| `ExecutionOverride` | An operational adjustment preserving declared training intent |
+| `RunAttempt` | One infrastructure execution attempt |
 
 An **operational** event — worker restart, preemption, checkpoint restore — creates a new `RunAttempt` under the same `Run`, and never branches the graph.
 
-Between those sits `ExecutionOverride`: a policy-approved operational adjustment that preserves the declared training intent, recording what it claims to hold.
+**Comparability** decides between a node and an intervention:
+
+> A change creates a new `ExperimentNode` when the changed configuration is an alternative candidate you may want to compare independently against the current one.
+>
+> A change is a `TrainingIntervention` when it only makes scientific sense as a continuation of the existing model trajectory.
+
+The kind of parameter does not decide this — experimental intent does, so the same technical change can be either:
+
+```text
+At checkpoint 20k, branch A keeps LR 2e-5 and branch B uses 1e-5,
+to see which is better.                    → two nodes
+
+At step 20k the run destabilises, so LR is
+lowered and training continues.            → one intervention
+```
+
+Between the operational and scientific levels sits `ExecutionOverride`: a policy-approved operational adjustment that preserves the declared training intent, recording what it claims to hold.
 
 ```python
 from xaytune.core import ExecutionOverride
@@ -128,7 +157,9 @@ ExecutionOverride(
 )
 ```
 
-The `kind` vocabulary is closed. Learning rate, optimizer, LoRA rank, data, scheduler, reward and model revision changes are not override kinds — they are scientific mutations, and the type rejects them.
+The `kind` vocabulary is closed. Learning rate, optimizer, LoRA rank, data, scheduler, reward and model revision changes are not override kinds, and the type rejects them. Depending on experimental intent they are either a `TrainingIntervention` or a new `ExperimentNode`.
+
+`TrainingIntervention` itself is not in this package yet — it arrives with the controller work. The rule is recorded here so the distinction is not rediscovered from the older binary model.
 
 ## State machines
 

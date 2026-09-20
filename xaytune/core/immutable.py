@@ -38,12 +38,13 @@ from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from pydantic import GetCoreSchemaHandler
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler
 from pydantic_core import core_schema
+from typing_extensions import Self
 
 from xaytune.core.errors import InvalidDomainValueError
 
-__all__ = ["FrozenDict", "deep_freeze", "thaw"]
+__all__ = ["FrozenDict", "FrozenDomainModel", "deep_freeze", "thaw"]
 
 
 class FrozenDict(Mapping[str, Any]):
@@ -118,6 +119,18 @@ class FrozenDict(Mapping[str, Any]):
     def setdefault(self, *args: Any, **kwargs: Any) -> Any:
         raise TypeError("FrozenDict is immutable")
 
+    def __copy__(self) -> FrozenDict:
+        # Immutable, so a copy can safely be the same object. This also avoids
+        # deepcopy failing on the MappingProxyType backing store.
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> FrozenDict:
+        return self
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # MappingProxyType is not picklable; rebuild from a plain dict instead.
+        return (FrozenDict, (dict(self._data),))
+
     @classmethod
     def __get_pydantic_core_schema__(
         cls, source_type: Any, handler: GetCoreSchemaHandler
@@ -190,3 +203,44 @@ def _validate_frozen_dict(value: Any) -> FrozenDict:
     if not isinstance(value, Mapping):
         raise InvalidDomainValueError(f"expected a mapping, got {type(value).__name__}")
     return FrozenDict(value)
+
+
+class FrozenDomainModel(BaseModel):
+    """Base for immutable domain records, with a validating ``model_copy``.
+
+        Pydantic's ``model_copy(update=...)`` assigns the update values **without
+        validating them**, which defeats every guarantee the field types provide::
+
+            snapshot.model_copy(update={"payload": {"a": {"b": 1}}})
+            # payload is now a plain dict again, and mutable
+
+            experiment.model_copy(update={"active_node_ids": ["not-an-id"]})
+            # no longer a typed id, and never validated
+
+    That is not an obscure corner: ``with_status`` is built on it, and the docs
+    recommend it for deriving one record from another. So this class re-validates
+    instead of assigning, which makes the copy slower than Pydantic's and correct.
+
+    ``extra="forbid"`` is deliberate too: silently dropping an unknown field would
+    lose provenance rather than surface a schema mismatch.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        """Return a copy, re-validating any updated fields.
+
+        Raises:
+            ValidationError: If an updated value is not valid for its field.
+        """
+        if not update:
+            return super().model_copy(deep=deep)
+
+        data = self.model_dump(mode="python", round_trip=True)
+        data.update(update)
+        return type(self).model_validate(data)

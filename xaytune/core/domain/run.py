@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from xaytune.core.clock import utc_now
 from xaytune.core.ids import (
@@ -26,7 +26,7 @@ from xaytune.core.ids import (
     RunAttemptId,
     RunId,
 )
-from xaytune.core.immutable import FrozenDict
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.refs import ArtifactRef, CheckpointRef, ResourceUsage, RuntimeRef
 from xaytune.core.state.machines import ATTEMPT_MACHINE, RUN_MACHINE
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
@@ -58,7 +58,7 @@ alternatives.
 """
 
 
-class ExecutionOverride(BaseModel):
+class ExecutionOverride(FrozenDomainModel):
     """A policy-approved operational modification to an attempt.
 
     Attributes:
@@ -67,8 +67,6 @@ class ExecutionOverride(BaseModel):
             doubling gradient accumulation. Recorded so that a reviewer can
             tell an intent-preserving change from a scientific one.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     kind: ExecutionOverrideKind
@@ -79,10 +77,8 @@ class ExecutionOverride(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
-class Run(BaseModel):
+class Run(FrozenDomainModel):
     """A logical execution of a scientific candidate."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: RunId
     node_id: ExperimentNodeId
@@ -124,10 +120,8 @@ class Run(BaseModel):
         return RUN_MACHINE.is_terminal(self.status)
 
 
-class RunAttempt(BaseModel):
+class RunAttempt(FrozenDomainModel):
     """One infrastructure attempt at a run."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: RunAttemptId
     run_id: RunId

@@ -4,8 +4,20 @@ from typing import Any
 
 import torch
 
-from xaytune.eval.metrics import metric_registry
 from xaytune.trainer.callbacks import CallbackManager, TrainState
+
+
+def _metric_registry() -> Any:
+    """Resolve the metric registry lazily.
+
+    ``xaytune.eval`` imports ``xaytune.recipes``, which imports back into
+    ``xaytune.trainer``. Importing it at module scope makes ``import
+    xaytune.trainer`` a circular import; the package ``__init__`` used to mask
+    that by importing ``xaytune.eval`` first.
+    """
+    from xaytune.eval.metrics import metric_registry
+
+    return metric_registry
 
 
 def register_eval_callbacks(
@@ -67,7 +79,7 @@ def register_eval_callbacks(
                     all_refs.extend(labels[mask].cpu().tolist())
 
         for metric_name in metrics:
-            compute_fn = metric_registry.get(metric_name)
+            compute_fn = _metric_registry().get(metric_name)
             if metric_name in ("loss", "perplexity"):
                 state.metrics[f"eval_{metric_name}"] = compute_fn(losses)
             else:

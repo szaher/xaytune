@@ -3,13 +3,59 @@
 Original audit: 2026-06-03 15:00
 Reconciled against the tree: 2026-09-20
 
+> **This file still contains live work.** FEAT-002 is partial and FEAT-006 and
+> FEAT-010 are not started. Read it alongside `missing-features.md`, not as a
+> historical record.
+
 ## Shipped
 
-FEAT-001 (response-only loss masking), FEAT-002 (full PPO with rollout buffer
-and value model), FEAT-003 (QLoRA k-bit preparation), FEAT-004 (prompt-aware
-preference tokenization), FEAT-005 (DeepSpeed-aware loop), FEAT-007
-(multi-stage pipeline, `xaytune/pipeline.py`) and FEAT-008 (real-time Studio
-monitoring).
+FEAT-001 (response-only loss masking), FEAT-003 (QLoRA k-bit preparation),
+FEAT-004 (prompt-aware preference tokenization), FEAT-005 (DeepSpeed-aware
+loop), FEAT-007 (multi-stage pipeline, `xaytune/pipeline.py`) and FEAT-008
+(real-time Studio monitoring).
+
+## Partial
+
+**FEAT-002 — full PPO with rollout buffer and GAE.** Most of it shipped:
+`PPOTrainer`, `RolloutBuffer`, `ValueHead`, the clipped policy objective, the
+value loss and multi-epoch optimization over each rollout. **GAE did not.**
+`PPOTrainer._collect_rollout()` computes
+
+```python
+advantages = rewards - values
+returns = rewards.clone()
+```
+
+with no λ recursion and no bootstrapping.
+
+The reason is structural, not an omission to be patched in isolation.
+`ValueHead` projects the last non-padding token's hidden state to **one scalar
+per sequence**, and `score_completions()` returns **one terminal reward per
+sequence**. Over a single-step episode GAE(λ) degenerates to exactly
+`δ₀ = r − V(s₀)`, which is what the code computes — so the present form is not
+wrong for the formulation it implements. But that formulation is a contextual
+bandit, not the token-level credit assignment FEAT-002 asks for. Real GAE needs
+per-token values and per-token rewards (typically a per-token KL penalty against
+the reference policy), which means changing `ValueHead` to emit `[B, T]`, adding
+a KL-shaped reward, and carrying both through `Rollout` and the buffer.
+
+Until then the honest scope is:
+
+| | |
+|---|---|
+| ✓ | rollout collection, rollout buffer, value head |
+| ✓ | clipped policy objective, value loss, multiple PPO epochs |
+| ✗ | GAE — blocked on per-token values and per-token rewards |
+
+Note also that the README's "PPO — simplified clipped policy gradient" refers to
+the **offline/precomputed-advantage** path and remains accurate. The two should
+not be conflated:
+
+```text
+offline PPO path   -> simplified clipped PG
+online PPOTrainer  -> rollout / value head / multi-epoch PPO, sequence-level
+                      advantage, no GAE
+```
 
 ## Not started
 
@@ -18,9 +64,9 @@ monitoring).
 - **FEAT-009** — experiment comparison, still deliberately Won't (use native
   MLflow/W&B tooling)
 
-Note FEAT-002, FEAT-007 and FEAT-008 were all rated Could and shipped anyway,
-so the MoSCoW column below reflects the audit's priorities at the time rather
-than what actually got built.
+Note FEAT-002, FEAT-007 and FEAT-008 were all rated Could and built anyway, so
+the MoSCoW column below reflects the audit's priorities at the time rather than
+what actually got built.
 
 ---
 

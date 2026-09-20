@@ -16,14 +16,32 @@ its ADRs, not from here.
 
 ## Current state
 
-**All 37 bugs are fixed.** On 2026-09-20 the 27 still marked `OPEN` were
-re-checked one by one against the tree; all 27 had already been fixed and the
-status column had simply never been updated. See `bugs.md` for the method.
+**All 37 bugs are fixed** — 36 of them before this reconciliation began, and
+the last by the follow-up it triggered. On 2026-09-20 the 27 still marked
+`OPEN` were re-checked one by one against the tree; 26 had already been fixed
+and the status column had simply never been updated. See `bugs.md` for the
+method.
 
-**Five gaps remain open** — GAP-001 through GAP-005, all in config validation
-and export. `missing-features.md` is the only file here that still lists live
-work; the rest is a historical baseline of v0.6, useful for measuring the
-refactor against rather than for picking up tasks.
+BUG-036 (DeepSpeed) is the one where that re-check was too shallow. The
+engine delegation it describes was in place, but `Trainer.train()` still built
+a trainer-side LR scheduler on the DeepSpeed path, against a `None` optimizer,
+which raised before the first batch on every production entrypoint. Review of
+this reconciliation caught it; it is fixed in PR #16, which must land first.
+The lesson is recorded in `bugs.md`: a named regression test is evidence that
+*something* is covered, not that the production path is.
+
+### Where live work is tracked
+
+Two files here still list live work, not one:
+
+| File | Live items |
+|---|---|
+| `missing-features.md` | GAP-001..005 — config validation and export |
+| `new-features.md` | FEAT-002 (partial — no GAE), FEAT-006, FEAT-010 |
+
+Everything else in this directory is a historical baseline of v0.6, useful for
+measuring the refactor against rather than for picking up tasks. `bugs.md` in
+particular is a closed record.
 
 ## How to Read This
 

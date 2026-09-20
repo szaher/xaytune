@@ -19,6 +19,12 @@ Note TASK-007 and TASK-008 still carry the dependency ordering described in
 `dependencies.md`. Everything else in this file is a historical record of work
 that has landed.
 
+One caveat on that record: **TASK-029 closed in two steps.** The engine
+delegation landed first; the scheduler half of its own implementation note
+("if DeepSpeed, skip optimizer/scheduler creation") did not, and was closed by
+PR #16 after review of this reconciliation caught it. PR #16 must merge first
+for the count above to hold.
+
 Last updated: 2026-06-03 14:00
 
 ---

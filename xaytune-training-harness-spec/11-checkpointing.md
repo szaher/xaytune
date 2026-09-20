@@ -118,6 +118,23 @@ class CheckpointManifest(BaseModel):
 
 File digests are strongly recommended and may become mandatory by store policy.
 
+## 5b. Required contents for resume
+
+What a checkpoint must carry is set by ADR-012. Summarised:
+
+```text
+model / optimizer / scheduler / scaler state
+optimizer_step + micro-step position in the accumulation window
+DataCursor + sampler + ordering state
+RNG state (Python, NumPy, Torch CPU, Torch accelerator) -- captured, not re-seeded
+training position + applied interventions (ADR-011)
+```
+
+A checkpoint missing any of these cannot claim `ResumeSemantics.EXACT`, and one taken
+mid-accumulation is not eligible for it at all. Checkpoints record the boundary and the
+training position they were taken at, because the recovery coordinator needs the
+restored position to decide intervention re-application.
+
 ## 6. Compatibility
 
 `CheckpointCompatibilityKey` includes what is required to determine safe resume.

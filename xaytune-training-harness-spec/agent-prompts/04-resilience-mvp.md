@@ -26,6 +26,12 @@ Critical lineage rule (ADR-011 — read it before starting):
 Every intervention is the recorded outcome of an approved Action. Do not add a second
 mutation path.
 
+Adaptive resize has a hard precondition (ADR-012). It may resume only from a checkpoint
+taken at an optimizer-step boundary carrying a batch-size-independent `DataCursor`.
+Resuming on a batch index is the bug this replaces: halving the micro-batch replays half
+the consumed data while reporting exact continuation. Where no cursor is available,
+reject the recovery -- do not approximate it.
+
 Do not add TorchFT/Ray yet.
 
 Required test:

@@ -117,6 +117,11 @@ Then:
 
 - new ExperimentNode (only for alternatives being compared)
 - TrainingIntervention + InterventionApplication (for in-run scientific changes)
+
+Resume correctness (ADR-012) needs its own tests, and the decisive one is cheap: run N
+steps uninterrupted, then run the same configuration with an interruption and resume at
+a **different micro-batch size**, and assert both consumed the same samples in the same
+order. A batch-index cursor fails this immediately.
 - old node remains immutable
 - hypothesis/reason recorded
 

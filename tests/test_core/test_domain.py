@@ -38,6 +38,7 @@ from xaytune.core import (
     TrainingSpecSnapshot,
 )
 from xaytune.core.errors import InvalidTransitionError
+from xaytune.core.immutable import thaw
 
 
 def make_experiment(**overrides) -> Experiment:
@@ -142,6 +143,90 @@ class TestSerialization:
         assert restored == attempt
 
 
+class TestDeepImmutability:
+    """Frozen must mean frozen all the way down.
+
+    Pydantic's ``frozen=True`` only blocks attribute assignment. Container
+    fields stayed mutable and kept a reference to whatever the caller passed,
+    so a scientific record could be changed after construction from either
+    side -- which would make any fingerprint taken at construction a lie.
+    """
+
+    def test_caller_cannot_mutate_a_snapshot_through_a_retained_reference(self):
+        source = {"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}}
+        snapshot = TrainingSpecSnapshot(kind="sft", payload=source)
+
+        source["optimizer"]["lr"] = 7
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+    def test_nested_mapping_cannot_be_mutated(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"lr": 2e-5}})
+
+        with pytest.raises(TypeError):
+            snapshot.payload["optimizer"]["lr"] = 7
+        with pytest.raises(TypeError):
+            snapshot.payload["new_key"] = 1
+        with pytest.raises(TypeError):
+            snapshot.payload.update({"new_key": 1})
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+    def test_nested_sequence_cannot_be_mutated(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"betas": [0.9, 0.95]}})
+
+        # Lists become tuples on the way in.
+        assert snapshot.payload["optimizer"]["betas"] == (0.9, 0.95)
+        with pytest.raises(AttributeError):
+            snapshot.payload["optimizer"]["betas"].append(1.0)
+
+    def test_aggregate_id_lists_cannot_be_appended_to(self):
+        """An id list that accepts post-construction appends also skips validation."""
+        experiment = make_experiment()
+        with pytest.raises(AttributeError):
+            experiment.active_node_ids.append("node_bogus")
+
+        node = make_node()
+        with pytest.raises(AttributeError):
+            node.run_ids.append("run_bogus")
+
+    def test_metadata_cannot_be_mutated(self):
+        experiment = make_experiment(metadata={"owner": "team-a"})
+        with pytest.raises(TypeError):
+            experiment.metadata["injected"] = True
+
+        actor = Actor(type="human", id="alex", metadata={"team": "a"})
+        with pytest.raises(TypeError):
+            actor.metadata["team"] = "b"
+
+    def test_execution_override_values_cannot_be_mutated(self):
+        override = ExecutionOverride(
+            id="ovr-1",
+            kind="micro_batch_resize",
+            reason="oom",
+            values={"micro_batch_size": 2},
+        )
+        with pytest.raises(TypeError):
+            override.values["micro_batch_size"] = 8
+
+    def test_frozen_containers_still_round_trip_as_plain_json(self):
+        snapshot = TrainingSpecSnapshot(
+            kind="sft", payload={"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}}
+        )
+        payload = snapshot.model_dump_json()
+
+        assert '"betas":[0.9,0.95]' in payload
+        assert TrainingSpecSnapshot.model_validate_json(payload) == snapshot
+
+    def test_thaw_returns_a_mutable_copy_without_affecting_the_record(self):
+        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"lr": 2e-5}})
+
+        working = thaw(snapshot.payload)
+        working["optimizer"]["lr"] = 7
+
+        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+
+
 class TestImmutability:
     @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
     def test_status_cannot_be_assigned_directly(self, factory, model_type):
@@ -200,7 +285,7 @@ class TestNodeLineage:
         parent = make_node()
         child = make_node(parent_ids=[parent.id])
         assert not child.is_root
-        assert child.parent_ids == [parent.id]
+        assert child.parent_ids == (parent.id,)
 
     def test_node_supports_multiple_parents(self):
         first, second = make_node(), make_node()
@@ -300,7 +385,7 @@ class TestExecutionOverride:
         )
         attempt = make_attempt(execution_overrides=[override])
         restored = RunAttempt.model_validate_json(attempt.model_dump_json())
-        assert restored.execution_overrides[0].preserves == ["effective_batch_size"]
+        assert restored.execution_overrides[0].preserves == ("effective_batch_size",)
 
     def test_rejects_a_scientific_change_as_an_override_kind(self):
         """LR and optimizer changes are new nodes, not execution overrides."""

@@ -9,7 +9,6 @@ restores never create nodes (ADR-003); they create run attempts.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +21,7 @@ from xaytune.core.ids import (
     ExperimentNodeId,
     RunId,
 )
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, ControllerHostRef, DatasetRef, ModelRef
 from xaytune.core.state.machines import EXPERIMENT_MACHINE, NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
@@ -51,7 +51,7 @@ class TrainingSpecSnapshot(BaseModel):
     spec_version: str = "0"
     model: ModelRef | None = None
     dataset: DatasetRef | None = None
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class Experiment(BaseModel):
@@ -70,7 +70,7 @@ class Experiment(BaseModel):
     budget: BudgetSpec | None = None
 
     status: ExperimentStatus = ExperimentStatus.CREATED
-    active_node_ids: list[ExperimentNodeId] = Field(default_factory=list)
+    active_node_ids: tuple[ExperimentNodeId, ...] = Field(default_factory=tuple)
     best_node_id: ExperimentNodeId | None = None
 
     controller_host: ControllerHostRef
@@ -78,7 +78,7 @@ class Experiment(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     revision: int = 0
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
 
     def with_status(self, new_status: ExperimentStatus) -> Experiment:
         """Return a copy in *new_status*, with the revision bumped.
@@ -113,7 +113,7 @@ class ExperimentNode(BaseModel):
     id: ExperimentNodeId
     experiment_id: ExperimentId
 
-    parent_ids: list[ExperimentNodeId] = Field(default_factory=list)
+    parent_ids: tuple[ExperimentNodeId, ...] = Field(default_factory=tuple)
 
     hypothesis: str | None = None
     reason: str | None = None
@@ -123,9 +123,9 @@ class ExperimentNode(BaseModel):
 
     status: ExperimentNodeStatus = ExperimentNodeStatus.CREATED
 
-    run_ids: list[RunId] = Field(default_factory=list)
-    evaluation_ids: list[EvaluationId] = Field(default_factory=list)
-    decision_ids: list[DecisionId] = Field(default_factory=list)
+    run_ids: tuple[RunId, ...] = Field(default_factory=tuple)
+    evaluation_ids: tuple[EvaluationId, ...] = Field(default_factory=tuple)
+    decision_ids: tuple[DecisionId, ...] = Field(default_factory=tuple)
 
     created_by: Actor
     created_at: datetime = Field(default_factory=utc_now)

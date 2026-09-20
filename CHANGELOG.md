@@ -28,6 +28,11 @@ Two tests are recorded as strict `xfail` pending a product decision, not because
 - `constant` scheduler with `warmup_steps > 0` auto-upgrades to warmup behaviour, while `test_constant_ignores_warmup_steps` asserts warmup is ignored. Deciding for the implementation makes `constant_with_warmup` redundant; deciding for the test means a requested warmup is silently dropped.
 - `global_step` counts optimizer steps, while `test_gradient_accumulation_reduces_optimizer_steps` expects micro-steps. The rest of the loop agrees with the implementation, but `global_step` is user-visible in checkpoints and logs.
 
+### Changed
+
+- **`xaytune.core` domain records are now deeply immutable.** Pydantic's `frozen=True` blocks attribute assignment but not mutation of the containers behind it, so `snapshot.payload["optimizer"]["lr"] = 7` succeeded on a supposedly frozen scientific record, and the model kept a live reference to the caller's dict. Mappings now become `FrozenDict` and sequences become tuples at validation time, recursively; `thaw()` returns a mutable copy. Note id lists and `metadata` are now tuples and mappings rather than `list`/`dict`.
+- **The state machines cover failure and cancellation.** The first tables encoded only the transitions the architecture spec drew, which left real gaps: a node could not fail while `ACTIVE`, an attempt could not fail while `STARTING`, `CHECKPOINTING` or `RECOVERING`, and nothing could be cancelled before it started. Any non-terminal state can now reach `FAILED` or `CANCELLED`, and an attempt can be `PREEMPTED` from `QUEUED` onwards. `ExperimentNodeStatus` gains `CANCELLED`, which is distinct from `REJECTED` — the latter is a judgement on merit, reachable only from `DECIDING`.
+
 ### Notes
 
 - `mypy` is configured at `python_version = "3.12"` (was `3.10`); numpy's bundled stubs use 3.12-only syntax, and CI already runs mypy under 3.12. This means mypy no longer verifies 3.10 compatibility while `requires-python` remains `>=3.10`.

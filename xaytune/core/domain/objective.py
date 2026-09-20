@@ -45,7 +45,7 @@ class Objective(_Frozen):
 
     primary: ObjectiveMetric
     target: float | None = None
-    constraints: list[MetricConstraint] = Field(default_factory=list)
+    constraints: tuple[MetricConstraint, ...] = Field(default_factory=tuple)
 
 
 class BudgetSpec(_Frozen):

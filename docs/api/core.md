@@ -65,7 +65,16 @@ experiment = Experiment(
 )
 ```
 
-All aggregates are frozen. Status changes go through `with_status()`, which validates the transition and returns a new instance with the revision bumped:
+All aggregates are frozen, and frozen means frozen all the way down. Pydantic's `frozen=True` only blocks attribute assignment, so container fields would otherwise stay mutable and keep a reference to whatever the caller passed in:
+
+```python
+snapshot.payload["optimizer"]["lr"] = 7   # blocked: TypeError
+source_dict["optimizer"]["lr"] = 7        # does not reach the snapshot
+```
+
+Mappings become `FrozenDict` and sequences become tuples at validation time, recursively. The conversion copies, which is what severs the caller's reference. Both matter for identity: a fingerprint taken at construction has to keep describing the record's contents. Use `thaw()` when you need a mutable copy to build on.
+
+Status changes go through `with_status()`, which validates the transition and returns a new instance with the revision bumped:
 
 ```python
 from xaytune.core import ExperimentStatus
@@ -127,11 +136,15 @@ EXPERIMENT_MACHINE.can(ExperimentStatus.CREATED, ExperimentStatus.ACTIVE)  # Tru
 | Machine | States |
 |---------|--------|
 | `EXPERIMENT_MACHINE` | `CREATED`, `ACTIVE`, `PAUSED`, `SUCCEEDED`, `FAILED`, `CANCELLED`, `BUDGET_EXHAUSTED` |
-| `NODE_MACHINE` | `CREATED`, `PLANNED`, `READY`, `ACTIVE`, `EVALUATING`, `DECIDING`, `COMPLETED`, `REJECTED`, `FAILED` |
+| `NODE_MACHINE` | `CREATED`, `PLANNED`, `READY`, `ACTIVE`, `EVALUATING`, `DECIDING`, `COMPLETED`, `REJECTED`, `CANCELLED`, `FAILED` |
 | `RUN_MACHINE` | `CREATED`, `ACTIVE`, `SUCCEEDED`, `FAILED`, `CANCELLED` |
 | `ATTEMPT_MACHINE` | `CREATED`, `QUEUED`, `STARTING`, `RUNNING`, `CHECKPOINTING`, `RECOVERING`, `SUCCEEDED`, `FAILED`, `PREEMPTED`, `CANCELLED` |
 
-The tables encode exactly the transitions the architecture specification draws, and nothing beyond them. Where the specification is silent, the transition is rejected rather than quietly invented, so the gap surfaces as a loud error instead of undocumented behaviour.
+Two rules run through every table. **Any non-terminal state can reach `FAILED`**, because anything unfinished can break — a checkpoint write, a recovery attempt, a node mid-evaluation. **Any non-terminal state can reach `CANCELLED`**, because an operator can stop work at any point.
+
+`REJECTED` and `CANCELLED` are deliberately different outcomes for a node: rejected is a judgement on the candidate's merit, reached only from `DECIDING`, while cancelled means the work stopped before that judgement could be made.
+
+An attempt can be `PREEMPTED` from `QUEUED` onwards but not from `CREATED` — nothing has been submitted yet, so there are no resources to reclaim.
 
 ## Value objects
 

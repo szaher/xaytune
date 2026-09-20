@@ -19,8 +19,12 @@ from xaytune.core.state import (
     StateMachine,
 )
 
-# The edges drawn in the architecture specification, transcribed independently
-# of the implementation so that a change to either side shows up as a failure.
+# The agreed transition tables, transcribed independently of the implementation
+# so that a change to either side shows up as a failure.
+#
+# Two rules run through all of them: every non-terminal state can reach FAILED,
+# because anything unfinished can break; and every non-terminal state can reach
+# CANCELLED, because an operator can stop work at any point.
 EXPERIMENT_EDGES = {
     (ExperimentStatus.CREATED, ExperimentStatus.ACTIVE),
     (ExperimentStatus.CREATED, ExperimentStatus.CANCELLED),
@@ -34,7 +38,7 @@ EXPERIMENT_EDGES = {
     (ExperimentStatus.PAUSED, ExperimentStatus.FAILED),
 }
 
-NODE_EDGES = {
+_NODE_PROGRESS = [
     (ExperimentNodeStatus.CREATED, ExperimentNodeStatus.PLANNED),
     (ExperimentNodeStatus.PLANNED, ExperimentNodeStatus.READY),
     (ExperimentNodeStatus.READY, ExperimentNodeStatus.ACTIVE),
@@ -43,29 +47,64 @@ NODE_EDGES = {
     (ExperimentNodeStatus.DECIDING, ExperimentNodeStatus.ACTIVE),
     (ExperimentNodeStatus.DECIDING, ExperimentNodeStatus.COMPLETED),
     (ExperimentNodeStatus.DECIDING, ExperimentNodeStatus.REJECTED),
-    (ExperimentNodeStatus.DECIDING, ExperimentNodeStatus.FAILED),
+]
+_NODE_NON_TERMINAL = [
+    ExperimentNodeStatus.CREATED,
+    ExperimentNodeStatus.PLANNED,
+    ExperimentNodeStatus.READY,
+    ExperimentNodeStatus.ACTIVE,
+    ExperimentNodeStatus.EVALUATING,
+    ExperimentNodeStatus.DECIDING,
+]
+NODE_EDGES = set(_NODE_PROGRESS) | {
+    (state, outcome)
+    for state in _NODE_NON_TERMINAL
+    for outcome in (ExperimentNodeStatus.CANCELLED, ExperimentNodeStatus.FAILED)
 }
 
 RUN_EDGES = {
     (RunStatus.CREATED, RunStatus.ACTIVE),
+    (RunStatus.CREATED, RunStatus.CANCELLED),
+    (RunStatus.CREATED, RunStatus.FAILED),
     (RunStatus.ACTIVE, RunStatus.SUCCEEDED),
     (RunStatus.ACTIVE, RunStatus.FAILED),
     (RunStatus.ACTIVE, RunStatus.CANCELLED),
 }
 
-ATTEMPT_EDGES = {
+_ATTEMPT_PROGRESS = [
     (RunAttemptStatus.CREATED, RunAttemptStatus.QUEUED),
     (RunAttemptStatus.QUEUED, RunAttemptStatus.STARTING),
     (RunAttemptStatus.STARTING, RunAttemptStatus.RUNNING),
     (RunAttemptStatus.RUNNING, RunAttemptStatus.CHECKPOINTING),
     (RunAttemptStatus.RUNNING, RunAttemptStatus.RECOVERING),
     (RunAttemptStatus.RUNNING, RunAttemptStatus.SUCCEEDED),
-    (RunAttemptStatus.RUNNING, RunAttemptStatus.FAILED),
-    (RunAttemptStatus.RUNNING, RunAttemptStatus.PREEMPTED),
-    (RunAttemptStatus.RUNNING, RunAttemptStatus.CANCELLED),
     (RunAttemptStatus.CHECKPOINTING, RunAttemptStatus.RUNNING),
+    (RunAttemptStatus.CHECKPOINTING, RunAttemptStatus.RECOVERING),
     (RunAttemptStatus.RECOVERING, RunAttemptStatus.RUNNING),
-}
+]
+_ATTEMPT_NON_TERMINAL = [
+    RunAttemptStatus.CREATED,
+    RunAttemptStatus.QUEUED,
+    RunAttemptStatus.STARTING,
+    RunAttemptStatus.RUNNING,
+    RunAttemptStatus.CHECKPOINTING,
+    RunAttemptStatus.RECOVERING,
+]
+ATTEMPT_EDGES = (
+    set(_ATTEMPT_PROGRESS)
+    | {
+        (state, outcome)
+        for state in _ATTEMPT_NON_TERMINAL
+        for outcome in (RunAttemptStatus.CANCELLED, RunAttemptStatus.FAILED)
+    }
+    | {
+        # Preemption applies once the runtime knows about the workload, which is
+        # from QUEUED onwards -- a CREATED attempt has not been submitted.
+        (state, RunAttemptStatus.PREEMPTED)
+        for state in _ATTEMPT_NON_TERMINAL
+        if state is not RunAttemptStatus.CREATED
+    }
+)
 
 MACHINES = [
     pytest.param(EXPERIMENT_MACHINE, ExperimentStatus, EXPERIMENT_EDGES, id="experiment"),
@@ -125,6 +164,83 @@ class TestTransitionTables:
     @pytest.mark.parametrize(("machine", "status_enum", "edges"), MACHINES)
     def test_initial_state_is_not_terminal(self, machine, status_enum, edges):
         assert not machine.is_terminal(machine.initial)
+
+
+class TestFailureAndCancellationCoverage:
+    """The gaps that the spec-literal tables left open.
+
+    Each of these was rejected before: a node could not fail while ACTIVE, an
+    attempt could not fail while STARTING, CHECKPOINTING or RECOVERING, and
+    nothing could be cancelled before it started.
+    """
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            ExperimentNodeStatus.CREATED,
+            ExperimentNodeStatus.PLANNED,
+            ExperimentNodeStatus.READY,
+            ExperimentNodeStatus.ACTIVE,
+            ExperimentNodeStatus.EVALUATING,
+            ExperimentNodeStatus.DECIDING,
+        ],
+    )
+    def test_a_node_can_fail_or_be_cancelled_from_any_live_state(self, state):
+        NODE_MACHINE.validate(state, ExperimentNodeStatus.FAILED)
+        NODE_MACHINE.validate(state, ExperimentNodeStatus.CANCELLED)
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            RunAttemptStatus.CREATED,
+            RunAttemptStatus.QUEUED,
+            RunAttemptStatus.STARTING,
+            RunAttemptStatus.RUNNING,
+            RunAttemptStatus.CHECKPOINTING,
+            RunAttemptStatus.RECOVERING,
+        ],
+    )
+    def test_an_attempt_can_fail_or_be_cancelled_from_any_live_state(self, state):
+        ATTEMPT_MACHINE.validate(state, RunAttemptStatus.FAILED)
+        ATTEMPT_MACHINE.validate(state, RunAttemptStatus.CANCELLED)
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            RunAttemptStatus.QUEUED,
+            RunAttemptStatus.STARTING,
+            RunAttemptStatus.RUNNING,
+            RunAttemptStatus.CHECKPOINTING,
+            RunAttemptStatus.RECOVERING,
+        ],
+    )
+    def test_an_attempt_can_be_preempted_once_the_runtime_knows_about_it(self, state):
+        ATTEMPT_MACHINE.validate(state, RunAttemptStatus.PREEMPTED)
+
+    def test_a_created_attempt_cannot_be_preempted(self):
+        """Nothing has been submitted yet, so there is nothing to reclaim."""
+        with pytest.raises(InvalidTransitionError):
+            ATTEMPT_MACHINE.validate(RunAttemptStatus.CREATED, RunAttemptStatus.PREEMPTED)
+
+    def test_a_checkpoint_write_can_fail(self):
+        ATTEMPT_MACHINE.validate(RunAttemptStatus.CHECKPOINTING, RunAttemptStatus.FAILED)
+
+    def test_recovery_can_itself_fail(self):
+        ATTEMPT_MACHINE.validate(RunAttemptStatus.RECOVERING, RunAttemptStatus.FAILED)
+
+    def test_a_run_can_be_cancelled_before_it_starts(self):
+        RUN_MACHINE.validate(RunStatus.CREATED, RunStatus.CANCELLED)
+
+    def test_rejected_and_cancelled_are_distinct_outcomes(self):
+        """Rejected is a judgement on merit; cancelled is work stopped early."""
+        assert ExperimentNodeStatus.REJECTED is not ExperimentNodeStatus.CANCELLED
+        assert NODE_MACHINE.is_terminal(ExperimentNodeStatus.REJECTED)
+        assert NODE_MACHINE.is_terminal(ExperimentNodeStatus.CANCELLED)
+        # Only a decision can reject; anything live can be cancelled.
+        rejecting = [
+            s for s in ExperimentNodeStatus if NODE_MACHINE.can(s, ExperimentNodeStatus.REJECTED)
+        ]
+        assert rejecting == [ExperimentNodeStatus.DECIDING]
 
 
 class TestErrorMessage:

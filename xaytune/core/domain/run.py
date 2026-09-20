@@ -22,6 +22,7 @@ from xaytune.core.ids import (
     RunAttemptId,
     RunId,
 )
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import ArtifactRef, CheckpointRef, ResourceUsage, RuntimeRef
 from xaytune.core.state.machines import ATTEMPT_MACHINE, RUN_MACHINE
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
@@ -65,8 +66,8 @@ class ExecutionOverride(BaseModel):
     id: str
     kind: ExecutionOverrideKind
     reason: str
-    values: dict[str, Any] = Field(default_factory=dict)
-    preserves: list[str] = Field(default_factory=list)
+    values: FrozenDict = Field(default_factory=FrozenDict)
+    preserves: tuple[str, ...] = Field(default_factory=tuple)
     incident_id: IncidentId | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -86,7 +87,7 @@ class Run(BaseModel):
     training_fingerprint: str
     execution_plan_ref: str | None = None
 
-    attempt_ids: list[RunAttemptId] = Field(default_factory=list)
+    attempt_ids: tuple[RunAttemptId, ...] = Field(default_factory=tuple)
     final_attempt_id: RunAttemptId | None = None
 
     status: RunStatus = RunStatus.CREATED
@@ -130,12 +131,12 @@ class RunAttempt(BaseModel):
     runtime_ref: RuntimeRef | None = None
     execution_fingerprint: str | None = None
 
-    execution_overrides: list[ExecutionOverride] = Field(default_factory=list)
+    execution_overrides: tuple[ExecutionOverride, ...] = Field(default_factory=tuple)
 
     checkpoint_ref: CheckpointRef | None = None
-    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
+    artifact_refs: tuple[ArtifactRef, ...] = Field(default_factory=tuple)
 
-    incident_ids: list[IncidentId] = Field(default_factory=list)
+    incident_ids: tuple[IncidentId, ...] = Field(default_factory=tuple)
 
     resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
 

@@ -34,7 +34,12 @@ class ExperimentStatus(str, Enum):
 
 
 class ExperimentNodeStatus(str, Enum):
-    """Lifecycle of a scientific candidate."""
+    """Lifecycle of a scientific candidate.
+
+    ``REJECTED`` and ``CANCELLED`` are different outcomes: a candidate is
+    rejected on its merits by a decision, and cancelled when the work was
+    stopped before that judgement could be made.
+    """
 
     CREATED = "created"
     PLANNED = "planned"
@@ -44,6 +49,7 @@ class ExperimentNodeStatus(str, Enum):
     DECIDING = "deciding"
     COMPLETED = "completed"
     REJECTED = "rejected"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 

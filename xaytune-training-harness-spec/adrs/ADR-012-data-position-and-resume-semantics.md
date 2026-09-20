@@ -1,7 +1,11 @@
 # ADR-012 — Data position and resume semantics
 
 ## Status
-Proposed
+Accepted — 2026-09-21.
+
+Required before any adaptive-recovery work and before PR-005 freezes the
+checkpoint and event schemas — a resume position that is not in the schema
+cannot be added to it later without a migration.
 
 Required before PR-005 freezes persistence structures, and before any adaptive-recovery
 work. The OOM recovery path described in `18-mvp-reference-scenario.md` is not sound
@@ -79,7 +83,8 @@ and must not be treated as resumable into one another.
 
 ### 2. Checkpoints capture the whole resumable state
 
-A checkpoint that omits any of these cannot support `EXACT` resume:
+A checkpoint that omits any of these cannot support
+`state=FULL, data=EXACT` resume:
 
 ```text
 model state
@@ -112,8 +117,8 @@ A checkpoint taken mid-accumulation holds partial gradients that are not represe
 the optimizer state. Checkpoints are therefore taken only when the accumulation window
 is closed, and a checkpoint records the boundary it was taken at.
 
-Where a runtime cannot guarantee this, the checkpoint is marked as
-`OPTIMIZER_STEP_BOUNDARY = false` and is not eligible for `EXACT` resume.
+Where a runtime cannot guarantee this, the checkpoint records
+`boundary = MID_ACCUMULATION` and is not eligible for adaptive batch resize.
 
 ### 4. Checkpoints record applied interventions
 
@@ -125,20 +130,53 @@ applications already reflected in its state.
 Without this, the controller cannot tell whether an LR change is already baked into the
 restored optimizer state, and will either double-apply or silently drop it.
 
-### 5. Resume guarantees are declared, not assumed
+### 5. Resume guarantees are declared, not assumed — and they are not one axis
+
+An earlier draft made these a single ordered enum (`EXACT`,
+`OPTIMIZER_STEP_BOUNDARY`, `AT_LEAST_ONCE_DATA`, `EPOCH_BOUNDARY`,
+`MODEL_ONLY`). That is wrong, because the members are not comparable. A
+checkpoint can simultaneously be at an optimizer-step boundary *and* offer only
+at-least-once data, and `MODEL_ONLY` describes what state was captured rather
+than how data replays. Ordering them forces a real guarantee to be "downgraded"
+along a hierarchy that does not exist, and loses information in the process.
+
+They are three orthogonal dimensions:
 
 ```python
-class ResumeSemantics(str, Enum):
-    EXACT = "exact"
-    OPTIMIZER_STEP_BOUNDARY = "optimizer-step-boundary"
-    AT_LEAST_ONCE_DATA = "at-least-once-data"
-    EPOCH_BOUNDARY = "epoch-boundary"
-    MODEL_ONLY = "model-only"
+class StateRestore(str, Enum):
+    FULL = "full"                # model, optimizer, scheduler, scaler, RNG
+    MODEL_ONLY = "model-only"    # weights only; optimizer state is lost
+
+class DataResume(str, Enum):
+    EXACT = "exact"                      # next sample is N+1, nothing replayed
+    AT_LEAST_ONCE = "at-least-once"      # some samples replay
+    EPOCH_BOUNDARY = "epoch-boundary"    # restart from an epoch edge
+    NONE = "none"                        # data position not recovered
+
+class CheckpointBoundary(str, Enum):
+    OPTIMIZER_STEP = "optimizer-step"      # accumulation window closed
+    MID_ACCUMULATION = "mid-accumulation"  # partial gradients pending
 ```
 
-Every resume records which level it achieved, and the level becomes part of the run's
-provenance. A run resumed at `AT_LEAST_ONCE_DATA` has replayed some samples; that is
-often acceptable, but it must be stated rather than discovered.
+```python
+class ResumeGuarantee(FrozenDomainModel):
+    state: StateRestore
+    data: DataResume
+    boundary: CheckpointBoundary
+```
+
+Every resume records the guarantee it actually achieved, and it becomes part of
+the run's provenance. `(FULL, AT_LEAST_ONCE, OPTIMIZER_STEP)` is a real and
+common combination that the old single enum could not express: it is not
+`EXACT`, and calling it `AT_LEAST_ONCE_DATA` silently discarded the fact that
+the optimizer state survived intact.
+
+A run resumed with `data=AT_LEAST_ONCE` has replayed some samples. That is often
+acceptable — it must be stated rather than discovered.
+
+Adaptive batch resize (§6) requires `boundary=OPTIMIZER_STEP` **and**
+`data=EXACT`. Stating it as a conjunction of two independent conditions is
+exactly what the single-axis version could not do.
 
 ### 6. Adaptive batch resize requires a batch-size-independent cursor
 
@@ -212,7 +250,7 @@ provider-specific support. Absent it, those sources are ineligible for adaptive 
 
 ### Resume semantics and adaptive resize
 
-- **AC-16.** Given any resume, when it completes, then the achieved `ResumeSemantics`
+- **AC-16.** Given any resume, when it completes, then the achieved `ResumeGuarantee`
   level is recorded on the attempt and visible in provenance.
 - **AC-17.** Given a batch-size-changing recovery and a dataset with no
   batch-size-independent cursor, when recovery is planned, then it is **rejected** with

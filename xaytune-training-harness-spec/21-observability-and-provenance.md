@@ -98,7 +98,7 @@ xaytune.experiment_id
 xaytune.node_id
 xaytune.run_id
 xaytune.attempt_id
-xaytune.training_fingerprint
+xaytune.candidate_fingerprint
 xaytune.execution_fingerprint
 xaytune.compiler
 xaytune.runtime

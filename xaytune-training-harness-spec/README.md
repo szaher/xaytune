@@ -1,6 +1,8 @@
-# Xaytune 2.0 — Agent-Native Model Training Harness
+# Xaytune 2.0 — Agent-Native Experiment Control Plane
 
-This package is the implementation specification for evolving Xaytune from an opinionated model training/fine-tuning library into an **agent-native experiment control plane and model training harness**.
+This package is the implementation specification for evolving Xaytune from an opinionated model training/fine-tuning library into an **agent-native experiment control plane for model post-training and model adaptation**.
+
+"Training harness" remains a fair secondary description, but it is not the primary one: it invites the reading that Xaytune competes with the training runtime, when Xaytune's job is to decide *what to run and what to do about the result*, and to delegate execution to Ray, TorchFT, Training Hub or a local process.
 
 The design assumes the current Xaytune repository continues to exist and is evolved incrementally. Existing recipes, trainer loop, callbacks, checkpointing, evaluation, pipelines, logging backends, CLI, Studio, and plugin discovery are treated as assets to be refactored behind new control-plane boundaries.
 
@@ -96,7 +98,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
                          Ray Tune / Katib /
                               Optuna
                       │
-                TrainingSpec
+                CandidateSpec
                       │
               TrainerCompiler
         ┌─────────────┼──────────────┐
@@ -125,7 +127,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 - `02-architecture.md` — target architecture and boundaries
 - `03-domain-model.md` — Experiment, Node, Run, Attempt, Action, Incident, artifacts
 - `04-state-machines.md` — separate lifecycle state machines and transitions
-- `05-training-spec-and-compilation.md` — TrainingSpec, TrainerCompiler, TrainingExecutionSpec
+- `05-training-spec-and-compilation.md` — CandidateSpec/TrainingSpec ownership, TrainerCompiler, TrainingExecutionSpec
 - `06-runtime-and-controller-hosting.md` — RuntimeBackend, durable controller, submit/attach/wait
 - `07-persistence-and-events.md` — SQLite transaction model, outbox, revisions, reconciliation
 - `08-resilience-and-recovery.md` — incident detection, adaptive recovery, TorchFT/Ray integration
@@ -167,36 +169,38 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 
 ## Implementation order
 
-Do not begin feature implementation before the six foundation ADRs are accepted:
+The ADR gate is **per-ADR, not global** — an ADR must be settled before the work
+that depends on it, not before all work. See `15-implementation-plan.md`
+§Phase 0 for which ADRs are ratified, accepted, or still open, and what each
+still-open one blocks. **ADR-005 is the next one that must be accepted**, since
+persistence cannot start without it.
 
-1. experiment control plane and `TrainingExecutionSpec` boundary
-2. separate aggregate state machines
-3. scientific lineage vs execution lineage
-4. durable controller hosting and reconciliation
-5. transactional state/event persistence with outbox
-6. identity, fingerprints, seed/replicate/reuse semantics
-
-Then implement in this order:
+Implement in this order. This is the single authoritative sequence; the numbered
+phases in `15-implementation-plan.md` follow it:
 
 ```text
 domain + IDs
 → state machines
-→ SQLite repository / outbox
+→ SQLite repository / outbox / operation journal
 → event model
 → experiment graph
-→ TrainingSpec / compiler contracts
-→ LocalRuntime
+→ CandidateSpec / compiler contracts
+→ LocalRuntime (restart-safe)
 → current trainer as NativeCompiler
 → TRLCompiler
-→ evaluation
+→ durable evaluation lifecycle
 → action / policy / budget
-→ incidents and recovery
+→ incidents, recovery and interventions
 → rule-based planner
 → end-to-end MVP
 → LLM planner
 → Ray / TorchFT
 → Training Hub
 ```
+
+Note **action / policy / budget precedes incidents and recovery**. ADR-011 makes
+an intervention the outcome of an approved Action, so recovery cannot come
+first — it needs something to authorize it.
 
 ## Definition of success
 

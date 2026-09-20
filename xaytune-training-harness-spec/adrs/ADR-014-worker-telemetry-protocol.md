@@ -53,6 +53,44 @@ trustworthy — they skew, they jump, and under a distributed launcher there are
 several of them. Ordering, deduplication and gap detection all key on
 `(attempt_id, sequence)`.
 
+### 1a. Exactly one process assigns `sequence`
+
+A gapless per-attempt sequence and a multi-rank workload are in tension: if
+eight ranks each emit `sequence=15`, the key is not unique, and if they
+coordinate before every event, telemetry has put a distributed sequencer on the
+training hot path. Neither is acceptable, so the ownership is stated rather than
+left to the implementer.
+
+**One telemetry supervisor per attempt assigns the sequence.** In a distributed
+launcher that is the driver — rank 0 or the equivalent coordinator:
+
+```text
+rank workers          raw local signals (not WorkerEvents)
+      ↓
+telemetry supervisor  assigns attempt-scoped sequence, emits WorkerEvent
+      ↓
+controller            dedups on (attempt_id, sequence)
+```
+
+Only the supervisor emits canonical `WorkerEvent`s. Ranks report to it in
+whatever form the runtime finds convenient; that channel is **not** part of this
+protocol and runtimes may implement it differently.
+
+Consequences worth stating plainly:
+
+- Per-rank information that matters must be carried in the payload — a rank
+  identifier on a metric, for example — not inferred from who emitted the event.
+- Losing the supervisor is losing telemetry for the attempt. That is the correct
+  blast radius: the controller detects the gap and reconciles from
+  `get_status()`, which is the same path a controller restart takes.
+- `sequence` says nothing about wall-clock simultaneity across ranks, and no
+  consumer may assume it does.
+
+The rejected alternative was per-producer sequences
+(`producer_id` + `producer_sequence`), which pushes ordering into every consumer
+and gives the controller no total order for the attempt — which is the one thing
+it actually needs.
+
 ### 2. Event families
 
 ```text
@@ -64,7 +102,7 @@ artifact      ArtifactProduced
 ```
 
 `CheckpointCommitted` is the load-bearing one. It must carry the full
-`DataCursor` and `ResumeSemantics` of ADR-012, because it is the only point at
+`DataCursor` and `ResumeGuarantee` of ADR-012, because it is the only point at
 which the controller learns a resumable position exists. A checkpoint the
 controller does not know about cannot be resumed from, however valid it is on
 disk.
@@ -141,9 +179,11 @@ orders them through the RunAttempt state machine.
 
 1. Every `WorkerEvent` carries `protocol_version`, `event_id`, `run_id`,
    `attempt_id`, `sequence` and `type`.
+1a. Exactly one telemetry supervisor per attempt assigns `sequence`; individual
+   ranks never emit `WorkerEvent`s directly.
 2. `sequence` is monotonic and gapless per attempt, starting at 0.
 3. Duplicate `(attempt_id, sequence)` is a no-op in every handler.
-4. `CheckpointCommitted` carries a complete `DataCursor` and `ResumeSemantics`
+4. `CheckpointCommitted` carries a complete `DataCursor` and `ResumeGuarantee`
    per ADR-012.
 5. `watch(cursor=N)` yields events with `sequence > N`, or the runtime declares
    `supports_event_replay: false`.

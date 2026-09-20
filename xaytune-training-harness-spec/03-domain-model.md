@@ -113,7 +113,7 @@ class Run(BaseModel):
     seed: int | None
     replicate: int | None
 
-    training_fingerprint: str
+    candidate_fingerprint: str
     execution_plan_ref: str | None
 
     attempt_ids: list[RunAttemptId]
@@ -269,11 +269,26 @@ class RunRealization(BaseModel):
     initial_spec: CandidateSpecSnapshot
 
     scheduled_interventions: list[ScheduledInterventionRef]
-    applied_interventions: list[TrainingInterventionRef]
+    applied_interventions: list[InterventionApplicationRef]
     execution_overrides: list[ExecutionOverrideRef]
 
     final_effective_state: EffectiveTrainingState
 ```
+
+`applied_interventions` holds **applications, not interventions**, and the
+distinction is load-bearing. One intervention can be applied more than once —
+apply, roll back to an earlier checkpoint, apply again — and ADR-011 hashes the
+ordered `InterventionApplication` records into `RunRealizationFingerprint`. With
+only intervention references these two histories are indistinguishable:
+
+```text
+intervention I, application A                          -> one trajectory
+intervention I, application A, rollback, application B -> a different trajectory
+```
+
+They are different realizations of the same candidate and must not collide.
+Each `InterventionApplication` records when it was applied, at which step and
+checkpoint, and by which `Action`.
 
 **`RunRealization` is a projection, never a second source of truth.** Every field is
 derived from the durable event log, which stays authoritative. It must be recomputable

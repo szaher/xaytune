@@ -100,7 +100,7 @@ class CheckpointManifest(BaseModel):
 
     files: list[CheckpointFile]
 
-    training_fingerprint: str
+    candidate_fingerprint: str
     execution_fingerprint: str
 
     compatibility_key: str
@@ -130,7 +130,7 @@ RNG state (Python, NumPy, Torch CPU, Torch accelerator) -- captured, not re-seed
 training position + applied interventions (ADR-011)
 ```
 
-A checkpoint missing any of these cannot claim `ResumeSemantics.EXACT`, and one taken
+A checkpoint missing any of these cannot claim `state=FULL, data=EXACT`, and one taken
 mid-accumulation is not eligible for it at all. Checkpoints record the boundary and the
 training position they were taken at, because the recovery coordinator needs the
 restored position to decide intervention re-application.

@@ -1,7 +1,11 @@
 # ADR-013 — External operation identity, replay, and cancellation intent
 
 ## Status
-Proposed
+Accepted — 2026-09-21.
+
+Required before the first runtime implementation, not after — an unreconciled
+submission is an orphaned GPU job, and the journal must exist before anything
+can submit.
 
 Required before PR-005. The persistence structures it freezes must carry the operation
 journal described here, and must not conflate it with the outbox.

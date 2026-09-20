@@ -54,13 +54,48 @@ class EvaluationAttempt(AggregateModel):
     status: EvaluationAttemptStatus
 ```
 
-The state machines are **the same shapes as `Run` and `RunAttempt`**, including
-the ADR-002 rule that every non-terminal state reaches `FAILED` and
-`CANCELLED`, and that `PREEMPTED` applies from `QUEUED` onwards.
+The state machines follow the **same lifecycle principles** as `Run` and
+`RunAttempt` — not the same tables. Evaluation produces no checkpoints, so it
+has no `CHECKPOINTING` state and nothing to recover into, so no `RECOVERING`
+either. A failed evaluation is retried as a new attempt.
 
-Reusing the shape rather than inventing a parallel vocabulary means the
-controller's reconciliation logic, the operation journal of ADR-013, and the
-telemetry protocol of ADR-014 all apply unchanged.
+```text
+EvaluationRun
+
+CREATED ──→ ACTIVE ──→ SUCCEEDED
+  every non-terminal state also ──→ FAILED, CANCELLED
+```
+
+| From | To |
+|---|---|
+| CREATED | ACTIVE, CANCELLED, FAILED |
+| ACTIVE | SUCCEEDED, FAILED, CANCELLED |
+| SUCCEEDED, FAILED, CANCELLED | *(terminal)* |
+
+```text
+EvaluationAttempt
+
+CREATED ──→ QUEUED ──→ STARTING ──→ RUNNING ──→ SUCCEEDED
+  every non-terminal state also ──→ FAILED, CANCELLED
+  QUEUED onwards also          ──→ PREEMPTED
+```
+
+| From | To |
+|---|---|
+| CREATED | QUEUED, CANCELLED, FAILED |
+| QUEUED | STARTING, CANCELLED, FAILED, PREEMPTED |
+| STARTING | RUNNING, CANCELLED, FAILED, PREEMPTED |
+| RUNNING | SUCCEEDED, CANCELLED, FAILED, PREEMPTED |
+| SUCCEEDED, FAILED, PREEMPTED, CANCELLED | *(terminal)* |
+
+The ADR-002 rules that do carry over: every non-terminal state reaches `FAILED`
+and `CANCELLED`, and `PREEMPTED` applies from `QUEUED` onwards because that is
+when the workload becomes known to a scheduler.
+
+Following the principles rather than copying the table means the controller's
+reconciliation logic, the operation journal of ADR-013 and the telemetry
+protocol of ADR-014 all still apply unchanged, without evaluation carrying two
+states it can never enter.
 
 ### 2. Not a generic `Execution` abstraction — yet
 
@@ -77,21 +112,42 @@ Revisit when a third workload type appears — a data-preparation job or a rewar
 model scoring pass are the likely candidates. Recorded in
 `22-open-questions.md`.
 
-### 3. Evaluation results are cached on fingerprint, not recomputed
+### 3. Reuse depends on whether the evaluator is deterministic
 
-```text
-(subject artifact digest, EvaluationFingerprint) ──→ EvaluationResult
+The tempting rule — same artifact plus same fingerprint means reuse the result —
+is wrong, because not every evaluator is deterministic. `EvaluationSpec` carries
+a `seed`; LLM-judge evaluators carry `temperature`, `top_p` and a provider; and
+agent or environment evaluations are stochastic by construction. A hosted model
+behind an API does not guarantee reproducible output even at temperature zero,
+and may change underneath a fixed model name.
+
+So the evaluator declares its own reuse class as a capability:
+
+```python
+class EvaluatorDeterminism(StrEnum):
+    DETERMINISTIC = "deterministic"   # same inputs, same output, always
+    SEEDED = "seeded"                 # reproducible given the same seed, locally
+    STOCHASTIC = "stochastic"         # each run is a sample
 ```
 
-Evaluation is deterministic given a subject and a spec, which is exactly what
-makes it independent per ADR-007. So a completed result is reusable, and
-re-running the same evaluator on the same artifact is waste — the one form of
-reuse that is unambiguously safe, because unlike training there is no seed and
-no stochastic trajectory.
+| Class | Reuse rule |
+|---|---|
+| `DETERMINISTIC` | `(artifact digest, EvaluationFingerprint)` may be reused freely |
+| `SEEDED` | Reusable only when the seed is part of the fingerprint **and** execution is local; a hosted provider is never `SEEDED` |
+| `STOCHASTIC` | A completed run is **a historical sample, not the answer.** Reuse only when `EvaluationReusePolicy` explicitly permits memoizing a sample |
 
-The cache key requires a **terminal** `EvaluationRun`. An in-flight run must
-not be matched against, for the same reason a `RunRealizationFingerprint` is
-provisional until terminal (ADR-011).
+The failure this prevents is quiet and statistical: asking for another sample of
+a stochastic evaluation and silently receiving the previous one. That does not
+error — it just makes a variance estimate wrong, and a planner comparing
+candidates on noisy metrics will draw a confident conclusion from one sample it
+believes is several.
+
+Replicated evaluation follows from this: replicate identity belongs to
+`EvaluationRun`, exactly as seed and replicate belong to `Run`.
+
+The cache key additionally requires a **terminal** `EvaluationRun`. An in-flight
+run must not be matched against, for the same reason a
+`RunRealizationFingerprint` is provisional until terminal (ADR-011).
 
 ### 4. Evaluation submission uses the operation journal
 
@@ -121,15 +177,19 @@ the silent-stall failure into a detected one.
 
 ## Acceptance criteria
 
-1. `EvaluationRun` and `EvaluationAttempt` exist with state machines matching
-   `Run` and `RunAttempt`, including all `FAILED`/`CANCELLED` edges.
+1. `EvaluationRun` and `EvaluationAttempt` exist with the transition tables
+   above, including all `FAILED`/`CANCELLED` edges, and with **no**
+   `CHECKPOINTING` or `RECOVERING` state.
 2. `EvaluationAttemptStatus` includes `PREEMPTED`, reachable from `QUEUED`
    onwards.
 3. `ExperimentNode.EVALUATING` implies a non-terminal `EvaluationRun`; the
    absence of one raises an incident.
-4. A terminal `EvaluationResult` is reused when
-   `(artifact digest, EvaluationFingerprint)` matches; in-flight runs are never
-   matched.
+4. Every evaluator declares an `EvaluatorDeterminism` class. A `DETERMINISTIC`
+   result is reused on `(artifact digest, EvaluationFingerprint)`; a
+   `STOCHASTIC` one is reused only where `EvaluationReusePolicy` permits it;
+   in-flight runs are never matched.
+4a. Requesting an additional replicate of a stochastic evaluation never returns
+   a cached sample.
 5. Evaluation submission is idempotent through `submit_or_get` (ADR-013).
 6. A controller restart mid-evaluation recovers the attempt rather than
    orphaning it or resubmitting it.

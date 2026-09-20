@@ -48,5 +48,5 @@
     "precision": "bf16",
     "distributed_strategy": "fsdp"
   },
-  "training_fingerprint": "sha256:replace-me"
+  "candidate_fingerprint": "sha256:replace-me"
 }

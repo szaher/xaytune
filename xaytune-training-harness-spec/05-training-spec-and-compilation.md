@@ -16,7 +16,7 @@ This creates two possible execution owners.
 Correct architecture:
 
 ```text
-TrainingSpec
+CandidateSpec
    ↓
 TrainerCompiler.compile()
    ↓
@@ -24,6 +24,9 @@ TrainingExecutionSpec
    ↓
 RuntimeBackend.submit()
 ```
+
+(`02-architecture.md` shows the same seam with the node and capability
+resolution around it. The input is the whole `CandidateSpec` — see §3.)
 
 The trainer compiler translates intent.
 
@@ -35,13 +38,13 @@ The runtime executes.
 
 It must be immutable after a node becomes active.
 
+`TrainingSpec` is **one component of a `CandidateSpec`**, not the whole scientific
+proposition. It carries the training program and nothing else:
+
 ```python
 class TrainingSpec(BaseModel):
     api_version: str = "xaytune.ai/v1alpha1"
     kind: TrainingKind
-
-    model: ModelRef
-    dataset: DatasetRef
 
     algorithm: AlgorithmSpec
     adapter: AdapterSpec | None
@@ -50,9 +53,28 @@ class TrainingSpec(BaseModel):
     precision: PrecisionSpec
     checkpoint: CheckpointIntent
 
-    seed: int | None
-
     metadata: dict[str, Any]
+```
+
+Three fields that used to live here have moved, and the moves are the substance
+of ADR-011:
+
+| Field | Now lives on | Why |
+|---|---|---|
+| `model` | `CandidateSpec.model` (`ModelSpec`) | The model is part of the scientific proposition, not the training program. A GRPO candidate also has `reward` and `environment` at the same level |
+| `dataset` | `CandidateSpec.data` (`DataSpec`) | Same |
+| `seed` | `Run.seed` | **Seed belongs to the realization, not the candidate.** Two replicates differing only by seed are the same scientific candidate run twice; folding seed into candidate identity would make the replicate concept meaningless (ADR-006 §7) |
+
+Ownership, in full:
+
+```text
+CandidateSpec                     Run
+├── model:       ModelSpec        ├── seed
+├── data:        DataSpec         └── replicate
+├── training:    TrainingSpec
+├── reward:      RewardSpec?
+├── environment: EnvironmentSpec?
+└── schedule:    TrainingSchedule?
 ```
 
 Initial `TrainingKind`:
@@ -70,14 +92,25 @@ class TrainerCompiler(Protocol):
 
     def capabilities(self) -> CapabilityDocument: ...
 
-    def supports(self, spec: TrainingSpec) -> SupportResult: ...
+    def supports(self, candidate: CandidateSpec) -> SupportResult: ...
 
     def compile(
         self,
-        spec: TrainingSpec,
+        candidate: CandidateSpec,
         context: CompilationContext,
     ) -> TrainingExecutionSpec: ...
 ```
+
+**The compiler takes the whole `CandidateSpec`, not just `TrainingSpec`.** A
+compiler for SFT could work from optimizer hyperparameters alone, but one for
+GRPO or agent training cannot: it needs the reward definition, the environment,
+and any pre-registered schedule in order to emit a runnable plan. Passing only
+the training program would force every RL compiler to reach around the
+interface for the rest.
+
+`supports()` takes the candidate for the same reason — whether a compiler can
+handle a workload depends on its reward and environment, not only its
+algorithm.
 
 Compilation must be deterministic for the same inputs.
 
@@ -121,8 +154,14 @@ class TrainingExecutionSpec(BaseModel):
 
     required_capabilities: CapabilityRequirements
 
-    training_fingerprint: str
+    candidate_fingerprint: str
 ```
+
+The plan carries `candidate_fingerprint`, **not** a realization fingerprint.
+At compile time no trajectory exists yet: the run has not started, no
+intervention has been applied, and `RunRealizationFingerprint` is provisional
+until the run reaches a terminal state (ADR-011). The execution plan can only
+record which candidate it was compiled from.
 
 ## 5. EntrypointSpec
 

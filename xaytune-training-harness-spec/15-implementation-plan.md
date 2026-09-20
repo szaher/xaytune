@@ -37,46 +37,79 @@ I  LLM planner
 J  Ray / TorchFT / Training Hub
 ```
 
-The numbered phases below map onto these bands. Where they disagree, the bands
-are authoritative: the numbering predates ADR-011 and ADR-013.
+The numbered phases below implement these bands. **There is one execution
+order** — the phases were reordered to match, rather than left disagreeing with
+a note about which wins:
+
+| Band | Phase |
+|---|---|
+| A domain contract hardening | 0, 1 |
+| B transactional persistence | 1 |
+| C compile boundary, runtime, reconciliation | 2 |
+| D durable evaluation | 3 |
+| E Action / Policy / Budget | 4 |
+| F checkpoint, recovery, interventions | 5 |
+| G planner and branching | 6 |
+| H daemon, kill/restart MVP | 6 |
+| I LLM planner | 7 |
+| J Ray / TorchFT / Training Hub | 8, 9 |
 
 ## Phase 0 — Architecture hardening
 
-No feature implementation before these ADRs are accepted.
+The gate is **per-ADR, not global**: an ADR must be settled before work that
+depends on its unresolved semantics, not before all work.
 
-### ADR set
+A blanket "no implementation until every ADR is accepted" was the original
+wording and it does not survive contact with the repository — `xaytune/core/`
+already exists on `main`. An implementation contract that forbids what has
+already shipped stops a coding agent for no reason.
 
-1. experiment control plane / compile-execute boundary
-2. aggregate/state-machine separation
-3. scientific vs execution lineage
-4. durable controller hosting
-5. transactional state/event/outbox persistence
-6. identity/fingerprint/reuse semantics
+### Ratified by merged implementation
 
-Plus the six written since, all of which gate PR-005:
+These are settled by working, tested code on `main`. Their acceptance is a
+matter of record rather than of review:
 
-7. ADR-011 — candidates, interventions, overrides *(Accepted)*
-8. ADR-012 — data position and resume semantics *(Accepted)*
-9. ADR-013 — operation identity and cancellation *(Accepted)*
-10. ADR-014 — worker telemetry protocol *(Accepted)*
-11. ADR-015 — durable evaluation lifecycle *(Accepted)*
-12. ADR-016 — specs versus implementations *(Accepted)*
+| ADR | Ratified by |
+|---|---|
+| ADR-002 — aggregate/state-machine separation | `xaytune/core/state/machines.py`, transition tables verified equal to `04-state-machines.md` |
+| ADR-010 — core dependency boundary | `xaytune/core/` imports on a bare interpreter with only pydantic and pyyaml |
 
-Exit criteria:
+### Accepted by decision
 
-- all ADRs accepted
+| ADR | Gates |
+|---|---|
+| ADR-011 — candidates, interventions, overrides | PR-005 event schema; supersedes ADR-003's two-level lineage and extends ADR-006 |
+| ADR-012 — data position and resume semantics | PR-005 checkpoint schema; all adaptive recovery |
+| ADR-013 — operation identity and cancellation | the first runtime implementation |
+| ADR-014 — worker telemetry protocol | `RuntimeBackend.watch()`; PR-005 event schema |
+| ADR-015 — durable evaluation lifecycle | PR-005 evaluation tables |
+| ADR-016 — specs versus implementations | PR-005 experiment record |
+
+### Still Proposed, and what each actually blocks
+
+These remain `Proposed`. Each names the work it gates, so nothing is blocked
+that does not depend on it:
+
+| ADR | Blocks |
+|---|---|
+| ADR-001 — experiment control plane | nothing yet; it is the premise the rest assumes and is ratified in effect by ADR-011's acceptance |
+| ADR-003 — scientific vs execution lineage | superseded in substance by ADR-011; retained for its history |
+| ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
+| ADR-005 — transactional persistence | band B — **must be accepted before PR-005** |
+| ADR-006 — fingerprints and reuse | extended by ADR-011; the reuse-policy half is still open and blocks band G (planner reuse decisions) |
+| ADR-007 — evaluation independence | extended by ADR-015; blocks band D |
+| ADR-008 — versioned plugin ABI | blocks band C (compiler/runtime plugin loading) |
+| ADR-009 — checkpoint layers | blocks band F |
+
+**ADR-005 is the live one.** It is the next ADR that must be accepted, because
+band B cannot start without it.
+
+Exit criteria, per band rather than globally:
+
+- every ADR listed as gating a band is accepted before that band starts
 - module ownership agreed
-- core dependency boundary agreed
-- first 12 PRs updated to match ADRs
-
-> **This gate is currently inconsistent with the repository and needs a
-> decision.** ADR-001…010 are still `Status: Proposed`, but the implementations
-> of ADR-002 (state machines) and ADR-010 (core dependency boundary) are merged
-> on `main` and under test. An agent reading this section literally will stop
-> before Phase 1, having been told a gate is closed that the repository has
-> already walked through. Either accept the ADRs whose implementations have
-> landed, or restate what Phase 0 actually requires. Tracked in
-> `22-open-questions.md`.
+- core dependency boundary agreed *(done)*
+- the PR list for a band is updated to match its ADRs before the band starts
 
 ---
 
@@ -223,7 +256,45 @@ Phase exit:
 
 ---
 
-## Phase 4 — Resilience
+## Phase 4 — Actions, policy, budget
+
+> **Reordered.** Resilience was Phase 4 and the Action substrate Phase 5. ADR-011
+> makes a `TrainingIntervention` the outcome of an **approved Action**, so an OOM
+> that reduces micro-batch size is an operational action that still needs
+> deterministic authorization. Recovery cannot precede the thing that authorizes
+> it. The PR numbers below keep their original identities so cross-references
+> elsewhere still resolve; only the phase order changed.
+
+
+### PR-022 — typed actions
+
+### PR-023 — PolicyEngine
+
+### PR-024 — RuleBasedPlanner
+
+Rules:
+
+- objective reached → stop
+- plateau → propose evaluation/stop
+- OOM → recovery path
+- failed constraint → reject candidate
+
+### PR-025 — experiment branching
+
+An alternative candidate creates a new node; an in-run scientific change records a
+`TrainingIntervention` (ADR-011).
+
+### PR-026 — end-to-end MVP test
+
+Reference scenario in `18-mvp-reference-scenario.md`.
+
+Phase exit:
+
+- full adaptive experiment works locally without LLM
+
+---
+
+## Phase 5 — Resilience
 
 ### PR-017 — incident model and detectors
 
@@ -258,36 +329,6 @@ Phase exit:
 
 - injected OOM recovers automatically
 - scientific vs operational lineage is correct
-
----
-
-## Phase 5 — Planner, actions, policy
-
-### PR-022 — typed actions
-
-### PR-023 — PolicyEngine
-
-### PR-024 — RuleBasedPlanner
-
-Rules:
-
-- objective reached → stop
-- plateau → propose evaluation/stop
-- OOM → recovery path
-- failed constraint → reject candidate
-
-### PR-025 — experiment branching
-
-An alternative candidate creates a new node; an in-run scientific change records a
-`TrainingIntervention` (ADR-011).
-
-### PR-026 — end-to-end MVP test
-
-Reference scenario in `18-mvp-reference-scenario.md`.
-
-Phase exit:
-
-- full adaptive experiment works locally without LLM
 
 ---
 

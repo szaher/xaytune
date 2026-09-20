@@ -2,9 +2,13 @@
 
 ## 1. Product statement
 
-Xaytune is an **agent-native model training harness** and **experiment control plane**.
+Xaytune is an **agent-native experiment control plane for model post-training and model adaptation**.
 
-It governs model training and post-training experiments across trainer implementations and execution runtimes.
+It governs post-training and adaptation experiments across trainer implementations and execution runtimes: it decides what to run, what to do about the result, and keeps the record — it does not execute the training itself.
+
+"Training harness" is a fair secondary description and appears in this package's name for historical reasons. It is not the primary positioning, because it suggests competing with the training runtime rather than directing it.
+
+The boundary is **experiment topology, not GPU count**. Xaytune may direct very large distributed jobs; it is not the runtime responsible for executing a single months-long frontier pretraining run.
 
 It does not replace the trainer or runtime.
 
@@ -98,7 +102,9 @@ These are architectural invariants. PRs violating them require an ADR.
 
 ### Invariant A — compile vs execute
 
-Trainer integrations compile `TrainingSpec` into `TrainingExecutionSpec`.
+Trainer integrations compile a `CandidateSpec` into a `TrainingExecutionSpec`. The
+whole candidate is passed, not just its `TrainingSpec`: a GRPO or agent compiler
+needs the reward and environment to emit a runnable plan.
 
 Runtime integrations execute `TrainingExecutionSpec`.
 

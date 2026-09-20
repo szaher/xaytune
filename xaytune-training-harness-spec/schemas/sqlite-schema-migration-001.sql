@@ -36,7 +36,7 @@ CREATE TABLE experiment_nodes (
   experiment_id TEXT NOT NULL REFERENCES experiments(id),
   status TEXT NOT NULL,
   revision INTEGER NOT NULL,
-  training_fingerprint TEXT NOT NULL,
+  candidate_fingerprint TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

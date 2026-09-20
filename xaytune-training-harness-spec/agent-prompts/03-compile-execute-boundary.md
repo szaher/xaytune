@@ -2,7 +2,9 @@
 
 Implement:
 
-- TrainingSpec base and SFT model
+- CandidateSpec, with TrainingSpec as its training component, and the SFT model
+  (TrainingSpec holds the training program only -- model and data are siblings of
+  it on CandidateSpec, and seed belongs to Run)
 - CandidateFingerprint and RunRealizationFingerprint (ADR-011; note seed belongs to
   the realization, not the candidate)
 - TrainerCompiler protocol
@@ -24,7 +26,7 @@ Rules:
 Add a single integration test:
 
 ```text
-SFT TrainingSpec
+SFT CandidateSpec
 → NativeCompiler
 → TrainingExecutionSpec
 → LocalRuntime

@@ -88,7 +88,7 @@ class CapabilityRequirements(BaseModel):
 
 Inputs:
 
-- TrainingSpec
+- CandidateSpec
 - TrainerCompiler capabilities
 - RuntimeBackend capabilities
 - ResilienceProvider capabilities

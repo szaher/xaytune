@@ -90,7 +90,7 @@ RunAttempt attempt_A1_1
 ### Step B — compile
 
 ```text
-SFT TrainingSpec
+SFT CandidateSpec
   ↓
 TRLCompiler or NativeCompiler
   ↓
@@ -123,7 +123,7 @@ Xaytune:
 8. attempt_A1_1 ends failed/recoverable
 9. creates attempt_A1_2
 10. restores checkpoint, resuming at the next unconsumed sample
-11. resumes, recording the achieved `ResumeSemantics` level
+11. resumes, recording the achieved `ResumeGuarantee`
 
 No new ExperimentNode.
 

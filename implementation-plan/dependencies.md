@@ -2,6 +2,20 @@
 
 Last updated: 2026-06-03 14:00
 
+> **Status: full historical dependency graph. Do not use it for current task
+> selection.**
+>
+> Most nodes below are completed tasks, and the graph still draws edges *into*
+> them — so an entry like `TASK-007 blocked-by TASK-006` reads as a blocker when
+> TASK-006 is long since done. Among the six live tasks only one edge survives:
+>
+> ```text
+> TASK-007 ──→ TASK-009
+> TASK-008, TASK-014, TASK-015, TASK-029 are independent
+> ```
+>
+> That chain is in `README.md` and `backlog.md`. Use it instead of this file.
+
 ## Task Dependency Graph
 
 ```

@@ -69,6 +69,14 @@ class Trainer:
         self._is_ds = self._is_deepspeed_engine(model)
 
         if self._is_ds:
+            if optimizer is not None:
+                raise ValueError(
+                    "An optimizer cannot be supplied to train() for an already "
+                    "initialized DeepSpeed engine: the engine owns stepping, so "
+                    "a trainer-side optimizer would never be stepped. Configure "
+                    "it in the DeepSpeed config, or pass it to "
+                    "deepspeed.initialize() so the engine takes ownership."
+                )
             optimizer = None
         elif optimizer is None:
             optimizer = torch.optim.AdamW(
@@ -145,13 +153,17 @@ class Trainer:
                         torch.load(opt_path, weights_only=True, map_location="cpu")
                     )
                 else:
-                    # DeepSpeed owns the optimizer, so there is nothing to
-                    # restore here; its state comes back through the engine's
-                    # own checkpoint API. Say so rather than resume silently
-                    # from a fresh optimizer.
+                    # There is no trainer-side optimizer to restore into on the
+                    # DeepSpeed path.  DeepSpeed's own engine.load_checkpoint()
+                    # would be the route, but nothing here calls it -- so this
+                    # resume genuinely loses optimizer state rather than
+                    # recovering it elsewhere.  Say that, rather than implying a
+                    # restore that does not happen.  Tracked by TASK-029.
                     logger.warning(
-                        "Skipping optimizer state restore from %s: DeepSpeed manages "
-                        "optimizer state through its own checkpoint API.",
+                        "Skipping optimizer state restore from %s: the DeepSpeed "
+                        "engine owns the optimizer and engine.load_checkpoint() is "
+                        "not wired up, so optimizer state is NOT restored. Training "
+                        "will continue from a fresh optimizer state.",
                         opt_path,
                     )
             scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"

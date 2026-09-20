@@ -78,12 +78,17 @@ class TestDeepSpeedOptimizerSkip:
 
 
 class TestDeepSpeedResume:
-    def test_resume_does_not_crash_when_deepspeed_owns_the_optimizer(self, tmp_path, caplog):
+    def test_deepspeed_skips_trainer_optimizer_restore(self, tmp_path, caplog):
         """The DS path sets optimizer to None; restoring state must not crash.
 
         Regression: train() called optimizer.load_state_dict() unguarded while
         the adjacent scaler and scheduler branches both checked for None, so
         DeepSpeed + resume_checkpoint_dir raised AttributeError.
+
+        Named for what it proves. The skip is real and does not crash; it is
+        *not* evidence that the state is restored elsewhere. Nothing calls
+        engine.load_checkpoint(), so this resume loses optimizer state. The
+        warning must say so. Tracked by TASK-029.
         """
         config = TrainerConfig(num_epochs=1, max_steps=1)
         trainer = Trainer(config=config)
@@ -110,8 +115,10 @@ class TestDeepSpeedResume:
 
         assert state.global_step == 1
         assert trainer._optimizer is None
-        # The skip is reported rather than silently resuming from a fresh optimizer.
-        assert any("DeepSpeed manages optimizer state" in r.message for r in caplog.records)
+        # The warning names the actual consequence -- state is lost, not relocated.
+        message = next(r.message for r in caplog.records if "Skipping optimizer state" in r.message)
+        assert "is NOT restored" in message
+        assert "load_checkpoint" in message
 
     def test_non_deepspeed_resume_restores_optimizer_state(self, tmp_path):
         config = TrainerConfig(num_epochs=1, max_steps=1)
@@ -234,8 +241,12 @@ class TestDeepSpeedLossValue:
         assert state.global_step == 2
 
 
-class TestDeepSpeedSchedulerSkip:
-    """A DeepSpeed run supplies no scheduler, and none may be built for it.
+class TestDeepSpeedOptimizerAndSchedulerOwnership:
+    """Under DeepSpeed the trainer owns neither the optimizer nor the schedule.
+
+    So it builds neither, and refuses either if one is supplied -- accepting an
+    object it will never step is how a caller ends up believing in semantics
+    that are not true.
 
     Every production entrypoint -- ``recipes.finetune``, ``recipes.pretrain``,
     ``recipes.align`` and ``studio.jobs`` -- calls ``train()`` without a
@@ -285,6 +296,25 @@ class TestDeepSpeedSchedulerSkip:
             trainer.train(model=self._engine(), train_dataloader=dl)
 
         mock_create.assert_not_called()
+
+    def test_explicit_optimizer_under_deepspeed_is_refused(self):
+        """Same class of bug as the scheduler, same answer.
+
+        ``train()`` used to overwrite a caller's optimizer with None on this
+        path, so a supplied optimizer was accepted and silently discarded --
+        the caller believing their optimizer was in use when the engine's was.
+        """
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            with pytest.raises(ValueError, match="optimizer cannot be supplied"):
+                trainer.train(
+                    model=self._engine(),
+                    train_dataloader=dl,
+                    optimizer=MagicMock(),
+                )
 
     def test_explicit_scheduler_under_deepspeed_is_refused(self):
         """Retaining a scheduler is not the same as honouring it.

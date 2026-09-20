@@ -190,10 +190,14 @@ the comparability rule that decides between an intervention and a new node. Iden
 splits into `CandidateFingerprint` (declared, including pre-registered schedules) and
 `RunRealizationFingerprint` (what actually happened).
 
-Open question carried in ADR-011, needing sign-off before the recovery coordinator:
-whether an intervention re-applies after a checkpoint rollback. It depends on which
-checkpoint was restored, it constrains checkpoint metadata and the PR-005 event schema,
-and the recommendation is to separate the intervention *decision* from each *application*.
+ADR-011 was **accepted on 2026-09-20**, ahead of ADR-001..010, because PR-005 cannot
+define its event schema without it. The rollback question it originally carried is
+decided rather than deferred: an intervention *decision* belongs to the run, each
+*application* is recorded separately, a restore never erases prior applications, and
+re-application is governed by an explicit `InterventionReplayPolicy` rather than by
+position alone — so a one-off emergency adjustment cannot silently become a permanent
+schedule after a worker dies. The realization fingerprint hashes applications, which is
+what distinguishes a run that double-applied after a rollback from one that did not.
 
 ### R3 — two competing plan documents in the repo
 

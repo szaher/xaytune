@@ -1,9 +1,15 @@
 # ADR-011 — Scientific candidates, training interventions, and execution overrides
 
 ## Status
-Proposed
+Accepted — 2026-09-20.
 
-Supersedes the two-level lineage model in ADR-003 and extends the identity model in ADR-006.
+Supersedes the two-level lineage model in ADR-003 and extends the identity model in
+ADR-006. ADR-001 through ADR-010 remain `Proposed`; this one was accepted ahead of them
+because PR-005 cannot define its event schema without it.
+
+The rollback question raised in the first draft is decided below rather than deferred:
+it constrains event identity, checkpoint metadata, replay and realization fingerprinting,
+so leaving it to implementation would have meant a migration.
 
 ## Context
 
@@ -123,6 +129,120 @@ trained artifact -> grader -> score
     and contributes only to EvaluationFingerprint
 ```
 
+### 7. Interventions across checkpoint rollback
+
+> An intervention **decision** is durable and belongs to the `Run`. Each time it takes
+> effect, Xaytune records a distinct **application**. Restoring a checkpoint never erases
+> prior applications. After a restore the controller re-applies only interventions whose
+> effective training position is ahead of the restored position *and* whose replay policy
+> calls for it.
+
+Three objects, deliberately separate:
+
+```text
+TrainingIntervention     the scientific/governance decision
+                         "lower LR to 1e-5 when condition X is reached"
+
+InterventionApplication  one concrete occurrence
+                         "int_42 applied at optimizer step 20,000"
+
+CheckpointRef            the recoverable training position
+```
+
+```python
+class TrainingIntervention(BaseModel):
+    id: InterventionId
+    run_id: RunId
+    action_id: ActionId
+
+    origin: InterventionOrigin
+    schedule_ref: ScheduledInterventionId | None
+    derived_from: InterventionId | None      # set when replaying a prior run
+
+    mutation: TrainingMutation
+    trigger: InterventionTrigger | None      # required for REEVALUATE_TRIGGER
+    replay_policy: InterventionReplayPolicy  # explicit, never inferred
+
+    rationale: str
+    evidence_refs: list[str]
+    created_at: datetime
+
+
+class InterventionApplication(BaseModel):
+    id: InterventionApplicationId
+    intervention_id: InterventionId
+    attempt_id: RunAttemptId
+
+    event_sequence: int                      # assigned by the repository at commit
+    position: TrainingPosition
+
+    previous_value: Any
+    applied_value: Any
+    checkpoint_ancestor: CheckpointRef | None
+
+    created_at: datetime
+```
+
+#### Replay policy is explicit and required
+
+```python
+class InterventionReplayPolicy(str, Enum):
+    REAPPLY_AFTER_ROLLBACK = "reapply-after-rollback"
+    APPLY_ONCE = "apply-once"
+    REEVALUATE_TRIGGER = "reevaluate-trigger"
+```
+
+Position alone cannot decide re-application. A scheduled LR stage at step 20,000 is part
+of the declared program and must fire again if the run rewinds past it. A human emergency
+adjustment taken once, in response to a condition that may no longer hold, must not
+silently become a permanent schedule because a worker died.
+
+| Intervention | Policy |
+|---|---|
+| Scheduled LR stage, declared curriculum transition | `REAPPLY_AFTER_ROLLBACK` |
+| "At exactly token 10B, change the data mixture" | `REAPPLY_AFTER_ROLLBACK` |
+| Reactive human or agent adjustment | `APPLY_ONCE` unless stated otherwise |
+| "If loss exceeds T for 100 steps" | `REEVALUATE_TRIGGER` |
+
+The field is **required, not derived from `origin`**. Inferring it would mean that
+changing an intervention's origin silently changes its replay behaviour, and the table
+above is guidance for the proposer rather than a rule the system applies behind their
+back.
+
+`REEVALUATE_TRIGGER` requires `trigger` to be set. The condition must itself be durable,
+or there is nothing to re-evaluate after the restore. A validation rule rejects the
+combination at Action time, not at replay time.
+
+#### The realization fingerprint hashes applications, not decisions
+
+```text
+RunRealizationFingerprint =
+    CandidateFingerprint + seed/replicate + ordered InterventionApplication[]
+```
+
+This is what distinguishes a run where an LR change applied once from a run where it
+applied, rolled back, and applied again. Those are different realized trajectories even
+though they share one intervention decision, and the artifacts differ.
+
+Two consequences worth stating:
+
+- The fingerprint is **provisional until the run reaches a terminal state**. Reuse
+  lookups must not match against an in-flight run's realization.
+- `event_sequence` is assigned by the repository inside the transaction, so an
+  application record cannot be fully constructed by the caller beforehand.
+
+#### Reproduction is a distinct provenance claim
+
+Replaying a reactive intervention as a predeclared schedule may reproduce approximately
+the same parameter trajectory, but it is not a reproduction of the original scientific
+process. The record must say so:
+
+```text
+original      origin = REACTIVE_HUMAN,  schedule_ref = None
+reproduction  origin = SCHEDULED,       schedule_ref = reproduction-plan,
+                                        derived_from = <original intervention id>
+```
+
 ## Consequences
 
 ### A fingerprint is an identity, not a reproduction recipe
@@ -137,37 +257,6 @@ positions, which is a different operation from rerunning a candidate, and it pro
 run whose interventions are `SCHEDULED` rather than reactive. Documentation must not
 let matching fingerprints imply reproducibility.
 
-### Reuse has three modes, not one
-
-| Question | Match on |
-|---|---|
-| Has this hypothesis already been tested? | `CandidateFingerprint` |
-| Do we already have *any* artifact from this candidate? | `CandidateFingerprint`, any realization |
-| Do we have *this exact* trajectory's artifact? | `RunRealizationFingerprint` |
-| Can we reuse an evaluation? | artifact digest + `EvaluationFingerprint` |
-| Can we resume from this checkpoint? | `CheckpointCompatibilityKey` |
-
-The middle row is the common case and has no answer under ADR-006 as written.
-
-### RunRealization is a projection, never a second source of truth
-
-```python
-class RunRealization(BaseModel):
-    run_id: RunId
-    candidate_fingerprint: str
-    realization_fingerprint: str
-    initial_spec: CandidateSpecSnapshot
-    scheduled_interventions: list[ScheduledInterventionRef]
-    applied_interventions: list[TrainingInterventionRef]
-    execution_overrides: list[ExecutionOverrideRef]
-    final_effective_state: EffectiveTrainingState
-```
-
-Every field is derived from the durable event log, which stays authoritative (ADR-005).
-`RunRealization` must be recomputable from that log, and the recompute must be exercised
-in tests. Materialising `final_effective_state` as independently mutable state would
-reintroduce precisely the divergence ADR-005 exists to prevent.
-
 ### Ordering is by event sequence, not training position
 
 ```python
@@ -178,34 +267,54 @@ class TrainingPosition(BaseModel):
     examples_seen: int | None
 ```
 
-`TrainingPosition` records *where* an intervention took effect. It cannot be the ordering
-key, because it is not monotonic across a run: restoring from a checkpoint moves the
-position backwards. `event.sequence` is authoritative for ordering and for the canonical
-sequence that `RunRealizationFingerprint` hashes.
+The two answer different questions, and both are needed:
 
-## Open question — interventions across checkpoint rollback
+```text
+event.sequence      in what order did Xaytune observe and apply things?
+TrainingPosition    where in model training did this occur?
+```
 
-Not yet decided. It must be, before the recovery coordinator is built.
+`TrainingPosition` cannot be the ordering key, because it is not monotonic across a run.
+This is a perfectly valid history:
 
-A run applies an intervention at step 10,000, reaches 14,000, loses a worker, and
-restores from a checkpoint. Whether the intervention re-applies depends on the
-checkpoint:
+```text
+step 20,000
+step 25,000
+restore -> step 22,000
+step 23,000
+```
 
-- restored from step 12,000 — the change is already in the restored optimizer state, so
-  re-applying it would double-apply
-- restored from step 8,000 — the change is not in that state, so it must re-apply when
-  the run reaches 10,000 again
+`event.sequence` is authoritative for ordering, and for the canonical sequence of
+`InterventionApplication` records that `RunRealizationFingerprint` hashes.
 
-**Recommendation.** Separate the *decision* from its *applications*. A
-`TrainingIntervention` records a decision, attached to the `Run`. Each time it takes
-effect, an application event is appended, carrying its own `TrainingPosition` and
-attempt id. On resume, the coordinator compares the restored position against each
-intervention's position and re-applies only those ahead of it. The realization
-fingerprint then hashes the ordered *applications*, so a run that double-applied an
-intervention after a rollback is correctly distinguished from one that did not.
+## Reuse modes
 
-This needs sign-off because it constrains both the checkpoint metadata (the restored
-position must be recoverable) and the event schema in PR-005.
+ADR-006 described reuse as a single fingerprint match. There are four questions, and
+they take different keys:
+
+| Question | Match on |
+|---|---|
+| **Candidate reuse** — has this hypothesis been explored before? | `CandidateFingerprint` |
+| **Artifact reuse** — give me any acceptable completed artifact from this candidate | `CandidateFingerprint`, any terminal realization |
+| **Realization reuse** — do we have the artifact from this exact trajectory? | `RunRealizationFingerprint` |
+| **Evaluation reuse** — has this artifact been scored with this evaluator? | artifact digest + `EvaluationFingerprint` |
+| **Resume** — can we restart from this checkpoint? | `CheckpointCompatibilityKey` |
+
+Artifact reuse is the common case in practice and had no expressible answer before.
+
+## Projection integrity is a test, not a convention
+
+`RunRealization` is derived from the event log and the log stays authoritative (ADR-005).
+That has to be enforced, not assumed:
+
+```python
+stored = repository.get_run_realization(run_id)
+recomputed = projector.rebuild_run_realization(repository.events_for_run(run_id))
+
+assert stored == recomputed
+```
+
+A failure here is a provenance bug, not a caching bug. PR-005 owns this test.
 
 ## Rejected alternatives
 

@@ -46,6 +46,7 @@ nav:
       - Agent Fine-tuning: recipes/agent-finetuning.md
   - API Reference:
       - Overview: api/index.md
+      - Control-Plane Core: api/core.md
       - Recipes: api/recipes.md
       - Data Pipeline: api/data.md
       - Trainer: api/trainer.md

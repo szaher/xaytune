@@ -15,9 +15,10 @@ package's `15-implementation-plan.md`, not this one.
 
 ## Current state
 
-**26 of the 31 tasks are done.** Every bug-sourced task has landed; the five
-still live are TASK-007, 008, 009, 014 and 015, all sourced from the open gaps
-in `gap-analysis/missing-features.md`. See `backlog.md` for the list.
+**25 of the 31 tasks are done.** Six are still live: TASK-007, 008, 009, 014
+and 015, all sourced from the open gaps in `gap-analysis/missing-features.md`,
+plus **TASK-029** (DeepSpeed optimizer/scheduler ownership), which an earlier
+pass of this reconciliation wrongly marked done. See `backlog.md`.
 
 `testing-plan.md` and `observability-plan.md` are not tied to specific task IDs
 and remain useful as-is.

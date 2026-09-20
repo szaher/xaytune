@@ -3,18 +3,27 @@
 Original audit: 2026-06-03 15:00
 Reconciled against the tree: 2026-09-20
 
-> **This file still contains live work.** FEAT-002 is partial and FEAT-006 and
-> FEAT-010 are not started. Read it alongside `missing-features.md`, not as a
-> historical record.
+> **This file still contains live work.** FEAT-002 and FEAT-005 are partial,
+> and FEAT-006 and FEAT-010 are not started. Read it alongside
+> `missing-features.md`, not as a historical record.
 
 ## Shipped
 
 FEAT-001 (response-only loss masking), FEAT-003 (QLoRA k-bit preparation),
-FEAT-004 (prompt-aware preference tokenization), FEAT-005 (DeepSpeed-aware
-loop), FEAT-007 (multi-stage pipeline, `xaytune/pipeline.py`) and FEAT-008
-(real-time Studio monitoring).
+FEAT-004 (prompt-aware preference tokenization), FEAT-007 (multi-stage
+pipeline, `xaytune/pipeline.py`) and FEAT-008 (real-time Studio monitoring).
 
 ## Partial
+
+**FEAT-005 — DeepSpeed-aware training loop.** The loop half shipped:
+`Trainer.train()` detects the engine, delegates `backward`/`step` to it, and
+skips the GradScaler. What did not is the ownership contract underneath.
+`wrap_model_distributed()` builds a DeepSpeed config with no `optimizer` and no
+`scheduler` key, passes no optimizer to `ds.initialize()`, and discards the
+optimizer and scheduler it returns — so neither DeepSpeed nor the trainer owns
+them. Delegating to an engine that has no optimizer is not multi-GPU training.
+Tracked by **BUG-036** and **TASK-029**; see `implementation-plan/backlog.md`
+for the ordering problem that makes it a design change rather than a patch.
 
 **FEAT-002 — full PPO with rollout buffer and GAE.** Most of it shipped:
 `PPOTrainer`, `RolloutBuffer`, `ValueHead`, the clipped policy objective, the

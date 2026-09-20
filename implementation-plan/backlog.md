@@ -3,9 +3,9 @@
 Original plan: 2026-06-03
 Reconciled against the tree: 2026-09-20
 
-> **Only five of the 31 tasks are still live.** Every bug-sourced task is done;
-> what remains is sourced from the five open gaps in
-> `gap-analysis/missing-features.md`.
+> **Six of the 31 tasks are still live.** Five are sourced from the open gaps
+> in `gap-analysis/missing-features.md`; the sixth is TASK-029, which was
+> wrongly marked done in an earlier pass of this reconciliation.
 
 | Task | Source | Summary |
 |------|--------|---------|
@@ -14,16 +14,39 @@ Reconciled against the tree: 2026-09-20
 | TASK-009 | GAP-004 | Add validation rules for `recipe="pretrain"` |
 | TASK-014 | GAP-001 | Fix GGUF conversion, which shells out to a module that does not exist |
 | TASK-015 | GAP-002 | Warn when `push_to_hub()` has no tokenizer to upload |
+| TASK-029 | BUG-036 | Settle DeepSpeed optimizer/scheduler ownership (see below) |
 
-Note TASK-007 and TASK-008 still carry the dependency ordering described in
-`dependencies.md`. Everything else in this file is a historical record of work
-that has landed.
+### TASK-029 is still open
 
-One caveat on that record: **TASK-029 closed in two steps.** The engine
-delegation landed first; the scheduler half of its own implementation note
-("if DeepSpeed, skip optimizer/scheduler creation") did not, and was closed by
-PR #16 after review of this reconciliation caught it. PR #16 must merge first
-for the count above to hold.
+An earlier pass of this reconciliation marked it done; review corrected that.
+R3 — *"the optimizer must be created by DeepSpeed (`ds.initialize(model=model,
+optimizer=optimizer)` or let DeepSpeed create it from config)"* — is **not
+met**. `wrap_model_distributed()` passes no optimizer and names none in the
+config, and discards the optimizer and scheduler `initialize()` returns.
+DeepSpeed creates an optimizer only when the caller supplies one or the config
+names one, so neither side owns it. R1, R2 and R5 are met; R4 is met by
+delegation.
+
+PR #16 fixed the crash this left in `Trainer.train()` (a scheduler built
+against the `None` optimizer) and added a seam test pinning the config gap. The
+remaining work is the ownership contract:
+
+```text
+DeepSpeed engine owns:  optimizer, scheduler stepping, and both checkpoint states
+Xaytune owns:           scientific optimizer/scheduler intent, and its
+                        translation into DeepSpeed configuration
+```
+
+The awkward part is `total_steps`: `ds.initialize()` runs **before** the
+dataloader is built, so the step count needed for a warmup/decay schedule is
+not known yet. Either the ordering changes (model → dataset → dataloader →
+total steps → DS config → `initialize`) or the optimizer and scheduler are
+constructed externally and passed in. That ordering question is why this is its
+own task rather than a patch to PR #16.
+
+Everything else in this file is a historical record of work that has landed,
+and TASK-007 and TASK-008 still carry the dependency ordering described in
+`dependencies.md`.
 
 Last updated: 2026-06-03 14:00
 

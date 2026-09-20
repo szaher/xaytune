@@ -1,12 +1,13 @@
 # Bug List
 
 Original audit: 2026-06-03 15:00
-Reconciled against the tree: 2026-09-20 — **all 37 bugs are now fixed**, the
-last of them by PR #16 (see the correction below).
+Reconciled against the tree: 2026-09-20 — **36 of 37 fixed; BUG-036 is
+PARTIAL.**
 
-> **This file is a historical record, not a tracker.** Every bug listed here has
-> been verified fixed. Do not use it to pick up work; `missing-features.md`
-> tracks the open v0.6 gaps and `new-features.md` the open enhancements.
+> **This file is all but closed.** 36 of the 37 entries are verified fixed and
+> are a historical record. The exception is **BUG-036**, which is still live —
+> see the correction below. `missing-features.md` tracks the open v0.6 gaps and
+> `new-features.md` the open enhancements.
 
 ## Reconciliation, 2026-09-20
 
@@ -15,27 +16,53 @@ current tree. 26 were already fixed — the status column had simply never been
 updated as the work landed. Left as-is, this file listed four phantom Critical
 bugs and would have sent anyone triaging from it straight down a dead end.
 
-The 27th, BUG-036, was fixed in part; the remainder is PR #16.
+The 27th, BUG-036, is only partly fixed.
 
 Method: 9 of the 27 have named regression tests in the suite (BUG-011, 013,
 026, 027, 031, 032, 033, 035, 036 — grep the test files for the ID). The
 remaining 18 were verified by reading the code at the evidence location each
 entry cites.
 
-### Correction: BUG-036 needed a second fix
+### Correction: BUG-036 is PARTIAL, not FIXED
 
-Review of this reconciliation found that BUG-036 was closed on weaker evidence
-than the rest. The engine delegation the entry describes was genuinely in
-place, but `Trainer.train()` still constructed a trainer-side LR scheduler on
-the DeepSpeed path, against the `None` optimizer it had just set, and raised
+Review of this reconciliation found BUG-036 closed on weaker evidence than the
+rest, in two layers.
+
+**Layer 1 — fixed in PR #16.** The engine delegation the entry describes was
+genuinely in place, but `Trainer.train()` still constructed a trainer-side LR
+scheduler against the `None` optimizer it had just set, raising
 `AttributeError: 'NoneType' object has no attribute 'param_groups'` before the
-first batch. Closed by PR #16, which must merge before this reconciliation.
+first batch. No production entrypoint passes a scheduler, so this fired on
+every real DeepSpeed run.
 
-The existing `tests/test_deepspeed_loop.py` did not catch it because every test
-in it passes `scheduler=MagicMock()`, while no production entrypoint does.
-**A named regression test proves something is covered, not that the production
-path is** — worth remembering the next time this file is reconciled from test
-names.
+**Layer 2 — still open.** `wrap_model_distributed()` generates:
+
+```python
+{"zero_optimization": ..., "train_batch_size": "auto",
+ "train_micro_batch_size_per_gpu": "auto"}
+```
+
+No `optimizer` key, no `scheduler` key, no client optimizer passed to
+`ds.initialize()`, and all three returned objects discarded. DeepSpeed creates
+an optimizer only when the caller supplies one or the config names one, so
+**neither side owns the optimizer or the LR schedule.** Removing the crash did
+not establish that the engine can train. TASK-029 stays open.
+
+Two lessons, and the second is the one worth carrying forward:
+
+1. **A named regression test proves something is covered, not that the
+   production path is.** Every DeepSpeed test injected `scheduler=MagicMock()`;
+   no production caller does. 9 of the 27 entries here were closed on test
+   names alone.
+2. **A bug spanning two modules can be half-fixed in a way no unit test can
+   see.** Every trainer-side DeepSpeed test mocks `_is_deepspeed_engine` and so
+   never reaches `wrap_model_distributed()`. Nothing in the suite sat at the
+   seam between them, which is how they drifted apart — and
+   `test_deepspeed_initializes_engine` had been mocking `initialize()` as
+   returning `(engine, None, None, None)` the whole time without anyone reading
+   it as the finding it was. PR #16 adds
+   `test_generated_config_currently_omits_optimizer_and_scheduler` at that seam;
+   the follow-up must invert it.
 
 Two entries resolved questions that were open in the code at the time of
 reconciliation, which is the reason this file is worth keeping rather than
@@ -50,6 +77,7 @@ deleting:
 ## Status Legend
 
 - **FIXED** — Verified fixed in the current tree.
+- **PARTIAL** — Partly fixed; still has a live TASK-###. BUG-036 only.
 
 ---
 
@@ -59,7 +87,7 @@ deleting:
 |----|-------|----------|--------|------|
 | BUG-031 | SFT prompt masking missing | Critical | FIXED | TASK-025 |
 | BUG-033 | ORPO crashes end-to-end | Critical | FIXED | TASK-027 |
-| BUG-036 | DeepSpeed training loop broken | Critical | FIXED | TASK-029 |
+| BUG-036 | DeepSpeed training loop broken | Critical | **PARTIAL** | TASK-029 |
 | BUG-011 | ORPO numerical instability (NaN/Inf) | Critical | FIXED | TASK-001 |
 | BUG-004 | global_step counts micro-batches | Critical | FIXED | — |
 | BUG-005 | Reported loss divided by gradient_accumulation | Critical | FIXED | — |
@@ -151,10 +179,10 @@ deleting:
 **Proposed fix:** Detect DeepSpeed engine in Trainer. Delegate backward/step/optimizer to engine. Skip GradScaler.
 **Risk:** Medium — training loop complexity increases. Need engine type detection.
 **Tests to add:** `tests/test_deepspeed_loop.py` — verify engine.backward() and engine.step() called.
-**Fixed in two steps:** delegation first; then PR #16, which stopped the trainer
-building an LR scheduler against the `None` optimizer on this path. See the
-correction note at the top of this file — the first fix was unreachable without
-the second.
+**Status: PARTIAL.** Delegation landed first; PR #16 stopped the trainer
+building an LR scheduler against the `None` optimizer on this path. What
+remains is optimizer/scheduler ownership in the generated DeepSpeed config —
+see the correction note at the top of this file. TASK-029 stays open.
 **Owner:** Backend / Distributed
 
 ### BUG-011: ORPO numerical instability

@@ -16,19 +16,30 @@ its ADRs, not from here.
 
 ## Current state
 
-**All 37 bugs are fixed** — 36 of them before this reconciliation began, and
-the last by the follow-up it triggered. On 2026-09-20 the 27 still marked
-`OPEN` were re-checked one by one against the tree; 26 had already been fixed
-and the status column had simply never been updated. See `bugs.md` for the
-method.
+**36 of the 37 bugs are fixed. BUG-036 (DeepSpeed) is PARTIAL.** On 2026-09-20
+the 27 still marked `OPEN` were re-checked one by one against the tree; 26 had
+already been fixed and the status column had simply never been updated. See
+`bugs.md` for the method.
 
-BUG-036 (DeepSpeed) is the one where that re-check was too shallow. The
-engine delegation it describes was in place, but `Trainer.train()` still built
-a trainer-side LR scheduler on the DeepSpeed path, against a `None` optimizer,
-which raised before the first batch on every production entrypoint. Review of
-this reconciliation caught it; it is fixed in PR #16, which must land first.
-The lesson is recorded in `bugs.md`: a named regression test is evidence that
-*something* is covered, not that the production path is.
+BUG-036 is where that re-check was too shallow, in two layers. The engine
+delegation the entry describes was in place, but `Trainer.train()` still built
+a trainer-side LR scheduler against a `None` optimizer, raising before the
+first batch on every production entrypoint — fixed in PR #16. Underneath that,
+`wrap_model_distributed()` generates a DeepSpeed config with no `optimizer` and
+no `scheduler` key, passes no optimizer to `ds.initialize()`, and discards what
+it returns, so **neither side owns the optimizer or the LR schedule**. That is
+still open. TASK-029 stays live and FEAT-005 is partial until it is settled.
+
+Two lessons, both recorded in `bugs.md`, and the second is the load-bearing one:
+
+1. A named regression test is evidence that *something* is covered, not that
+   the production path is. Every DeepSpeed test injected a scheduler; no
+   production caller does.
+2. **A bug spanning two modules can be half-fixed in a way no unit test can
+   see.** Every trainer-side DeepSpeed test mocks `_is_deepspeed_engine` and
+   never reaches `wrap_model_distributed()`, which is exactly how the two
+   drifted apart. `test_generated_config_currently_omits_optimizer_and_scheduler`
+   now sits at that seam and pins the gap.
 
 ### Where live work is tracked
 
@@ -37,11 +48,11 @@ Two files here still list live work, not one:
 | File | Live items |
 |---|---|
 | `missing-features.md` | GAP-001..005 — config validation and export |
-| `new-features.md` | FEAT-002 (partial — no GAE), FEAT-006, FEAT-010 |
+| `new-features.md` | FEAT-002 (partial — no GAE), FEAT-005 (partial — DeepSpeed ownership), FEAT-006, FEAT-010 |
+| `bugs.md` | BUG-036 only (partial); every other entry is closed |
 
 Everything else in this directory is a historical baseline of v0.6, useful for
-measuring the refactor against rather than for picking up tasks. `bugs.md` in
-particular is a closed record.
+measuring the refactor against rather than for picking up tasks.
 
 ## How to Read This
 

@@ -175,15 +175,27 @@ Phase exit:
 
 ## Phase 2 — Compile/execute boundary
 
-### PR-007 — TrainingSpec
+### PR-007 — CandidateSpec / TrainingSpec / fingerprint contracts
+
+The compiler consumes a `CandidateSpec`, not a `TrainingSpec` (ADR-011).
+`TrainingSpec` is the training *program* only; model and data are its siblings:
+
+```text
+CandidateSpec
+├── ModelSpec
+├── DataSpec
+├── TrainingSpec          # SFT / pretrain / DPO / GRPO
+├── RewardSpec?
+├── EnvironmentSpec?
+└── TrainingSchedule?     # pre-registered interventions
+```
 
 Implement:
 
-- SFT
-- pretrain
-- DPO
-- GRPO schema skeletons
-- fingerprint framework
+- CandidateSpec with the composition above
+- TrainingSpec: SFT, pretrain, DPO, GRPO schema skeletons
+- fingerprint framework: `CandidateFingerprint` and `RunRealizationFingerprint`
+  (seed belongs to `Run`, so it feeds the realization and never the candidate)
 
 ### PR-008 — compiler/runtime protocols
 
@@ -206,7 +218,7 @@ Wrap existing training loop.
 Goal:
 
 ```text
-TrainingSpec → NativeCompiler → TrainingExecutionSpec → LocalRuntime
+CandidateSpec → NativeCompiler → TrainingExecutionSpec → LocalRuntime
 ```
 
 ### PR-011 — TRLCompiler
@@ -235,7 +247,25 @@ Phase exit:
 
 ## Phase 3 — Evaluation and decision substrate
 
-### PR-013 — EvaluationSpec / MetricResult
+### PR-013 — Evaluation domain and durable lifecycle
+
+This is where ADR-015 is actually implemented; the phase claims durable
+evaluation, so it has to schedule it.
+
+Implement:
+
+- EvaluationSpec (no `seed` — see below) and MetricResult
+- EvaluationRun and EvaluationAttempt, with `seed`/`replicate` on the run
+- both state machines, per the ADR-015 tables: no `CHECKPOINTING`, no
+  `RECOVERING`, `PREEMPTED` from `QUEUED` onwards
+- `EvaluationResult.evaluation_run_id`, so a sample is attributable to the
+  execution that produced it
+- `evaluation_runs` and `evaluation_attempts` persistence, added as a migration
+  on top of PR-005's schema
+- idempotent evaluation submission through `submit_or_get` (ADR-013)
+- restart reconciliation for in-flight evaluations
+- the invariant check: `ExperimentNode.EVALUATING` implies a non-terminal
+  `EvaluationRun`, otherwise an incident
 
 ### PR-014 — existing eval adapter
 
@@ -253,6 +283,8 @@ Phase exit:
 
 - experiment can train → evaluate → finish
 - budget and evaluation metadata are durable
+- an evaluation killed mid-flight is recovered on controller restart rather
+  than leaving the node in `EVALUATING`
 
 ---
 

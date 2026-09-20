@@ -61,7 +61,7 @@ New control-plane code exists but old APIs use old internals.
 
 ### Stage B
 
-One legacy path (SFT) is internally routed through new `TrainingSpec → NativeCompiler → LocalRuntime`.
+One legacy path (SFT) is internally routed through new `CandidateSpec → NativeCompiler → TrainingExecutionSpec → LocalRuntime`.
 
 ### Stage C
 

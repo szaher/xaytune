@@ -323,7 +323,9 @@ class EvaluationRun(AggregateModel):
     spec: EvaluationSpec
     subject: ArtifactRef              # the checkpoint or model being evaluated
     fingerprint: str                  # EvaluationFingerprint
-    replicate: int | None
+
+    seed: int | None                  # replicate identity lives here, never on
+    replicate: int | None             # EvaluationSpec -- see below
 
     attempt_ids: list[EvaluationAttemptId]
     result: EvaluationResult | None   # set only when terminal and SUCCEEDED
@@ -347,6 +349,16 @@ in ADR-015.
 `EvaluationSpec` is deliberately not part of `CandidateSpec` — see §4. An
 evaluation attaches to a node, run or artifact, and contributes only to
 `EvaluationFingerprint`.
+
+`seed` and `replicate` sit on `EvaluationRun` for the same reason they sit on
+`Run` and not on `CandidateSpec`: a seed on the spec would make two seeds of one
+evaluation into two different evaluations, and would drag replicate identity
+into `EvaluationFingerprint`. The seed participates in the `SEEDED` reuse
+lookup key instead (ADR-015 §3).
+
+`EvaluationResult` carries `evaluation_run_id`. With several runs over the same
+subject — replicates of a stochastic evaluation — it is the only thing that
+answers which execution produced a given sample.
 
 **Invariant.** `ExperimentNode.EVALUATING` implies at least one non-terminal
 `EvaluationRun`. Without it a node sits in `EVALUATING` forever when the

@@ -9,7 +9,8 @@ Implement:
   the realization, not the candidate)
 - TrainerCompiler protocol
 - TrainingExecutionSpec
-- RuntimeBackend protocol
+- RuntimeBackend protocol, with `submit_or_get(operation_id, plan)` and
+  `lookup_operation(operation_id)` -- never a plain `submit()` (ADR-013)
 - ResolvedExecutionPlan
 - capability skeleton
 - LocalRuntime skeleton

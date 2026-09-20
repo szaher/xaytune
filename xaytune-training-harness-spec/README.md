@@ -160,9 +160,18 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   - ADR-016 separates persisted `*Spec` objects from live implementations, which
     is what makes a controller restartable
 
-  **ADR-011 through ADR-016 are `Accepted`; ADR-001 through ADR-010 are still
-  `Proposed`** — see the gate note in `15-implementation-plan.md` §Phase 0, which
-  is an open decision rather than an oversight.
+  ADR status is **not** a single block. It is:
+
+  | Status | ADRs |
+  |---|---|
+  | Ratified by merged implementation | ADR-002, ADR-010 |
+  | Accepted by decision | ADR-011 – ADR-016 |
+  | Superseded in substance | ADR-003 → ADR-011 (retained for its history) |
+  | Still `Proposed` | ADR-001, ADR-004 – ADR-009 |
+
+  `15-implementation-plan.md` §Phase 0 holds the same table with the work each
+  still-open ADR blocks. **ADR-005 is the live one** — band B cannot start until
+  it is accepted.
 - `schemas/` — proposed YAML and JSON/Python schema examples. The SQLite file is
   **migration 001 only**, not the target schema; its header lists what is still to come
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases

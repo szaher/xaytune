@@ -42,10 +42,23 @@ class EvaluationSpec(BaseModel):
     dataset: DatasetRef | None
     slices: list[str]
 
-    seed: int | None
-
     metadata: dict[str, Any]
 ```
+
+**`seed` is deliberately not here.** It belongs to `EvaluationRun`, exactly as
+seed and replicate belong to `Run` (ADR-015 §3). If the seed were part of the
+spec, then
+
+```text
+evaluation with seed 1
+evaluation with seed 2
+```
+
+would be two different *evaluation specifications* rather than two replicates
+of one evaluation — which is precisely the identity error that moving `seed`
+off `CandidateSpec` fixed for training. It would also put replicate identity
+inside `EvaluationFingerprint`, so two samples of the same stochastic
+evaluation could never be recognised as samples of the same thing.
 
 ## 3. MetricResult
 
@@ -64,7 +77,7 @@ class MetricResult(BaseModel):
     evaluator_name: str
     evaluator_version: str | None
 
-    seed: int | None
+    seed: int | None          # the seed of the EvaluationRun that produced it
 
     confidence_interval: tuple[float, float] | None
     standard_error: float | None
@@ -96,8 +109,9 @@ This metadata contributes to `EvaluationFingerprint`.
 
 ```python
 class EvaluationResult(BaseModel):
-    id: EvaluationId
+    id: EvaluationResultId
 
+    evaluation_run_id: EvaluationRunId
     node_id: ExperimentNodeId
     artifact_ref: ArtifactRef
 
@@ -112,6 +126,16 @@ class EvaluationResult(BaseModel):
 
     created_at: datetime
 ```
+
+`evaluation_run_id` is required, not convenience. After ADR-015 a node can hold
+several `EvaluationRun`s over the same subject and fingerprint — replicates 0,
+1, 2 of a stochastic evaluation — and without the back-reference there is no way
+to answer *which evaluation execution produced this sample*. For a stochastic
+evaluator that is provenance, not bookkeeping: the variance estimate is only
+meaningful if each sample can be traced to the run that drew it.
+
+`node_id` is retained for querying, but it is a denormalisation of
+`EvaluationRun.node_id` rather than the authoritative link.
 
 ## 6. Evaluator protocol
 

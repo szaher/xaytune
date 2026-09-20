@@ -44,6 +44,10 @@ class EvaluationRun(AggregateModel):
     spec: EvaluationSpec
     subject: ArtifactRef            # the checkpoint or model under evaluation
     fingerprint: EvaluationFingerprint
+
+    seed: int | None                # NOT on EvaluationSpec -- see section 3
+    replicate: int | None
+
     status: EvaluationRunStatus
 
 class EvaluationAttempt(AggregateModel):
@@ -116,11 +120,11 @@ model scoring pass are the likely candidates. Recorded in
 ### 3. Reuse depends on whether the evaluator is deterministic
 
 The tempting rule — same artifact plus same fingerprint means reuse the result —
-is wrong, because not every evaluator is deterministic. `EvaluationSpec` carries
-a `seed`; LLM-judge evaluators carry `temperature`, `top_p` and a provider; and
-agent or environment evaluations are stochastic by construction. A hosted model
-behind an API does not guarantee reproducible output even at temperature zero,
-and may change underneath a fixed model name.
+is wrong, because not every evaluator is deterministic. LLM-judge evaluators
+carry `temperature`, `top_p` and a provider; agent or environment evaluations
+are stochastic by construction; and a seeded evaluator is reproducible only
+given its seed. A hosted model behind an API does not guarantee reproducible
+output even at temperature zero, and may change underneath a fixed model name.
 
 So the evaluator declares its own reuse class as a capability:
 
@@ -131,11 +135,16 @@ class EvaluatorDeterminism(StrEnum):
     STOCHASTIC = "stochastic"         # each run is a sample
 ```
 
-| Class | Reuse rule |
+| Class | Reuse key |
 |---|---|
-| `DETERMINISTIC` | `(artifact digest, EvaluationFingerprint)` may be reused freely |
-| `SEEDED` | Reusable only when the seed is part of the fingerprint **and** execution is local; a hosted provider is never `SEEDED` |
-| `STOCHASTIC` | A completed run is **a historical sample, not the answer.** Reuse only when `EvaluationReusePolicy` explicitly permits memoizing a sample |
+| `DETERMINISTIC` | `(artifact digest, EvaluationFingerprint)` — may be reused freely |
+| `SEEDED` | `(artifact digest, EvaluationFingerprint, EvaluationRun.seed)` — and only where execution is local; a hosted provider is never `SEEDED` |
+| `STOCHASTIC` | No implicit cross-run reuse. A completed run is **a historical sample, not the answer**, and is reused only where `EvaluationReusePolicy` explicitly permits memoizing a sample |
+
+Note where the seed enters: as a **component of the lookup key**, not as a
+component of `EvaluationFingerprint`. That is what keeps replicate identity out
+of the fingerprint, so two seeds of the same evaluation remain recognisably two
+samples of one thing rather than two different evaluations.
 
 The failure this prevents is quiet and statistical: asking for another sample of
 a stochastic evaluation and silently receiving the previous one. That does not
@@ -143,8 +152,12 @@ error — it just makes a variance estimate wrong, and a planner comparing
 candidates on noisy metrics will draw a confident conclusion from one sample it
 believes is several.
 
-Replicated evaluation follows from this: replicate identity belongs to
-`EvaluationRun`, exactly as seed and replicate belong to `Run`.
+Replicated evaluation follows from this: **`seed` and `replicate` live on
+`EvaluationRun`, not on `EvaluationSpec`**, exactly as seed and replicate belong
+to `Run` and not to `CandidateSpec`. A seed on the spec would make
+`evaluation with seed 1` and `evaluation with seed 2` two different evaluation
+specifications instead of two replicates of one — the same identity error that
+moving `seed` off the candidate fixed for training.
 
 The cache key additionally requires a **terminal** `EvaluationRun`. An in-flight
 run must not be matched against, for the same reason a
@@ -191,6 +204,12 @@ the silent-stall failure into a detected one.
    in-flight runs are never matched.
 4a. Requesting an additional replicate of a stochastic evaluation never returns
    a cached sample.
+4b. `seed` and `replicate` are fields of `EvaluationRun`; `EvaluationSpec` has
+   no `seed`. A `SEEDED` reuse lookup keys on the run's seed, which is not part
+   of `EvaluationFingerprint`.
+4c. Every `EvaluationResult` carries the `evaluation_run_id` of the run that
+   produced it, so an individual sample of a stochastic evaluation is
+   attributable to its execution.
 5. Evaluation submission is idempotent through `submit_or_get` (ADR-013).
 6. A controller restart mid-evaluation recovers the attempt rather than
    orphaning it or resubmitting it.

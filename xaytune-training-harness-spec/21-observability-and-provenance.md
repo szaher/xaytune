@@ -20,7 +20,6 @@ ExperimentCompleted
 
 NodeCreated
 NodeActivated
-NodeEvaluationStarted
 NodeDecisionMade
 NodeCompleted
 
@@ -58,8 +57,27 @@ BudgetReleased
 BudgetExceeded
 
 ArtifactCreated
-EvaluationCompleted
 ```
+
+Evaluation has its own lifecycle events, because after ADR-015 it has durable
+`EvaluationRun` and `EvaluationAttempt` entities and a single
+`EvaluationCompleted` cannot express a queued, preempted or retried evaluation:
+
+```text
+EvaluationRunCreated
+EvaluationAttemptCreated
+EvaluationRuntimeSubmitted
+EvaluationStarted
+EvaluationSucceeded
+EvaluationFailed
+EvaluationPreempted
+EvaluationCancelled
+```
+
+These mirror the `EvaluationRun`/`EvaluationAttempt` transitions in ADR-015 —
+one event per transition, with no `Checkpoint*` or `Recovery*` counterparts,
+because evaluation has neither. They must exist before PR-005 defines the event
+schema; adding a transition event afterwards is a migration.
 
 ## 3. Log context
 
@@ -70,6 +88,8 @@ experiment_id
 node_id
 run_id
 attempt_id
+evaluation_run_id
+evaluation_attempt_id
 action_id
 incident_id
 runtime_backend

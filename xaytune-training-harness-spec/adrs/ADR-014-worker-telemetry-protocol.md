@@ -10,9 +10,10 @@ schema) and PR-011 (`LocalRuntime`).
 ## Context
 
 `TrainingExecutionSpec` carries a `TelemetryContract` naming
-`xaytune.telemetry/v1alpha1`, and `RuntimeBackend.watch()` returns
-`AsyncIterator[RuntimeEvent]`. Neither the event type nor the stream's
-semantics were defined anywhere.
+`xaytune.telemetry/v1alpha1`, and `RuntimeBackend.watch()` returned an
+undefined `AsyncIterator[RuntimeEvent]`. Neither the event type nor the
+stream's semantics were defined anywhere. This ADR defines them, and
+`watch()` now returns `AsyncIterator[WorkerEvent]`.
 
 This is not a gap in documentation. It is a gap in the contract that everything
 downstream depends on:
@@ -100,6 +101,27 @@ Where sequence continuity cannot be guaranteed, the runtime **must create a new
 cheap and honest; a reused attempt id with a restarted counter corrupts the
 record.
 
+Recovering the counter is necessary but **not sufficient**. Knowing that the
+next sequence is 42 says nothing about 41:
+
+```text
+supervisor emits seq 41
+controller receives it
+controller crashes before committing it
+supervisor crashes
+```
+
+The controller's durable cursor is still 40, so on reconnect it asks for
+everything after 40 — and 41 exists only in the memory of a process that is
+gone. So the requirement is on history, not on the counter:
+
+> Resuming an attempt's stream requires producer- or runtime-retained event
+> history sufficient to replay **every event after the controller's durable
+> cursor**, not merely recovery of the next counter value.
+
+Where that history cannot be retained, take the fallback path below: a new
+`RunAttempt`, not a resumed stream with a recovered counter.
+
 This makes `(attempt_id, sequence)` a durable identity contract rather than an
 in-process counter, which is what the controller's deduplication has been
 assuming all along.
@@ -156,7 +178,20 @@ silently assuming nothing happened while it was away.
 
 ### 5. Gap detection
 
-A `sequence` jump means events were lost. The controller must not interpolate.
+Gap detection rests on an ordering guarantee, so state it first:
+
+> `RuntimeBackend.watch()` MUST yield canonical `WorkerEvent`s in increasing
+> `sequence` order. The runtime adapter buffers out-of-order transport delivery
+> until the missing sequence arrives, or until the replay/gap policy determines
+> it is unavailable.
+
+Without it, a transport that delivers `11, 13, 12` makes the controller declare
+`12` lost at the moment it sees `13`, and raise an incident for an event that
+arrives a millisecond later. Ordering is the adapter's job precisely because it
+is the only component that knows its transport's reordering behaviour.
+
+Given ordering, a `sequence` jump means events were lost. The controller must
+not interpolate.
 It records an `EventGapDetected` incident naming the missing range and
 reconciles from `get_status()` and the checkpoint store, which are
 authoritative in a way the stream is not.
@@ -200,7 +235,8 @@ orders them through the RunAttempt state machine.
 1a. Exactly one telemetry supervisor per attempt assigns `sequence`; individual
    ranks never emit `WorkerEvent`s directly.
 1b. A replacement supervisor for the same attempt resumes the sequence from
-   durable state; if it cannot, the runtime creates a new `RunAttempt` rather
+   durable state **and** can replay every event after the controller's durable
+   cursor; if it cannot do both, the runtime creates a new `RunAttempt` rather
    than restarting the counter.
 2. `sequence` is monotonic and gapless per attempt, starting at 0.
 3. Duplicate `(attempt_id, sequence)` is a no-op in every handler.
@@ -208,6 +244,8 @@ orders them through the RunAttempt state machine.
    per ADR-012.
 5. `watch(cursor=N)` yields events with `sequence > N`, or the runtime declares
    `supports_event_replay: false`.
+5a. `watch()` yields in increasing `sequence` order; a reordered transport is
+   reassembled by the adapter and never surfaces as a gap.
 6. A `sequence` gap raises `EventGapDetected` and triggers reconciliation; it
    never silently continues.
 7. Missing heartbeats mark an attempt suspect and trigger `get_status()`; they

@@ -10,11 +10,24 @@ class RuntimeBackend(Protocol):
 
     def capabilities(self) -> CapabilityDocument: ...
 
-    async def submit(
+    async def submit_or_get(
         self,
+        operation_id: OperationId,
         plan: ResolvedExecutionPlan,
-        operation_id: str,
     ) -> RuntimeRef: ...
+        # Get-or-create, never create (ADR-013). Re-submitting the same
+        # operation_id returns the existing RuntimeRef; it never starts a
+        # second workload. operation_id is the FIRST parameter because it is
+        # the identity of the operation, not a tag on it.
+
+    async def lookup_operation(
+        self,
+        operation_id: OperationId,
+    ) -> OperationOutcome | None: ...
+        # Answers "did this operation ever take effect?" after a controller
+        # restart. None means never received. An adapter that cannot report
+        # completed operations declares so in its CapabilityDocument, and the
+        # controller escalates instead of resubmitting (ADR-013).
 
     async def get_status(
         self,
@@ -24,19 +37,21 @@ class RuntimeBackend(Protocol):
     async def watch(
         self,
         runtime_ref: RuntimeRef,
-        cursor: str | None = None,
-    ) -> AsyncIterator[RuntimeEvent]: ...
-        # Yields WorkerEvent per ADR-014 (xaytune.telemetry/v1alpha1).
+        cursor: int | None = None,
+    ) -> AsyncIterator[WorkerEvent]: ...
+        # Yields canonical WorkerEvents per ADR-014
+        # (xaytune.telemetry/v1alpha1), in INCREASING SEQUENCE ORDER.
         # cursor is the last sequence the controller DURABLY RECORDED, not the
         # last it received -- an event received and then lost in a crash must be
-        # redelivered. Delivery is at-least-once; handlers must be idempotent on
+        # redelivered. It is the integer ADR-014 sequence, not an opaque token.
+        # Delivery is at-least-once; handlers must be idempotent on
         # (attempt_id, sequence). A runtime that cannot replay declares
         # supports_event_replay: false and reconnects are treated as gaps.
 
     async def cancel(
         self,
         runtime_ref: RuntimeRef,
-        operation_id: str,
+        operation_id: OperationId,
     ) -> None: ...
 
     async def get_logs(
@@ -45,7 +60,18 @@ class RuntimeBackend(Protocol):
     ) -> AsyncIterator[RuntimeLog]: ...
 ```
 
-Every mutating operation must be idempotent via `operation_id`.
+Every mutating operation must be idempotent via `operation_id`. There is no
+plain `submit()`: ADR-013 rejects create semantics, because a controller that
+crashes between submitting and persisting the `RuntimeRef` cannot otherwise
+tell a lost submission from a running workload, and retrying starts a second
+one.
+
+**Ordered delivery.** `watch()` MUST yield events in increasing `sequence`
+order. The runtime adapter buffers out-of-order transport delivery until the
+missing sequence arrives, or until the replay/gap policy declares it
+unavailable. Without this guarantee a reordered arrival (`11, 13, 12`) is
+indistinguishable from a real gap, and the controller would raise
+`EventGapDetected` for an event that is merely late.
 
 ## 2. Initial runtimes
 
@@ -204,7 +230,6 @@ Reconciliation must be idempotent.
 
 ## 7. RuntimeRef
 
-```python
 Submission is get-or-create, never create (ADR-013):
 
 ```python

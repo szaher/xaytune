@@ -53,13 +53,24 @@ Do not add remote execution inside a TrainerCompiler.
 
 ### Rule 5 — Scientific lineage is immutable
 
-Do not mutate active/completed `TrainingSpecSnapshot`.
+Do not mutate an active or completed `CandidateSpecSnapshot`. Immutability is deep:
+containers inside a snapshot must not be mutable either, or the record can change after
+its fingerprint was taken.
 
-Scientific changes create a child `ExperimentNode`.
+A change that is an alternative candidate creates a child `ExperimentNode`.
 
 ### Rule 6 — Operational recovery stays operational
 
 Worker retry, checkpoint restore, preemption, and approved execution overrides do not create scientific branches.
+
+### Rule 6b — In-run scientific changes are interventions, not branches
+
+A scientifically meaningful change applied to a run that is still going is a
+`TrainingIntervention` on that run, not a new node (ADR-011). Use the comparability
+rule: fork only when you would want to compare before and after as alternatives.
+
+Every intervention is the recorded outcome of an approved `Action`. Never add a second
+path that mutates training state directly.
 
 ### Rule 7 — No direct status mutation
 

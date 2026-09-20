@@ -6,7 +6,10 @@
 Experiment
   ├── ExperimentNode*
   │     ├── Run*
-  │     │     └── RunAttempt*
+  │     │     ├── RunAttempt*
+  │     │     ├── TrainingIntervention*
+  │     │     │     └── InterventionApplication*
+  │     │     └── RunRealization (projection)
   │     ├── EvaluationResult*
   │     └── Decision*
   ├── Action*
@@ -55,8 +58,8 @@ class ExperimentNode(BaseModel):
     hypothesis: str | None
     reason: str | None
 
-    training_spec: TrainingSpecSnapshot
-    training_fingerprint: str
+    candidate: CandidateSpecSnapshot
+    candidate_fingerprint: str
 
     status: ExperimentNodeStatus
 
@@ -71,6 +74,29 @@ class ExperimentNode(BaseModel):
 ```
 
 A node should not be created for worker replacement, preemption, or ordinary retry.
+
+### CandidateSpec
+
+A candidate is the whole scientific proposition, not just trainer hyperparameters
+(ADR-011):
+
+```python
+class CandidateSpec(BaseModel):
+    model: ModelSpec
+    data: DataSpec
+    training: TrainingSpec
+    reward: RewardSpec | None
+    environment: EnvironmentSpec | None
+    schedule: TrainingSchedule | None    # pre-registered interventions
+```
+
+`EvaluationSpec` is deliberately **not** part of a candidate. Making a grader part of
+candidate identity would mean changing a grader implies a retrain, which is the failure
+ADR-006 exists to prevent. Evaluation attaches to the node, run or artifact.
+
+The same grader can appear in both roles: used inside the training loop it is a reward
+and belongs to `RewardSpec`; used to score the artifact it is an evaluator and
+contributes only to `EvaluationFingerprint`. The role decides, not the object.
 
 ## 4. Run
 
@@ -158,6 +184,113 @@ Initial allowed override kinds:
 - runtime-native recovery mode
 
 Changes to LR, optimizer, LoRA rank, data, scheduler, reward, algorithm, or model revision are **not** `ExecutionOverride`.
+
+## 6b. TrainingIntervention and InterventionApplication
+
+A scientifically meaningful change to a run that is still going (ADR-011). Never an
+execution mechanism: every intervention is the recorded outcome of an approved `Action`,
+so there is one governance path and one audit trail.
+
+```python
+class TrainingIntervention(BaseModel):
+    id: InterventionId
+    run_id: RunId
+    action_id: ActionId
+
+    origin: InterventionOrigin           # scheduled | reactive-agent
+                                         # | reactive-human | reactive-policy
+    trigger: InterventionTrigger         # why it exists; required
+    replay_policy: InterventionReplayPolicy   # explicit, immutable, never inferred
+
+    schedule_ref: ScheduledInterventionId | None
+    derived_from: InterventionId | None  # set when replaying a prior run
+
+    mutation: TrainingMutation
+    rationale: str
+    evidence_refs: list[str]
+
+    created_at: datetime
+```
+
+The **decision** above is distinct from each **application** below. A decision is made
+once; it may take effect more than once, because a checkpoint restore can rewind past
+the point where it was applied.
+
+```python
+class InterventionApplication(BaseModel):
+    id: InterventionApplicationId
+    intervention_id: InterventionId
+    attempt_id: RunAttemptId
+
+    event_sequence: int                  # assigned by the repository at commit
+    position: TrainingPosition
+
+    trigger_evaluation: TriggerEvaluation | None
+
+    previous_value: Any
+    applied_value: Any
+    checkpoint_ancestor: CheckpointRef | None
+
+    created_at: datetime
+```
+
+Restoring a checkpoint never deletes prior applications. After a restore the controller
+re-applies only interventions whose position is ahead of the restored position *and*
+whose replay policy calls for it. `REEVALUATE_TRIGGER` is valid only for conditions that
+can become false again — pairing it with a step or token trigger would re-match on every
+restore and double-apply a change already present in the restored optimizer state.
+
+### TrainingPosition
+
+```python
+class TrainingPosition(BaseModel):
+    global_step: int | None
+    optimizer_step: int | None
+    tokens_seen: int | None
+    examples_seen: int | None
+```
+
+`TrainingPosition` says *where in training* something happened. It is not monotonic
+across a run, because a restore moves it backwards, so it can never be the ordering key.
+`event.sequence` orders history; `TrainingPosition` decides whether restored model state
+predates an application.
+
+## 6c. RunRealization
+
+What actually produced an artifact, as against what the node intended to test.
+
+```python
+class RunRealization(BaseModel):
+    run_id: RunId
+
+    candidate_fingerprint: str
+    realization_fingerprint: str
+
+    initial_spec: CandidateSpecSnapshot
+
+    scheduled_interventions: list[ScheduledInterventionRef]
+    applied_interventions: list[TrainingInterventionRef]
+    execution_overrides: list[ExecutionOverrideRef]
+
+    final_effective_state: EffectiveTrainingState
+```
+
+**`RunRealization` is a projection, never a second source of truth.** Every field is
+derived from the durable event log, which stays authoritative. It must be recomputable
+from that log and the recompute must be exercised in tests:
+
+```python
+assert repository.get_run_realization(run_id) == projector.rebuild_run_realization(
+    repository.events_for_run(run_id)
+)
+```
+
+A failure there is a provenance bug, not a caching bug. Materialising
+`final_effective_state` as independently mutable state would reintroduce exactly the
+divergence that atomic state-and-event commits exist to prevent.
+
+`node.candidate` answers "what did we intend to test?"; `run.realization()` answers
+"what actually trained this?"
 
 ## 7. Objective
 
@@ -310,6 +443,8 @@ artifact_
 ckpt_
 decision_
 event_
+intervention_
+application_
 ```
 
 IDs are stable and never recycled.

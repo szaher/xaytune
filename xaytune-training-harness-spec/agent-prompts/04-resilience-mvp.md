@@ -13,10 +13,18 @@ Implement:
 - effective batch preservation
 - fault injection test
 
-Critical lineage rule:
+Critical lineage rule (ADR-011 — read it before starting):
 
 - microbatch reduction + compensating gradient accumulation is an ExecutionOverride on the same ExperimentNode
-- LR reduction is a scientific mutation and must create a new ExperimentNode
+- LR reduction taken to stabilise a run that is still going is a `TrainingIntervention`
+  on that run. It does **not** create a new ExperimentNode: the optimizer state, data
+  position and weights all carry forward, so the "before" is not a candidate anyone
+  would ship.
+- LR compared as an alternative — branch from a checkpoint and run 2e-5 against 1e-5 —
+  is two ExperimentNodes, because the point is the comparison.
+
+Every intervention is the recorded outcome of an approved Action. Do not add a second
+mutation path.
 
 Do not add TorchFT/Ray yet.
 
@@ -30,3 +38,12 @@ Required test:
 - finish training
 - verify same node
 - verify provenance
+
+Second required test — the distinction this prompt previously got wrong:
+
+- inject loss instability mid-run
+- propose an LR reduction through the Action path
+- verify it is recorded as a TrainingIntervention with origin REACTIVE_*
+- verify **no** new ExperimentNode was created
+- verify the InterventionApplication carries its training position
+- verify the run's realization fingerprint changed but its candidate fingerprint did not

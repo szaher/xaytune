@@ -176,9 +176,9 @@ Future, particularly for RL/GRPO.
 
 Compilation receives fingerprints but must not conflate them.
 
-### TrainingSpecFingerprint
+### CandidateFingerprint
 
-Scientific identity:
+What was declared — the scientific identity of the candidate (ADR-011):
 
 - model revision
 - dataset revision
@@ -186,11 +186,33 @@ Scientific identity:
 - algorithm
 - optimizer
 - LR
-- schedule
+- LR schedule
 - effective batch
 - adapter config
-- seed
 - reward config
+- environment config
+- pre-registered intervention schedule
+
+**`seed` is deliberately not here.** Seed belongs to the realization, not the candidate:
+two replicates differing only by seed are the same scientific candidate run twice, and
+folding seed into candidate identity would make the replicate concept meaningless.
+
+### RunRealizationFingerprint
+
+What actually happened — the identity of one realized trajectory:
+
+- `CandidateFingerprint`
+- seed / replicate identity
+- the ordered sequence of `InterventionApplication` records
+
+A reactive intervention changes this and leaves `CandidateFingerprint` untouched. This
+is what stops reuse confusing "the same candidate, run clean" with "the same candidate,
+plus an LR drop at step 14,250".
+
+Note it is **provisional until the run reaches a terminal state**, so reuse must not
+match against an in-flight run. And it is an identity, not a reproduction recipe: a
+reactive intervention was triggered by a stochastic event, so rerunning with the same
+seed will not reproduce it.
 
 ### ExecutionFingerprint
 
@@ -216,7 +238,17 @@ Separate.
 
 ## 8. Reuse policy
 
-Identical `TrainingSpecFingerprint` does **not** automatically mean “never run again.”
+Identical `CandidateFingerprint` does **not** automatically mean “never run again.”
+
+Reuse asks four different questions and they take different keys (ADR-011):
+
+| Question | Match on |
+|---|---|
+| Has this hypothesis been explored? | `CandidateFingerprint` |
+| Do we have *any* artifact from this candidate? | `CandidateFingerprint`, any terminal realization |
+| Do we have *this exact* trajectory's artifact? | `RunRealizationFingerprint` |
+| Has this artifact been scored by this evaluator? | artifact digest + `EvaluationFingerprint` |
+
 
 Support:
 
@@ -240,7 +272,7 @@ seed = 1234
 
 ## 9. Training semantic mutation
 
-A `TrainingSpec` mutation always creates a new snapshot.
+A mutation never edits a snapshot in place.
 
 ```python
 new_spec = old_spec.with_changes(optimization__learning_rate=1e-5)
@@ -249,11 +281,22 @@ new_spec = old_spec.with_changes(optimization__learning_rate=1e-5)
 Mutation object:
 
 ```python
-class TrainingSpecMutation(BaseModel):
+class TrainingMutation(BaseModel):
     path: str
     old_value: Any
     new_value: Any
     reason: str
 ```
 
-Any scientific mutation results in a new `ExperimentNode`.
+Where the mutation lands depends on experimental intent, not on which field changed
+(ADR-011):
+
+```text
+alternative candidate to compare against  -> new ExperimentNode, new CandidateSpec
+change to a run that is still going       -> TrainingIntervention on that run
+operational adjustment preserving intent  -> ExecutionOverride on the attempt
+```
+
+An intervention leaves the node's `CandidateSpec` and `CandidateFingerprint` untouched —
+they record what was declared — and changes the run's `RunRealizationFingerprint`, which
+records what actually happened.

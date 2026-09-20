@@ -192,7 +192,9 @@ Implement execution override:
 
 ### PR-021 — numerical recovery
 
-Recovery that changes LR must create a new node.
+Recovery that changes LR to stabilise a continuing run records a `TrainingIntervention`
+on that run through the Action path (ADR-011). It does not create a new node. Forking
+is for alternatives you want to compare.
 
 Phase exit:
 
@@ -218,7 +220,8 @@ Rules:
 
 ### PR-025 — experiment branching
 
-Scientific mutation creates new node.
+An alternative candidate creates a new node; an in-run scientific change records a
+`TrainingIntervention` (ADR-011).
 
 ### PR-026 — end-to-end MVP test
 

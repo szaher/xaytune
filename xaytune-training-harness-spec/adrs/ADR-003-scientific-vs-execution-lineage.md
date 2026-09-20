@@ -17,27 +17,41 @@ decides between it and a new node.
 
 Operational recovery remains within the same node.
 
-Scientific mutation creates a new node.
+An alternative scientific candidate creates a new node. A scientifically meaningful
+change to a run that is still going is a `TrainingIntervention` on that run, not a new
+node — see ADR-011.
 
 `ExecutionOverride` represents policy-approved operational adjustments that preserve declared training intent.
 
 ## Examples
 
-Same node:
+Same node, new attempt:
 
 - worker restart
 - preemption
 - checkpoint restore
+
+Same node, execution override:
+
 - microbatch reduction with effective-batch preservation
+
+Same node and run, training intervention (ADR-011):
+
+- declared LR schedule firing mid-run
+- LR lowered to stabilise a destabilising run
+- planned curriculum or data-mixture transition
 
 New node:
 
-- LR change
 - LoRA rank change
 - optimizer change
 - dataset change
 - reward change
 - model revision change
+- LR compared as an alternative, branched from a checkpoint
+
+Note LR appears under both intervention and new node. The kind of parameter does not
+decide lineage; experimental intent does.
 
 ## Consequences
 

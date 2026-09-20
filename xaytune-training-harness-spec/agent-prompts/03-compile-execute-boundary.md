@@ -3,7 +3,8 @@
 Implement:
 
 - TrainingSpec base and SFT model
-- TrainingSpecFingerprint
+- CandidateFingerprint and RunRealizationFingerprint (ADR-011; note seed belongs to
+  the realization, not the candidate)
 - TrainerCompiler protocol
 - TrainingExecutionSpec
 - RuntimeBackend protocol

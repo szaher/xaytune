@@ -24,6 +24,8 @@ evaluations
 artifacts
 checkpoints
 budget_ledger
+training_interventions
+intervention_applications
 events
 outbox
 controller_leases
@@ -169,6 +171,21 @@ Optional later:
 External bus consumes from the outbox.
 
 Do not make distributed messaging required for core execution.
+
+## 8b. Intervention applications are events
+
+An `InterventionApplication` is appended to the event stream, not stored as mutable
+state (ADR-011). Three consequences for the schema:
+
+- `event.sequence` is the canonical order. `TrainingPosition` is recorded alongside it
+  but is not monotonic, because a restore rewinds it.
+- `RunRealizationFingerprint` hashes the ordered applications, so a run that re-applied
+  an intervention after a rollback is distinguishable from one that did not.
+- `RunRealization` is a projection over these events. The event log is authoritative and
+  the projection must be recomputable from it; a stored projection that disagrees with a
+  rebuild is a provenance bug.
+
+The tables list therefore gains `training_interventions` and `intervention_applications`.
 
 ## 9. Snapshots
 

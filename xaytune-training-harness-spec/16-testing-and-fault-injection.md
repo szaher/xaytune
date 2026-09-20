@@ -115,7 +115,8 @@ When policy chooses:
 
 Then:
 
-- new ExperimentNode
+- new ExperimentNode (only for alternatives being compared)
+- TrainingIntervention + InterventionApplication (for in-run scientific changes)
 - old node remains immutable
 - hypothesis/reason recorded
 

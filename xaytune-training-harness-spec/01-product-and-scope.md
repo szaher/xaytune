@@ -104,13 +104,24 @@ Runtime integrations execute `TrainingExecutionSpec`.
 
 A trainer integration must not own remote execution.
 
-### Invariant B — scientific vs operational lineage
+### Invariant B — scientific, in-run and operational lineage
 
-Scientific changes create a new `ExperimentNode`.
+Lineage has three levels, not two (ADR-011).
 
-Operational recovery creates a new `RunAttempt` or `ExecutionOverride`.
+Operational recovery creates a new `RunAttempt` or `ExecutionOverride`. An alternative
+scientific candidate creates a new `ExperimentNode`. A scientifically meaningful change
+to a run that is still going creates a `TrainingIntervention` on that run.
 
-Examples:
+**Comparability decides between the last two:**
+
+> A change creates a new `ExperimentNode` when the changed configuration is an
+> alternative candidate you may want to compare independently against the current one.
+>
+> A change is a `TrainingIntervention` when it only makes scientific sense as a
+> continuation of the existing model trajectory.
+
+The kind of parameter does not decide this. Experimental intent does, so the same
+technical change can be either.
 
 | Change | Lineage |
 |---|---|
@@ -118,7 +129,10 @@ Examples:
 | restore checkpoint | same node, new run attempt |
 | pod eviction | same node, new run attempt |
 | microbatch 4→2 while preserving effective batch | same node, execution override |
-| LR 2e-5→1e-5 | new node |
+| declared LR schedule firing at step 20k | same run, scheduled intervention |
+| LR lowered to stabilise a run that is destabilising | same run, reactive intervention |
+| planned curriculum or data-mixture transition | same run, scheduled intervention |
+| LR 2e-5 vs 1e-5 branched from a checkpoint to compare | new node |
 | LoRA rank 16→32 | new node |
 | dataset revision change | new node |
 | reward definition change | new node |

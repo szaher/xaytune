@@ -228,7 +228,9 @@ Xaytune still owns:
 
 - incident semantics
 - policy
-- whether scientific mutation is needed
+- whether an in-run scientific change is needed (a `TrainingIntervention`, proposed
+  through the Action path) or a genuinely alternative candidate is needed (a new
+  `ExperimentNode`) — see ADR-011 for the rule that decides
 - experiment lineage
 - budget
 - evaluation after recovery

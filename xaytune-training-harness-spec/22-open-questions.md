@@ -57,6 +57,10 @@ Need explicit scheduling policy once parallel search is implemented.
 
 ## 7. Scientific mutation classification
 
+Partly answered by ADR-011: the node-versus-intervention question is decided by
+comparability, and the operational boundary by whether declared training intent is
+preserved. What remains open is which *settings* are scientific at all.
+
 Some settings are borderline:
 
 - precision

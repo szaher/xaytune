@@ -22,7 +22,7 @@
 │ Provenance / Memory                                         │
 └─────────────────────────────┬────────────────────────────────┘
                               │
-                         TrainingSpec
+                         CandidateSpec
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
@@ -144,7 +144,7 @@ Determines whether an incident should:
 ```text
 ExperimentNode
   ↓
-TrainingSpecSnapshot
+CandidateSpecSnapshot
   ↓
 TrainerCompiler.compile()
   ↓
@@ -187,7 +187,7 @@ EvaluationResult
 DecisionEngine
 ```
 
-Evaluation changes do not mutate `TrainingSpecFingerprint`.
+Evaluation changes do not mutate `CandidateFingerprint` (ADR-006, ADR-011).
 
 ## 5. Search path
 

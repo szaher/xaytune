@@ -26,7 +26,7 @@ from xaytune.core.ids import (
     RunAttemptId,
     RunId,
 )
-from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.immutable import AggregateModel, FrozenDict, FrozenDomainModel
 from xaytune.core.refs import ArtifactRef, CheckpointRef, ResourceUsage, RuntimeRef
 from xaytune.core.state.machines import ATTEMPT_MACHINE, RUN_MACHINE
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
@@ -77,7 +77,7 @@ class ExecutionOverride(FrozenDomainModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
-class Run(FrozenDomainModel):
+class Run(AggregateModel):
     """A logical execution of a scientific candidate."""
 
     id: RunId
@@ -106,8 +106,8 @@ class Run(FrozenDomainModel):
             InvalidTransitionError: If the transition is not permitted.
         """
         RUN_MACHINE.validate(self.status, new_status)
-        return self.model_copy(
-            update={
+        return self._validated_copy(
+            {
                 "status": new_status,
                 "revision": self.revision + 1,
                 "updated_at": utc_now(),
@@ -120,7 +120,7 @@ class Run(FrozenDomainModel):
         return RUN_MACHINE.is_terminal(self.status)
 
 
-class RunAttempt(FrozenDomainModel):
+class RunAttempt(AggregateModel):
     """One infrastructure attempt at a run."""
 
     id: RunAttemptId
@@ -167,7 +167,7 @@ class RunAttempt(FrozenDomainModel):
         if ATTEMPT_MACHINE.is_terminal(new_status) and self.ended_at is None:
             update["ended_at"] = utc_now()
 
-        return self.model_copy(update=update)
+        return self._validated_copy(update)
 
     @property
     def is_terminal(self) -> bool:

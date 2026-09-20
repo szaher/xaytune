@@ -21,7 +21,7 @@ from xaytune.core.ids import (
     ExperimentNodeId,
     RunId,
 )
-from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.immutable import AggregateModel, FrozenDict, FrozenDomainModel
 from xaytune.core.refs import Actor, ControllerHostRef, DatasetRef, ModelRef
 from xaytune.core.state.machines import EXPERIMENT_MACHINE, NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
@@ -52,7 +52,7 @@ class TrainingSpecSnapshot(FrozenDomainModel):
     payload: FrozenDict = Field(default_factory=FrozenDict)
 
 
-class Experiment(FrozenDomainModel):
+class Experiment(AggregateModel):
     """The complete optimization objective and its control-plane state.
 
     Frozen: status changes go through :meth:`with_status`, never through
@@ -83,8 +83,8 @@ class Experiment(FrozenDomainModel):
             InvalidTransitionError: If the transition is not permitted.
         """
         EXPERIMENT_MACHINE.validate(self.status, new_status)
-        return self.model_copy(
-            update={
+        return self._validated_copy(
+            {
                 "status": new_status,
                 "revision": self.revision + 1,
                 "updated_at": utc_now(),
@@ -97,7 +97,7 @@ class Experiment(FrozenDomainModel):
         return EXPERIMENT_MACHINE.is_terminal(self.status)
 
 
-class ExperimentNode(FrozenDomainModel):
+class ExperimentNode(AggregateModel):
     """One scientific candidate within an experiment.
 
     ``parent_ids`` is a list rather than a single parent so that a candidate
@@ -133,8 +133,8 @@ class ExperimentNode(FrozenDomainModel):
             InvalidTransitionError: If the transition is not permitted.
         """
         NODE_MACHINE.validate(self.status, new_status)
-        return self.model_copy(
-            update={
+        return self._validated_copy(
+            {
                 "status": new_status,
                 "revision": self.revision + 1,
                 "updated_at": utc_now(),

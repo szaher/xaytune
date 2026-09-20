@@ -44,7 +44,7 @@ from typing_extensions import Self
 
 from xaytune.core.errors import InvalidDomainValueError
 
-__all__ = ["FrozenDict", "FrozenDomainModel", "deep_freeze", "thaw"]
+__all__ = ["AggregateModel", "FrozenDict", "FrozenDomainModel", "deep_freeze", "thaw"]
 
 
 class FrozenDict(Mapping[str, Any]):
@@ -227,6 +227,16 @@ class FrozenDomainModel(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    def _validated_copy(self, update: Mapping[str, Any]) -> Self:
+        """Return a copy with *update* applied and re-validated.
+
+        Internal: aggregates expose this only through their transition methods,
+        which enforce the domain rules that validation alone cannot.
+        """
+        data = self.model_dump(mode="python", round_trip=True)
+        data.update(update)
+        return type(self).model_validate(data)
+
     def model_copy(
         self,
         *,
@@ -240,7 +250,52 @@ class FrozenDomainModel(BaseModel):
         """
         if not update:
             return super().model_copy(deep=deep)
+        return self._validated_copy(update)
 
-        data = self.model_dump(mode="python", round_trip=True)
-        data.update(update)
-        return type(self).model_validate(data)
+
+class AggregateModel(FrozenDomainModel):
+    """Base for aggregates, where a validated copy is still not enough.
+
+        Re-validating an update checks the *schema*. Aggregates also have domain
+        rules that no field type can express::
+
+            experiment.model_copy(update={"status": ExperimentStatus.SUCCEEDED})
+            # schema-valid, and skips the state machine entirely
+
+            attempt.model_copy(update={"status": RunAttemptStatus.SUCCEEDED})
+            # succeeded, with started_at=None, ended_at=None, revision=0 --
+            # a valid Pydantic object and an impossible domain object
+
+            node.model_copy(update={"candidate_fingerprint": "sha256:other"})
+            # rewrites scientific identity with no new node, event or lineage
+
+    Rule 7 forbids direct status mutation, and an unrestricted ``model_copy`` is
+    that mutation with extra steps. Updates are therefore refused here; aggregates
+    change through their own transition methods, which validate the transition,
+    bump the revision and stamp the timestamps together.
+
+    A field with no transition method yet cannot be updated at all. That is
+    deliberate: the next person needs an explicit, named operation rather than a
+    generic escape hatch.
+    """
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        """Return an unchanged copy.
+
+        Raises:
+            TypeError: If *update* is given. Use the aggregate's transition
+                methods, which enforce the domain rules validation cannot.
+        """
+        if update:
+            raise TypeError(
+                f"{type(self).__name__} cannot be updated through model_copy: "
+                f"an update would skip state-machine validation, revision and "
+                f"timestamp semantics. Use a transition method such as "
+                f"with_status() instead. Fields: {sorted(update)}"
+            )
+        return super().model_copy(deep=deep)

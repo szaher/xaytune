@@ -261,12 +261,10 @@ class TestFrozenDictInvariants:
 
 
 class TestValidatedModelCopy:
-    """`model_copy(update=...)` must re-validate, not assign.
+    """Value objects may be evolved, but only through validation.
 
-    Pydantic's version assigns update values untouched, which defeats every
-    guarantee the field types provide. It is not an obscure corner either:
-    `with_status` is built on it, and the docs recommend it for deriving one
-    record from another.
+    Pydantic's `model_copy(update=...)` assigns update values untouched, which
+    defeats every guarantee the field types provide.
     """
 
     def test_updated_mapping_is_refrozen(self):
@@ -278,66 +276,117 @@ class TestValidatedModelCopy:
         with pytest.raises(TypeError):
             copied.payload["a"]["b"] = 3
 
-    def test_updated_id_sequences_are_revalidated(self):
-        experiment = make_experiment()
-
-        with pytest.raises(ValidationError):
-            experiment.model_copy(update={"active_node_ids": ["node_bogus"]})
-
     def test_updated_metadata_is_refrozen(self):
-        experiment = make_experiment()
+        ref = DatasetRef(uri="s3://x")
 
-        copied = experiment.model_copy(update={"metadata": {"nested": []}})
+        copied = ref.model_copy(update={"metadata": {"nested": []}})
 
         assert isinstance(copied.metadata, FrozenDict)
         with pytest.raises(AttributeError):
             copied.metadata["nested"].append(1)
 
     def test_the_value_contract_applies_to_updates(self):
-        experiment = make_experiment()
+        ref = DatasetRef(uri="s3://x")
 
         with pytest.raises(ValidationError):
-            experiment.model_copy(update={"metadata": {"features": {"a", "b"}}})
+            ref.model_copy(update={"metadata": {"features": {"a", "b"}}})
 
-    def test_an_invalid_status_is_rejected_on_copy(self):
-        experiment = make_experiment()
+    def test_an_invalid_value_is_rejected_on_copy(self):
+        override = ExecutionOverride(id="ovr", kind="checkpoint_restore", reason="r")
 
         with pytest.raises(ValidationError):
-            experiment.model_copy(update={"status": "not-a-status"})
+            override.model_copy(update={"kind": "learning_rate_change"})
 
     def test_a_plain_copy_is_unchanged(self):
+        ref = DatasetRef(uri="s3://x", revision="v4")
+        assert ref.model_copy() == ref
+        assert ref.model_copy(deep=True) == ref
+
+    def test_typed_ids_survive_the_round_trip(self):
+        ref = ArtifactRef(id=ArtifactId.generate(), kind="adapter", uri="s3://x")
+
+        copied = ref.model_copy(update={"uri": "s3://y"})
+
+        assert isinstance(copied.id, ArtifactId)
+        assert copied.id == ref.id
+
+
+class TestAggregateUpdatesAreRefused:
+    """Schema validation is not enough for an aggregate.
+
+    Re-validating an update checks field types. It cannot check that the
+    transition is legal, that the revision moved, or that the timestamps are
+    consistent -- so an aggregate refuses updates entirely and changes only
+    through its transition methods. Rule 7 forbids direct status mutation, and
+    an unrestricted `model_copy` is that mutation with extra steps.
+    """
+
+    def test_experiment_status_cannot_bypass_the_state_machine(self):
         experiment = make_experiment()
-        assert experiment.model_copy() == experiment
-        assert experiment.model_copy(deep=True) == experiment
+        assert experiment.status is ExperimentStatus.CREATED
+
+        with pytest.raises(TypeError, match="with_status"):
+            experiment.model_copy(update={"status": ExperimentStatus.SUCCEEDED})
+
+    def test_attempt_cannot_skip_its_lifecycle(self):
+        """Otherwise: SUCCEEDED with no started_at, no ended_at, revision 0."""
+        attempt = make_attempt()
+
+        with pytest.raises(TypeError):
+            attempt.model_copy(update={"status": RunAttemptStatus.SUCCEEDED})
+
+    def test_node_scientific_identity_cannot_be_rewritten(self):
+        node = make_node()
+
+        with pytest.raises(TypeError):
+            node.model_copy(update={"training_fingerprint": "sha256:different"})
+
+    def test_aggregate_id_cannot_be_rewritten(self):
+        experiment = make_experiment()
+
+        with pytest.raises(TypeError):
+            experiment.model_copy(update={"id": ExperimentId.generate()})
+
+    def test_revision_cannot_be_set_directly(self):
+        run = make_run()
+
+        with pytest.raises(TypeError):
+            run.model_copy(update={"revision": 99})
 
     @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
-    def test_round_trip_through_copy_preserves_every_field(self, factory, model_type):
-        """Re-validating must not quietly change types on the way through."""
-        original = factory()
-        assert original.model_copy(update={"revision": 5}).revision == 5
-        assert (
-            original.model_copy(update={"revision": 5}).model_copy(
-                update={"revision": original.revision}
-            )
-            == original
-        )
+    def test_no_aggregate_accepts_an_update(self, factory, model_type):
+        with pytest.raises(TypeError, match="cannot be updated"):
+            factory().model_copy(update={"revision": 1})
 
-    def test_decimal_and_typed_ids_survive_the_round_trip(self):
+    @pytest.mark.parametrize(("factory", "model_type"), ALL_FACTORIES)
+    def test_a_plain_copy_is_still_allowed(self, factory, model_type):
+        aggregate = factory()
+        assert aggregate.model_copy() == aggregate
+        assert aggregate.model_copy(deep=True) == aggregate
+
+    def test_the_error_names_the_offending_fields(self):
         experiment = make_experiment()
-        copied = experiment.model_copy(update={"revision": 1})
 
-        assert copied.budget is not None
-        assert copied.budget.max_cost == Decimal("125.50")
-        assert isinstance(copied.id, ExperimentId)
-        assert isinstance(copied.objective.constraints, tuple)
+        with pytest.raises(TypeError, match="revision"):
+            experiment.model_copy(update={"revision": 3})
 
-    def test_with_status_goes_through_the_validated_path(self):
-        """The transition API is built on model_copy, so it inherits this."""
+    def test_transitions_still_work_and_stay_validated(self):
+        """The supported path keeps every guarantee the refused one skipped."""
         experiment = make_experiment()
         active = experiment.with_status(ExperimentStatus.ACTIVE)
 
+        assert active.status is ExperimentStatus.ACTIVE
+        assert active.revision == experiment.revision + 1
         assert isinstance(active.metadata, FrozenDict)
         assert isinstance(active.id, ExperimentId)
+        assert active.budget is not None
+        assert active.budget.max_cost == Decimal("125.50")
+
+    def test_transitions_still_refuse_illegal_moves(self):
+        experiment = make_experiment()
+
+        with pytest.raises(InvalidTransitionError):
+            experiment.with_status(ExperimentStatus.SUCCEEDED)
 
 
 class TestDomainValueContract:

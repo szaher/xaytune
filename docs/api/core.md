@@ -89,7 +89,20 @@ Violations raise `InvalidDomainValueError`, which is also a `ValueError`, so Pyd
 
     The value contract makes records *representable*; it does not make their serialization *canonical*. Two equal `FrozenDict`s can differ in insertion order, so `model_dump_json()` may emit their keys in different orders, and Python's built-in `hash()` is randomized per process.
 
-    Fingerprints must therefore be computed from a canonical encoder — sorted keys, deterministic number and string encoding, UTF-8 bytes, then a stable digest — never from `hash()` or a naive JSON dump.
+    Equality has Python semantics too, not JSON semantics: `True == 1` and `1 == 1.0`, so `FrozenDict({"x": True})` compares equal to `FrozenDict({"x": 1})` even though their canonical JSON forms — `{"x":true}` and `{"x":1}` — should fingerprint differently.
+
+    Fingerprints must therefore be computed from a canonical *typed* encoder — sorted keys, deterministic number and string encoding, UTF-8 bytes, then a stable digest — never from `hash()`, Python equality, or a naive JSON dump.
+
+The four aggregates — `Experiment`, `ExperimentNode`, `Run`, `RunAttempt` — go further and **refuse updates entirely**:
+
+```python
+experiment.model_copy(update={"status": ExperimentStatus.SUCCEEDED})
+# TypeError: Experiment cannot be updated through model_copy ...
+```
+
+Re-validating an update checks the *schema*. It cannot check that the transition is legal, that the revision moved, or that the timestamps are consistent — so an update would produce an object that is valid to Pydantic and impossible in the domain, such as a `SUCCEEDED` attempt with no `started_at` and revision 0. Value objects like `DatasetRef` keep a validated `model_copy`; aggregates change only through transition methods.
+
+A field with no transition method yet cannot be changed at all. That is deliberate: the next person needs an explicit named operation rather than a generic escape hatch.
 
 Status changes go through `with_status()`, which validates the transition and returns a new instance with the revision bumped:
 

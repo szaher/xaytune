@@ -148,6 +148,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     identity model; read it alongside both
   - ADR-012 defines data position and resume guarantees; required before any
     adaptive-recovery work, and before persistence structures are frozen
+  - ADR-013 defines external operation identity, submission replay and cancellation
+    intent; required before the first runtime implementation, not after
 - `schemas/` — proposed YAML and JSON/Python schema examples
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases
 

@@ -199,6 +199,19 @@ Reconciliation must be idempotent.
 ## 7. RuntimeRef
 
 ```python
+Submission is get-or-create, never create (ADR-013):
+
+```python
+def submit_or_get(operation_id: OperationId, plan: ResolvedExecutionPlan) -> RuntimeRef
+def lookup_operation(operation_id: OperationId) -> OperationOutcome | None
+```
+
+A runtime adapter must also declare whether it can report *completed* operations. After a
+controller restart an operation in `SENT` may mean the workload is running, was never
+received, or already finished -- and an adapter that cannot distinguish the last two
+forces the controller to escalate rather than resubmit.
+
+```python
 class RuntimeRef(BaseModel):
     backend: str
     external_id: str

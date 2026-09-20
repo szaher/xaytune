@@ -26,6 +26,7 @@ checkpoints
 budget_ledger
 training_interventions
 intervention_applications
+runtime_operations
 events
 outbox
 controller_leases
@@ -186,6 +187,17 @@ state (ADR-011). Three consequences for the schema:
   rebuild is a provenance bug.
 
 The tables list therefore gains `training_interventions` and `intervention_applications`.
+
+## 8c. The operation journal is not the outbox
+
+Both record work that happens outside the transaction, and they must not share a
+mechanism (ADR-013). The outbox publishes events outward and its records are safe to
+redeliver, because sinks are idempotent consumers. The operation journal records effects
+the controller initiates on a runtime, and redelivering one of those may start a second
+workload.
+
+The tables list therefore gains `runtime_operations`, written in the same transaction as
+the attempt it belongs to, so the *intent* is durable before the effect happens.
 
 ## 9. Snapshots
 

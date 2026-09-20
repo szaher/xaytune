@@ -1,7 +1,13 @@
 # ADR-003 — Scientific lineage and execution lineage are separate
 
 ## Status
-Proposed
+Proposed — extended by ADR-011.
+
+The two-level split below is correct for changes made *between* runs. It has no
+category for a scientifically meaningful change applied to a run that is still
+going, such as a reactive learning-rate drop or a planned curriculum transition.
+ADR-011 adds `TrainingIntervention` for that case and states the rule that
+decides between it and a new node.
 
 ## Decision
 

@@ -6,13 +6,40 @@ The design assumes the current Xaytune repository continues to exist and is evol
 
 ## Product definition
 
-**User-facing:** Xaytune is an agent-native model training harness for adaptive, resilient, reproducible model training and post-training.
+**User-facing:** Xaytune is an agent-native experiment control plane for model
+post-training. It coordinates training, evaluation, adaptation, recovery and experiment
+lineage across trainer and runtime backends.
 
 **Internal architectural definition:** Xaytune is an experiment control plane that compiles training intent into serializable execution plans, delegates execution to runtimes, observes the result, evaluates it, applies policy and budget constraints, and decides what should happen next.
 
 The governing rule is:
 
 > Xaytune controls the experiment. Trainer integrations compile training intent. Runtime integrations execute training.
+
+## What Xaytune is not
+
+**Xaytune is not a frontier-scale pretraining runtime.** It does not replace PyTorch
+distributed, TorchFT, Ray Train, Slurm, Kubernetes, Kubeflow Trainer, Kueue or any
+proprietary training runtime. Those systems execute workloads. Xaytune controls the
+experiments around them.
+
+The boundary is experiment topology, not a GPU count. Xaytune is optimized for work
+shaped like this:
+
+```text
+many candidates -> train -> evaluate -> compare -> branch -> repeat
+```
+
+which covers SFT, DPO/GRPO/PPO, reward tuning, data-mixture experiments, agent training,
+synthetic-data loops, adapter and full fine-tuning, and smaller continued-pretraining
+jobs. It can submit large distributed jobs wherever the runtime can execute them.
+
+It is *not* built for the other shape — a single months-long foundation-model
+pretraining run whose hard problems are second-scale in-band fault tolerance, collective
+membership recovery and topology repair. Those belong in the runtime, not in a control
+plane. Xaytune owns semantic recovery ("this workload has OOMed three times after worker
+replacement, so infrastructure retry is not solving it"), not distributed-systems fault
+tolerance.
 
 ## Why this exists
 
@@ -117,6 +144,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 - `21-observability-and-provenance.md` — event model, MLflow/W&B mapping, lineage
 - `22-open-questions.md` — decisions intentionally deferred
 - `adrs/` — architecture decision records required before implementation
+  - ADR-011 extends ADR-003 and ADR-006 with `TrainingIntervention` and a layered
+    identity model; read it alongside both
 - `schemas/` — proposed YAML and JSON/Python schema examples
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases
 

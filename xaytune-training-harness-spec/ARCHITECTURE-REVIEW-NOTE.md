@@ -169,6 +169,32 @@ expects micro-steps. The rest of the loop agrees with the implementation — `lo
 `num_batches // gradient_accumulation`, so LR scheduling and `max_steps` are already in optimizer steps. The test is
 probably wrong, but `global_step` is user-visible in checkpoints and logs, so the definition is a product call.
 
+### R2b — scope and lineage revisions (ADR-011)
+
+Two design changes came out of reviewing the spec against what it would take to serve
+frontier pretraining. The conclusion was that it should not try to, and sharpening that
+made the rest cleaner.
+
+**Positioning.** The README now states the non-goals near the top and defines the
+boundary as experiment topology rather than a GPU count: many candidates with frequent
+evaluation and branching, as against one continuous months-long run. The architecture can
+still submit large distributed jobs; what it does not own is second-scale in-band fault
+tolerance. Xaytune owns *semantic* recovery, the runtime owns distributed-systems fault
+tolerance.
+
+**Lineage.** ADR-003's binary split has no category for a scientifically meaningful
+change applied to a run that is still going — a reactive LR drop, a curriculum
+transition, a reward ramp. ADR-011 adds `TrainingIntervention` as a third level,
+produced by the existing `Action` path so there is still one governance route, and adds
+the comparability rule that decides between an intervention and a new node. Identity
+splits into `CandidateFingerprint` (declared, including pre-registered schedules) and
+`RunRealizationFingerprint` (what actually happened).
+
+Open question carried in ADR-011, needing sign-off before the recovery coordinator:
+whether an intervention re-applies after a checkpoint rollback. It depends on which
+checkpoint was restored, it constrains checkpoint metadata and the PR-005 event schema,
+and the recommendation is to separate the intervention *decision* from each *application*.
+
 ### R3 — two competing plan documents in the repo
 
 `gap-analysis/` (BUG-/GAP-/FEAT- IDs) and `implementation-plan/` (TASK-001…031, EPIC-0…11, dated 2026-06-03) predate

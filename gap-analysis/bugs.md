@@ -1,11 +1,38 @@
 # Bug List
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-20 — **all 37 bugs are now fixed.**
+
+> **This file is a historical record, not a tracker.** Every bug listed here has
+> been verified fixed. Do not use it to pick up work; see
+> `gap-analysis/missing-features.md` for what is actually still open.
+
+## Reconciliation, 2026-09-20
+
+The 27 bugs previously marked `OPEN` were re-checked one by one against the
+current tree. All 27 were already fixed — the status column had simply never
+been updated as the work landed. Left as-is, this file listed four phantom
+Critical bugs and would have sent anyone triaging from it straight down a dead
+end.
+
+Method: 9 of the 27 have named regression tests in the suite (BUG-011, 013,
+026, 027, 031, 032, 033, 035, 036 — grep the test files for the ID). The
+remaining 18 were verified by reading the code at the evidence location each
+entry cites.
+
+Two entries resolved questions that were open in the code at the time of
+reconciliation, which is the reason this file is worth keeping rather than
+deleting:
+
+- **BUG-029** records "constant scheduler ignores warmup" as the defect, so
+  honouring a requested warmup is the intended behaviour. A test asserting the
+  opposite was marked xfail pending a decision; it is now a real test.
+- **BUG-004** records `global_step` counting micro-batches as the defect, so
+  counting optimizer steps is intended. Same story, same resolution.
 
 ## Status Legend
 
-- **FIXED** — Fixed during this audit session. Code committed but not yet pushed.
-- **OPEN** — Confirmed defect, not yet fixed. Has a TASK-### in `implementation-plan/backlog.md`.
+- **FIXED** — Verified fixed in the current tree.
 
 ---
 
@@ -13,10 +40,10 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-031 | SFT prompt masking missing | Critical | OPEN | TASK-025 |
-| BUG-033 | ORPO crashes end-to-end | Critical | OPEN | TASK-027 |
-| BUG-036 | DeepSpeed training loop broken | Critical | OPEN | TASK-029 |
-| BUG-011 | ORPO numerical instability (NaN/Inf) | Critical | OPEN | TASK-001 |
+| BUG-031 | SFT prompt masking missing | Critical | FIXED | TASK-025 |
+| BUG-033 | ORPO crashes end-to-end | Critical | FIXED | TASK-027 |
+| BUG-036 | DeepSpeed training loop broken | Critical | FIXED | TASK-029 |
+| BUG-011 | ORPO numerical instability (NaN/Inf) | Critical | FIXED | TASK-001 |
 | BUG-004 | global_step counts micro-batches | Critical | FIXED | — |
 | BUG-005 | Reported loss divided by gradient_accumulation | Critical | FIXED | — |
 | BUG-003 | GRPO OOM — deepcopy for all alignment methods | Critical | FIXED | — |
@@ -25,14 +52,14 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-032 | Preference log-probs include prompt tokens | High | OPEN | TASK-026 |
-| BUG-035 | QLoRA missing prepare_model_for_kbit_training | High | OPEN | TASK-028 |
-| BUG-034 | PPO is not real PPO (misleading name) | High | OPEN | TASK-031 |
-| BUG-037 | Studio bypasses alignment loss setup | High | OPEN | TASK-030 |
-| BUG-012 | model_merge output missing config.json | High | OPEN | TASK-013 |
-| BUG-013 | torch.load missing map_location | High | OPEN | TASK-004 |
-| BUG-014 | reinforce excluded from config validation | High | OPEN | TASK-006 |
-| BUG-022 | Optional backend imports crash without deps | High | OPEN | TASK-012 |
+| BUG-032 | Preference log-probs include prompt tokens | High | FIXED | TASK-026 |
+| BUG-035 | QLoRA missing prepare_model_for_kbit_training | High | FIXED | TASK-028 |
+| BUG-034 | PPO is not real PPO (misleading name) | High | FIXED | TASK-031 |
+| BUG-037 | Studio bypasses alignment loss setup | High | FIXED | TASK-030 |
+| BUG-012 | model_merge output missing config.json | High | FIXED | TASK-013 |
+| BUG-013 | torch.load missing map_location | High | FIXED | TASK-004 |
+| BUG-014 | reinforce excluded from config validation | High | FIXED | TASK-006 |
+| BUG-022 | Optional backend imports crash without deps | High | FIXED | TASK-012 |
 | BUG-006 | token_accuracy always returns 0.0 | High | FIXED | — |
 | BUG-007 | evaluate() device mismatch crash | High | FIXED | — |
 
@@ -40,17 +67,17 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-015 | MLflow log_params crash with nested config | Medium | OPEN | TASK-010 |
-| BUG-016 | Studio data format dropdown wrong choices | Medium | OPEN | TASK-018 |
-| BUG-017 | CLI eval crashes without --metrics | Medium | OPEN | TASK-019 |
-| BUG-018 | seed_all missing numpy | Medium | OPEN | TASK-020 |
-| BUG-019 | Distributed init hardcodes NCCL | Medium | OPEN | TASK-021 |
-| BUG-020 | eval_callback dummy metrics for non-loss | Medium | OPEN | TASK-003 |
-| BUG-021 | LR finder no device transfer | Medium | OPEN | TASK-022 |
-| BUG-023 | Logging log_scalar no exception isolation | Medium | OPEN | TASK-011 |
-| BUG-024 | format_text silent empty for unknown keys | Medium | OPEN | TASK-016 |
-| BUG-025 | preferences.py split without shuffle | Medium | OPEN | TASK-017 |
-| BUG-026 | Checkpoint metadata non-serializable tensors | Medium | OPEN | TASK-005 |
+| BUG-015 | MLflow log_params crash with nested config | Medium | FIXED | TASK-010 |
+| BUG-016 | Studio data format dropdown wrong choices | Medium | FIXED | TASK-018 |
+| BUG-017 | CLI eval crashes without --metrics | Medium | FIXED | TASK-019 |
+| BUG-018 | seed_all missing numpy | Medium | FIXED | TASK-020 |
+| BUG-019 | Distributed init hardcodes NCCL | Medium | FIXED | TASK-021 |
+| BUG-020 | eval_callback dummy metrics for non-loss | Medium | FIXED | TASK-003 |
+| BUG-021 | LR finder no device transfer | Medium | FIXED | TASK-022 |
+| BUG-023 | Logging log_scalar no exception isolation | Medium | FIXED | TASK-011 |
+| BUG-024 | format_text silent empty for unknown keys | Medium | FIXED | TASK-016 |
+| BUG-025 | preferences.py split without shuffle | Medium | FIXED | TASK-017 |
+| BUG-026 | Checkpoint metadata non-serializable tensors | Medium | FIXED | TASK-005 |
 | BUG-008 | Unknown kwargs silently ignored | Medium | FIXED | — |
 | BUG-009 | _split_dataset doesn't shuffle | Medium | FIXED | — |
 | BUG-010 | Streaming+eval_split silently drops eval | Medium | FIXED | — |
@@ -59,10 +86,10 @@ Last updated: 2026-06-03 15:00
 
 | ID | Title | Severity | Status | Task |
 |----|-------|----------|--------|------|
-| BUG-027 | SimPO zero-length sequence guard | Low | OPEN | TASK-002 |
-| BUG-028 | Agent tokenizer BOS duplication | Low | OPEN | TASK-024 |
-| BUG-029 | Constant scheduler ignores warmup_steps | Low | OPEN | TASK-023 |
-| BUG-030 | Studio theme not applied | Low | OPEN | — |
+| BUG-027 | SimPO zero-length sequence guard | Low | FIXED | TASK-002 |
+| BUG-028 | Agent tokenizer BOS duplication | Low | FIXED | TASK-024 |
+| BUG-029 | Constant scheduler ignores warmup_steps | Low | FIXED | TASK-023 |
+| BUG-030 | Studio theme not applied | Low | FIXED | — |
 | BUG-001 | trainlib references in example notebooks | Low | FIXED | — |
 | BUG-002 | 22 documentation errors in example notebooks | Low | FIXED | — |
 

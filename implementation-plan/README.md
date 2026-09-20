@@ -1,6 +1,26 @@
 # Implementation Plan
 
-Last updated: 2026-06-03 14:00
+Original plan: 2026-06-03 14:00
+Reconciled against the tree: 2026-09-20
+
+## Scope: which plan governs what
+
+This directory covers **remediation of xaytune v0.6** — the defects and gaps
+found by the audit in `gap-analysis/`.
+
+`xaytune-training-harness-spec/` covers a different workstream: building the
+**experiment control plane** on top of v0.6, with its own phased PR plan and
+ADRs. Neither supersedes the other. For control-plane work, follow that
+package's `15-implementation-plan.md`, not this one.
+
+## Current state
+
+**26 of the 31 tasks are done.** Every bug-sourced task has landed; the five
+still live are TASK-007, 008, 009, 014 and 015, all sourced from the open gaps
+in `gap-analysis/missing-features.md`. See `backlog.md` for the list.
+
+`testing-plan.md` and `observability-plan.md` are not tied to specific task IDs
+and remain useful as-is.
 
 ## Index
 

@@ -1,6 +1,29 @@
 # Gap Analysis — xaytune v0.6.0
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-20
+
+## Scope: which plan governs what
+
+This directory and `implementation-plan/` cover **remediation of xaytune
+v0.6** — defects and gaps in the existing training library.
+
+`xaytune-training-harness-spec/` covers something different: building the
+**experiment control plane** on top of v0.6. Neither supersedes the other, and
+an agent told to "follow the implementation plan" will pick the wrong one
+without this note. For control-plane work, start from that package's README and
+its ADRs, not from here.
+
+## Current state
+
+**All 37 bugs are fixed.** On 2026-09-20 the 27 still marked `OPEN` were
+re-checked one by one against the tree; all 27 had already been fixed and the
+status column had simply never been updated. See `bugs.md` for the method.
+
+**Five gaps remain open** — GAP-001 through GAP-005, all in config validation
+and export. `missing-features.md` is the only file here that still lists live
+work; the rest is a historical baseline of v0.6, useful for measuring the
+refactor against rather than for picking up tasks.
 
 ## How to Read This
 

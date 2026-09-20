@@ -1,6 +1,28 @@
 # New Features / Enhancements Backlog
 
-Last updated: 2026-06-03 15:00
+Original audit: 2026-06-03 15:00
+Reconciled against the tree: 2026-09-20
+
+## Shipped
+
+FEAT-001 (response-only loss masking), FEAT-002 (full PPO with rollout buffer
+and value model), FEAT-003 (QLoRA k-bit preparation), FEAT-004 (prompt-aware
+preference tokenization), FEAT-005 (DeepSpeed-aware loop), FEAT-007
+(multi-stage pipeline, `xaytune/pipeline.py`) and FEAT-008 (real-time Studio
+monitoring).
+
+## Not started
+
+- **FEAT-006** — evaluation with prompt-masked metrics (Should)
+- **FEAT-010** — AWQ/GPTQ quantization export (Could)
+- **FEAT-009** — experiment comparison, still deliberately Won't (use native
+  MLflow/W&B tooling)
+
+Note FEAT-002, FEAT-007 and FEAT-008 were all rated Could and shipped anyway,
+so the MoSCoW column below reflects the audit's priorities at the time rather
+than what actually got built.
+
+---
 
 Priority method: **MoSCoW** (Must/Should/Could/Won't for this release cycle)
 

@@ -1,5 +1,24 @@
 # Backlog
 
+Original plan: 2026-06-03
+Reconciled against the tree: 2026-09-20
+
+> **Only five of the 31 tasks are still live.** Every bug-sourced task is done;
+> what remains is sourced from the five open gaps in
+> `gap-analysis/missing-features.md`.
+
+| Task | Source | Summary |
+|------|--------|---------|
+| TASK-007 | GAP-003 | Run `validate_config()` from the Python API and Studio, not just the CLI |
+| TASK-008 | GAP-005 | Reject unknown config-override keys instead of silently creating them |
+| TASK-009 | GAP-004 | Add validation rules for `recipe="pretrain"` |
+| TASK-014 | GAP-001 | Fix GGUF conversion, which shells out to a module that does not exist |
+| TASK-015 | GAP-002 | Warn when `push_to_hub()` has no tokenizer to upload |
+
+Note TASK-007 and TASK-008 still carry the dependency ordering described in
+`dependencies.md`. Everything else in this file is a historical record of work
+that has landed.
+
 Last updated: 2026-06-03 14:00
 
 ---

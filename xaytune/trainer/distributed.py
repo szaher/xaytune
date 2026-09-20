@@ -51,7 +51,8 @@ def init_distributed() -> DistributedContext:
     if not dist.is_initialized():
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         dist.init_process_group(backend=backend)
-    torch.cuda.set_device(local_rank)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
 
     return DistributedContext(rank=rank, world_size=world_size, local_rank=local_rank)
 

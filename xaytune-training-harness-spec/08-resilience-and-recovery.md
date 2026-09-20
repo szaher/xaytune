@@ -75,6 +75,13 @@ class IncidentDetector(Protocol):
 Initial detectors:
 
 - CudaOOMDetector
+
+Note that adaptive micro-batch recovery has a hard precondition: it may resume only from
+a checkpoint taken at an optimizer-step boundary with a batch-size-independent
+`DataCursor` (ADR-012). Where the dataset or runtime cannot provide one -- streaming
+sources, for example -- the coordinator must reject the recovery rather than approximate
+it. An approximate resume that replays data while reporting success is worse than a
+failed recovery.
 - NaNInfDetector
 - ProcessFailureDetector
 - CheckpointFailureDetector

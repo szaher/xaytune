@@ -112,17 +112,23 @@ Xaytune:
 1. records incident
 2. classifies recoverable with execution override
 3. finds latest committed compatible checkpoint
-4. calculates:
+4. **verifies the checkpoint is eligible for batch-size-changing resume** — taken at an
+   optimizer-step boundary, carrying a batch-size-independent `DataCursor` (ADR-012).
+   If it is not, the recovery is rejected rather than approximated.
+5. calculates:
    - microbatch 4 → 2
    - grad accumulation 8 → 16
-5. policy approves
-6. budget approves
-7. attempt_A1_1 ends failed/recoverable
-8. creates attempt_A1_2
-9. restores checkpoint
-10. resumes
+6. policy approves
+7. budget approves
+8. attempt_A1_1 ends failed/recoverable
+9. creates attempt_A1_2
+10. restores checkpoint, resuming at the next unconsumed sample
+11. resumes, recording the achieved `ResumeSemantics` level
 
 No new ExperimentNode.
+
+Step 4 is what makes this scenario sound. Resuming on a batch index would replay 200
+samples when the micro-batch halves, while reporting exact continuation.
 
 ### Step D — first evaluation
 

@@ -146,6 +146,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 - `adrs/` — architecture decision records required before implementation
   - ADR-011 extends ADR-003 and ADR-006 with `TrainingIntervention` and a layered
     identity model; read it alongside both
+  - ADR-012 defines data position and resume guarantees; required before any
+    adaptive-recovery work, and before persistence structures are frozen
 - `schemas/` — proposed YAML and JSON/Python schema examples
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases
 

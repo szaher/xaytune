@@ -250,6 +250,46 @@ class TestWrapModelDeepSpeed:
 
         assert result == mock_engine
 
+    def test_generated_config_currently_omits_optimizer_and_scheduler(self):
+        """Characterization test: pins a KNOWN GAP, not desired behaviour.
+
+        ``wrap_model_distributed()`` builds a DeepSpeed config with only
+        ``zero_optimization`` and the batch-size keys, passes no ``optimizer``
+        to ``ds.initialize()``, and discards the optimizer and LR scheduler
+        that ``initialize()`` returns.  DeepSpeed creates an optimizer only
+        when the caller supplies one or the JSON config names one, so on this
+        path neither side owns the optimizer or the schedule.
+
+        Nothing in the trainer-side tests can catch that, because they all mock
+        ``_is_deepspeed_engine`` and never reach this function -- which is
+        exactly how the trainer and this wrapper drifted apart.  This test sits
+        at the seam.
+
+        **The follow-up that settles optimizer/scheduler ownership must invert
+        these assertions.** If it does not, it has not fixed BUG-036.
+        """
+        from xaytune.config.schema import DeepSpeedConfig
+
+        model = MagicMock()
+        ctx = DistributedContext(rank=0, world_size=2, local_rank=0)
+        ds_config = DeepSpeedConfig(zero_stage=2)
+
+        with patch.dict("sys.modules", {"deepspeed": MagicMock()}):
+            import sys
+
+            mock_ds = sys.modules["deepspeed"]
+            mock_ds.initialize.return_value = (MagicMock(), None, None, None)
+
+            wrap_model_distributed(model, strategy="deepspeed", ctx=ctx, deepspeed_config=ds_config)
+
+            supplied = mock_ds.initialize.call_args.kwargs
+            supplied_config = supplied["config"]
+
+        assert "optimizer" not in supplied_config
+        assert "scheduler" not in supplied_config
+        assert "optimizer" not in supplied
+        assert "lr_scheduler" not in supplied
+
     def test_deepspeed_without_config_returns_model(self):
         model = MagicMock()
         ctx = DistributedContext(rank=0, world_size=2, local_rank=0)

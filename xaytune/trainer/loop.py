@@ -69,6 +69,14 @@ class Trainer:
         self._is_ds = self._is_deepspeed_engine(model)
 
         if self._is_ds:
+            if optimizer is not None:
+                raise ValueError(
+                    "An optimizer cannot be supplied to train() for an already "
+                    "initialized DeepSpeed engine: this loop calls model.step() "
+                    "and never steps a trainer-side optimizer, so it would have "
+                    "no effect. Name it in the DeepSpeed config, or pass it to "
+                    "deepspeed.initialize(), so the engine steps it."
+                )
             optimizer = None
         elif optimizer is None:
             optimizer = torch.optim.AdamW(
@@ -96,8 +104,28 @@ class Trainer:
             if supports_grad_scaler(self._device_type, self._amp_dtype):
                 self._scaler = torch.amp.GradScaler()
 
-        # Create learning rate scheduler
-        if scheduler is None:
+        # Create learning rate scheduler.  A trainer-side scheduler cannot work
+        # on the DeepSpeed path at all: there is no optimizer to attach one to
+        # (create_scheduler would reach LambdaLR(None, ...) and raise), and
+        # training_step() returns early on the DeepSpeed branch, so
+        # self._scheduler.step() is unreachable even when one exists.  Accepting
+        # a scheduler and silently never stepping it is worse than refusing it.
+        # Note this says nothing about what the engine itself holds -- see
+        # TASK-029; the generated DeepSpeed config names no optimizer today.
+        if self._is_ds:
+            if scheduler is not None:
+                raise ValueError(
+                    "A scheduler cannot be supplied to train() for a DeepSpeed "
+                    "engine: this loop calls model.step() and never steps a "
+                    "trainer-side scheduler, so it would have no effect. Name "
+                    "the schedule in the DeepSpeed config, or pass it to "
+                    "deepspeed.initialize(), so the engine advances it."
+                )
+            logger.info(
+                "DeepSpeed engine detected: no trainer-side optimizer or scheduler "
+                "is created; backward/step are delegated to the engine."
+            )
+        elif scheduler is None:
             try:
                 num_batches = len(train_dataloader)
             except TypeError:
@@ -127,13 +155,19 @@ class Trainer:
                         torch.load(opt_path, weights_only=True, map_location="cpu")
                     )
                 else:
-                    # DeepSpeed owns the optimizer, so there is nothing to
-                    # restore here; its state comes back through the engine's
-                    # own checkpoint API. Say so rather than resume silently
-                    # from a fresh optimizer.
+                    # There is no trainer-side optimizer to restore into on the
+                    # DeepSpeed path, and nothing here calls the engine's own
+                    # checkpoint API either, so this resume does not recover
+                    # optimizer state anywhere.  Say only that: whether the
+                    # engine holds an optimizer at all depends on the generated
+                    # DeepSpeed config, which today names none.  Tracked by
+                    # TASK-029.
                     logger.warning(
-                        "Skipping optimizer state restore from %s: DeepSpeed manages "
-                        "optimizer state through its own checkpoint API.",
+                        "Skipping trainer optimizer state restore from %s: this model "
+                        "is a DeepSpeed engine and xaytune does not restore DeepSpeed "
+                        "engine state through engine.load_checkpoint(). Optimizer "
+                        "state is therefore NOT restored by this resume path. "
+                        "DeepSpeed checkpoint ownership is tracked by TASK-029.",
                         opt_path,
                     )
             scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"

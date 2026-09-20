@@ -10,6 +10,7 @@ Covers:
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from xaytune.config.schema import TrainerConfig
@@ -49,7 +50,6 @@ class TestDeepSpeedOptimizerSkip:
             state = trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
-                scheduler=MagicMock(),
             )
 
         assert trainer._optimizer is None
@@ -78,12 +78,18 @@ class TestDeepSpeedOptimizerSkip:
 
 
 class TestDeepSpeedResume:
-    def test_resume_does_not_crash_when_deepspeed_owns_the_optimizer(self, tmp_path, caplog):
+    def test_deepspeed_skips_trainer_optimizer_restore(self, tmp_path, caplog):
         """The DS path sets optimizer to None; restoring state must not crash.
 
         Regression: train() called optimizer.load_state_dict() unguarded while
         the adjacent scaler and scheduler branches both checked for None, so
         DeepSpeed + resume_checkpoint_dir raised AttributeError.
+
+        Named for what it proves. The skip is real and does not crash; it is
+        *not* evidence that the state is restored elsewhere. Nothing calls
+        engine.load_checkpoint(), so this resume path restores no optimizer
+        state, and the warning must say that without claiming what the engine
+        holds -- the generated config names no optimizer. Tracked by TASK-029.
         """
         config = TrainerConfig(num_epochs=1, max_steps=1)
         trainer = Trainer(config=config)
@@ -105,14 +111,19 @@ class TestDeepSpeedResume:
                 state = trainer.train(
                     model=mock_model,
                     train_dataloader=dl,
-                    scheduler=MagicMock(),
                     resume_checkpoint_dir=str(tmp_path),
                 )
 
         assert state.global_step == 1
         assert trainer._optimizer is None
-        # The skip is reported rather than silently resuming from a fresh optimizer.
-        assert any("DeepSpeed manages optimizer state" in r.message for r in caplog.records)
+        # The warning names the consequence and the missing route, and asserts
+        # nothing about what the engine holds -- the generated config names no
+        # optimizer, so "the engine owns it" is not established.
+        message = next(
+            r.message for r in caplog.records if "Skipping trainer optimizer" in r.message
+        )
+        assert "NOT restored" in message
+        assert "engine.load_checkpoint" in message
 
     def test_non_deepspeed_resume_restores_optimizer_state(self, tmp_path):
         config = TrainerConfig(num_epochs=1, max_steps=1)
@@ -167,7 +178,6 @@ class TestDeepSpeedBackwardDelegation:
             trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
-                scheduler=MagicMock(),
             )
 
         # DS path calls model.backward(loss) and model.step()
@@ -229,9 +239,122 @@ class TestDeepSpeedLossValue:
             state = trainer.train(
                 model=mock_model,
                 train_dataloader=dl,
-                scheduler=MagicMock(),
             )
 
         # Last loss should be recorded
         assert abs(state.metrics["loss"] - 0.3) < 1e-5
         assert state.global_step == 2
+
+
+class TestDeepSpeedOptimizerAndSchedulerOwnership:
+    """Under DeepSpeed the trainer owns neither the optimizer nor the schedule.
+
+    So it builds neither, and refuses either if one is supplied -- accepting an
+    object it will never step is how a caller ends up believing in semantics
+    that are not true.
+
+    Every production entrypoint -- ``recipes.finetune``, ``recipes.pretrain``,
+    ``recipes.align`` and ``studio.jobs`` -- calls ``train()`` without a
+    ``scheduler``.  Every DeepSpeed test in this module used to pass
+    ``scheduler=MagicMock()``, which is what let the trainer-side scheduler
+    branch go unexercised on the DeepSpeed path: with the optimizer set to None
+    it reached ``LambdaLR(None, ...)`` and raised ``AttributeError: 'NoneType'
+    object has no attribute 'param_groups'`` before the first batch.  Those
+    injections are gone, so the DeepSpeed tests now exercise the path that
+    production actually takes.
+    """
+
+    @staticmethod
+    def _engine() -> MagicMock:
+        model = MagicMock()
+        output = MagicMock()
+        output.loss = MagicMock()
+        output.loss.item.return_value = 0.5
+        model.return_value = output
+        return model
+
+    def test_deepspeed_train_without_scheduler_does_not_raise(self):
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        model = self._engine()
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            state = trainer.train(model=model, train_dataloader=dl)
+
+        assert trainer._optimizer is None
+        assert trainer._scheduler is None
+        assert state.global_step == 1
+        model.backward.assert_called()
+        model.step.assert_called()
+
+    def test_deepspeed_train_without_scheduler_never_builds_one(self):
+        """The guard is the absence of the call, not just the absence of a crash."""
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with (
+            patch.object(Trainer, "_is_deepspeed_engine", return_value=True),
+            patch("xaytune.trainer.loop.create_scheduler") as mock_create,
+        ):
+            trainer.train(model=self._engine(), train_dataloader=dl)
+
+        mock_create.assert_not_called()
+
+    def test_explicit_optimizer_under_deepspeed_is_refused(self):
+        """Same class of bug as the scheduler, same answer.
+
+        ``train()`` used to overwrite a caller's optimizer with None on this
+        path, so a supplied optimizer was accepted and silently discarded --
+        the caller believing their optimizer was in use when the engine's was.
+        """
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            with pytest.raises(ValueError, match="optimizer cannot be supplied"):
+                trainer.train(
+                    model=self._engine(),
+                    train_dataloader=dl,
+                    optimizer=MagicMock(),
+                )
+
+    def test_explicit_scheduler_under_deepspeed_is_refused(self):
+        """Retaining a scheduler is not the same as honouring it.
+
+        ``training_step()`` returns early on the DeepSpeed branch, so
+        ``self._scheduler.step()`` is unreachable no matter how the scheduler
+        got there.  Accepting one and silently never stepping it would leave a
+        caller believing their LR schedule was in effect, so it is refused.
+        The supported routes are the DeepSpeed config or ``ds.initialize()``.
+        """
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
+            with pytest.raises(ValueError, match="scheduler cannot be supplied"):
+                trainer.train(
+                    model=self._engine(),
+                    train_dataloader=dl,
+                    scheduler=MagicMock(),
+                )
+
+    def test_non_deepspeed_without_scheduler_still_builds_one(self):
+        """The skip is conditional on DeepSpeed, not a blanket removal."""
+        config = TrainerConfig(num_epochs=1, max_steps=1)
+        trainer = Trainer(config=config)
+
+        model = MagicMock()
+        model.parameters.return_value = iter([torch.randn(4, requires_grad=True)])
+        output = MagicMock()
+        output.loss = torch.tensor(0.5, requires_grad=True)
+        model.return_value = output
+
+        dl = [{"input_ids": torch.tensor([1, 2, 3])}]
+
+        trainer.train(model=model, train_dataloader=dl)
+
+        assert trainer._scheduler is not None

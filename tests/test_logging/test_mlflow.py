@@ -39,7 +39,8 @@ class TestMLflowBackend:
         backend = MLflowBackend()
         backend.log_config({"lr": 0.001, "epochs": 3})
 
-        mlflow.log_params.assert_called_once_with({"lr": 0.001, "epochs": 3})
+        # MLflow stores params as strings; _flatten_dict stringifies explicitly.
+        mlflow.log_params.assert_called_once_with({"lr": "0.001", "epochs": "3"})
 
     def test_close_ends_run(self):
         import mlflow

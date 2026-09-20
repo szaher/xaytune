@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 try:
-    from peft import LoraConfig, TaskType, get_peft_model
+    from peft import (
+        LoraConfig,
+        TaskType,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
 except ImportError:
     LoraConfig = None  # type: ignore[misc,assignment]
     TaskType = None  # type: ignore[misc,assignment]
     get_peft_model = None  # type: ignore[misc,assignment]
+    prepare_model_for_kbit_training = None  # type: ignore[misc,assignment]
 
 from xaytune.models.loader import ModelResult
 
@@ -44,12 +50,8 @@ def apply_lora(
             "peft is required for LoRA. Install it with: pip install peft "
             "or pip install xaytune[all]"
         )
-    if model_result.quantization:
-        try:
-            from peft import prepare_model_for_kbit_training
-            model_result.model = prepare_model_for_kbit_training(model_result.model)
-        except ImportError:
-            pass
+    if model_result.quantization and prepare_model_for_kbit_training is not None:
+        model_result.model = prepare_model_for_kbit_training(model_result.model)
     resolved_modules = get_target_modules(target_modules, model_result.model)
     lora_config = LoraConfig(
         r=rank,

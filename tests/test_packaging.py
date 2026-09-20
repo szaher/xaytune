@@ -19,6 +19,7 @@ class TestPackageMetadata:
             "finetune",
             "JobManager",
             "lr_find",
+            "pipeline",
             "pretrain",
         }
         assert set(xaytune.__all__) == expected

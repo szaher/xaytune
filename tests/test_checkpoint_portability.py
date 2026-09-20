@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 import torch
 
 from xaytune.trainer.callbacks import TrainState
@@ -45,10 +46,12 @@ class TestTensorMetricSerialization:
             assert metadata_path.exists()
             metadata = json.loads(metadata_path.read_text())
 
-            # Values must be plain Python floats, not tensor reprs
-            assert metadata["metrics"]["loss"] == 0.5
+            # Values must be plain Python floats, not tensor reprs.
+            # Compared with approx because the source tensors are float32:
+            # torch.tensor(0.95).item() is 0.949999988079071.
+            assert metadata["metrics"]["loss"] == pytest.approx(0.5, rel=1e-6)
             assert isinstance(metadata["metrics"]["loss"], float)
-            assert metadata["metrics"]["accuracy"] == 0.95
+            assert metadata["metrics"]["accuracy"] == pytest.approx(0.95, rel=1e-6)
             assert isinstance(metadata["metrics"]["accuracy"], float)
 
     def test_save_checkpoint_with_plain_float_metrics(self):

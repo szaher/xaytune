@@ -22,6 +22,8 @@ def _make_tokenizer(vocab_size: int = 100, max_length: int = 512) -> MagicMock:
         max_length=512,
         padding=False,
         return_attention_mask=True,
+        add_special_tokens=True,
+        **kwargs,
     ):
         ids = list(range(1, min(len(text.split()) + 1, max_length + 1)))
         return {"input_ids": ids, "attention_mask": [1] * len(ids)}
@@ -55,6 +57,8 @@ class TestTokenizeDataset:
             max_length=512,
             padding=False,
             return_attention_mask=True,
+            add_special_tokens=True,
+            **kwargs,
         ):
             ids = list(range(1, min(11, max_length + 1)))
             return {"input_ids": ids, "attention_mask": [1] * len(ids)}
@@ -82,8 +86,8 @@ class TestTokenizeDataset:
         tok = _make_tokenizer()
         result = tokenize_dataset(data, tok)
         labels = result[0]["labels"]
-        assert any(l == -100 for l in labels), "Prompt tokens should be masked"
-        assert any(l != -100 for l in labels), "Response tokens should be trainable"
+        assert any(label == -100 for label in labels), "Prompt tokens should be masked"
+        assert any(label != -100 for label in labels), "Response tokens should be trainable"
 
     def test_tokenize_empty_data(self):
         tok = _make_tokenizer()
@@ -100,6 +104,8 @@ class TestTokenizeDataset:
             max_length=512,
             padding=False,
             return_attention_mask=True,
+            add_special_tokens=True,
+            **kwargs,
         ):
             call_args["max_length"] = max_length
             ids = list(range(1, 4))
@@ -118,6 +124,8 @@ class TestTokenizeDataset:
             max_length=512,
             padding=False,
             return_attention_mask=True,
+            add_special_tokens=True,
+            **kwargs,
         ):
             return {"input_ids": [], "attention_mask": []}
 
@@ -207,6 +215,8 @@ class TestTokenizePreferenceDataset:
             max_length=512,
             padding=False,
             return_attention_mask=True,
+            add_special_tokens=True,
+            **kwargs,
         ):
             call_texts.append(text)
             ids = list(range(1, len(text.split()) + 1))
@@ -246,6 +256,8 @@ class TestTokenizePreferenceDataset:
             max_length=512,
             padding=False,
             return_attention_mask=True,
+            add_special_tokens=True,
+            **kwargs,
         ):
             call_texts.append(text)
             ids = list(range(1, len(text.split()) + 1))

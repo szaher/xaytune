@@ -83,29 +83,61 @@ class TestAutoChatTemplate:
             for item in data:
                 f.write(json.dumps(item) + "\n")
 
-    def test_chat_format_uses_tokenizer_template(self):
+    def test_chat_format_defers_template_to_tokenizer(self):
+        """Chat data is loaded as structured turns, not pre-rendered text.
+
+        The chat template is applied later, in ``tokenize_multiturn``,
+        so that per-turn label masking (assistant turns trainable, everything
+        else masked) is still possible. Loading used to render a ``text`` field
+        eagerly, which threw that structure away.
+        """
         tokenizer = MagicMock()
-        tokenizer.apply_chat_template.return_value = "<s>user: hi</s>"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data = [{"messages": [{"role": "user", "content": "hi"}]}]
             path = Path(tmpdir) / "data.jsonl"
             self._write_jsonl(data, path)
             ds = load_dataset(str(path), format="chat", tokenizer=tokenizer)
-            assert ds[0]["text"] == "<s>user: hi</s>"
-            tokenizer.apply_chat_template.assert_called_once()
 
-    def test_sharegpt_format_uses_tokenizer_template(self):
+            assert ds[0]["turns"] == [{"role": "user", "content": "hi"}]
+            assert ds[0]["_use_chat_template"] is True
+            # Rendering is deferred, so the template is not applied at load time.
+            tokenizer.apply_chat_template.assert_not_called()
+
+    def test_sharegpt_format_defers_template_to_tokenizer(self):
         tokenizer = MagicMock()
-        tokenizer.apply_chat_template.return_value = "<s>user: hello</s>"
 
         with tempfile.TemporaryDirectory() as tmpdir:
             data = [{"conversations": [{"from": "human", "value": "hello"}]}]
             path = Path(tmpdir) / "data.jsonl"
             self._write_jsonl(data, path)
             ds = load_dataset(str(path), format="sharegpt", tokenizer=tokenizer)
-            assert ds[0]["text"] == "<s>user: hello</s>"
-            tokenizer.apply_chat_template.assert_called_once()
+
+            # ShareGPT "human"/"gpt" roles are normalised to "user"/"assistant".
+            assert ds[0]["turns"] == [{"role": "user", "content": "hello"}]
+            assert ds[0]["_use_chat_template"] is True
+            tokenizer.apply_chat_template.assert_not_called()
+
+    def test_flagged_dataset_applies_template_at_tokenization(self):
+        """The deferred flag is what makes the tokenizer use the template."""
+        from xaytune.data.tokenizer import tokenize_multiturn
+
+        tokenizer = MagicMock()
+        tokenizer.model_max_length = 512
+        tokenizer.apply_chat_template.return_value = "<s>user: hi</s>"
+        tokenizer.side_effect = lambda text, **kw: {
+            "input_ids": list(range(1, len(text.split()) + 1)),
+            "attention_mask": [1] * len(text.split()),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data = [{"messages": [{"role": "user", "content": "hi"}]}]
+            path = Path(tmpdir) / "data.jsonl"
+            self._write_jsonl(data, path)
+            ds = load_dataset(str(path), format="chat", tokenizer=tokenizer)
+
+            tokenize_multiturn(list(ds), tokenizer)
+            assert tokenizer.apply_chat_template.called
 
     def test_alpaca_format_ignores_tokenizer(self):
         tokenizer = MagicMock()
@@ -119,13 +151,16 @@ class TestAutoChatTemplate:
             assert "Instruction" in ds[0]["text"]
             tokenizer.apply_chat_template.assert_not_called()
 
-    def test_no_tokenizer_uses_default_format(self):
+    def test_no_tokenizer_omits_chat_template_flag(self):
+        """Without a tokenizer there is no template to defer to."""
         with tempfile.TemporaryDirectory() as tmpdir:
             data = [{"messages": [{"role": "user", "content": "hi"}]}]
             path = Path(tmpdir) / "data.jsonl"
             self._write_jsonl(data, path)
             ds = load_dataset(str(path), format="chat")
-            assert "User" in ds[0]["text"]
+
+            assert ds[0]["turns"] == [{"role": "user", "content": "hi"}]
+            assert "_use_chat_template" not in ds[0]
 
 
 class TestLoadDatasetHuggingFace:

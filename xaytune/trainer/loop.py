@@ -72,10 +72,10 @@ class Trainer:
             if optimizer is not None:
                 raise ValueError(
                     "An optimizer cannot be supplied to train() for an already "
-                    "initialized DeepSpeed engine: the engine owns stepping, so "
-                    "a trainer-side optimizer would never be stepped. Configure "
-                    "it in the DeepSpeed config, or pass it to "
-                    "deepspeed.initialize() so the engine takes ownership."
+                    "initialized DeepSpeed engine: this loop calls model.step() "
+                    "and never steps a trainer-side optimizer, so it would have "
+                    "no effect. Name it in the DeepSpeed config, or pass it to "
+                    "deepspeed.initialize(), so the engine steps it."
                 )
             optimizer = None
         elif optimizer is None:
@@ -110,14 +110,16 @@ class Trainer:
         # training_step() returns early on the DeepSpeed branch, so
         # self._scheduler.step() is unreachable even when one exists.  Accepting
         # a scheduler and silently never stepping it is worse than refusing it.
+        # Note this says nothing about what the engine itself holds -- see
+        # TASK-029; the generated DeepSpeed config names no optimizer today.
         if self._is_ds:
             if scheduler is not None:
                 raise ValueError(
                     "A scheduler cannot be supplied to train() for a DeepSpeed "
-                    "engine: the engine owns optimizer stepping, so a "
-                    "trainer-side scheduler would never be stepped. Configure "
+                    "engine: this loop calls model.step() and never steps a "
+                    "trainer-side scheduler, so it would have no effect. Name "
                     "the schedule in the DeepSpeed config, or pass it to "
-                    "deepspeed.initialize() so the engine advances it."
+                    "deepspeed.initialize(), so the engine advances it."
                 )
             logger.info(
                 "DeepSpeed engine detected: no trainer-side optimizer or scheduler "
@@ -154,16 +156,18 @@ class Trainer:
                     )
                 else:
                     # There is no trainer-side optimizer to restore into on the
-                    # DeepSpeed path.  DeepSpeed's own engine.load_checkpoint()
-                    # would be the route, but nothing here calls it -- so this
-                    # resume genuinely loses optimizer state rather than
-                    # recovering it elsewhere.  Say that, rather than implying a
-                    # restore that does not happen.  Tracked by TASK-029.
+                    # DeepSpeed path, and nothing here calls the engine's own
+                    # checkpoint API either, so this resume does not recover
+                    # optimizer state anywhere.  Say only that: whether the
+                    # engine holds an optimizer at all depends on the generated
+                    # DeepSpeed config, which today names none.  Tracked by
+                    # TASK-029.
                     logger.warning(
-                        "Skipping optimizer state restore from %s: the DeepSpeed "
-                        "engine owns the optimizer and engine.load_checkpoint() is "
-                        "not wired up, so optimizer state is NOT restored. Training "
-                        "will continue from a fresh optimizer state.",
+                        "Skipping trainer optimizer state restore from %s: this model "
+                        "is a DeepSpeed engine and xaytune does not restore DeepSpeed "
+                        "engine state through engine.load_checkpoint(). Optimizer "
+                        "state is therefore NOT restored by this resume path. "
+                        "DeepSpeed checkpoint ownership is tracked by TASK-029.",
                         opt_path,
                     )
             scaler_path = Path(resume_checkpoint_dir) / "scaler.pt"

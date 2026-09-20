@@ -87,8 +87,9 @@ class TestDeepSpeedResume:
 
         Named for what it proves. The skip is real and does not crash; it is
         *not* evidence that the state is restored elsewhere. Nothing calls
-        engine.load_checkpoint(), so this resume loses optimizer state. The
-        warning must say so. Tracked by TASK-029.
+        engine.load_checkpoint(), so this resume path restores no optimizer
+        state, and the warning must say that without claiming what the engine
+        holds -- the generated config names no optimizer. Tracked by TASK-029.
         """
         config = TrainerConfig(num_epochs=1, max_steps=1)
         trainer = Trainer(config=config)
@@ -115,10 +116,14 @@ class TestDeepSpeedResume:
 
         assert state.global_step == 1
         assert trainer._optimizer is None
-        # The warning names the actual consequence -- state is lost, not relocated.
-        message = next(r.message for r in caplog.records if "Skipping optimizer state" in r.message)
-        assert "is NOT restored" in message
-        assert "load_checkpoint" in message
+        # The warning names the consequence and the missing route, and asserts
+        # nothing about what the engine holds -- the generated config names no
+        # optimizer, so "the engine owns it" is not established.
+        message = next(
+            r.message for r in caplog.records if "Skipping trainer optimizer" in r.message
+        )
+        assert "NOT restored" in message
+        assert "engine.load_checkpoint" in message
 
     def test_non_deepspeed_resume_restores_optimizer_state(self, tmp_path):
         config = TrainerConfig(num_epochs=1, max_steps=1)
@@ -330,7 +335,7 @@ class TestDeepSpeedOptimizerAndSchedulerOwnership:
         dl = [{"input_ids": torch.tensor([1, 2, 3])}]
 
         with patch.object(Trainer, "_is_deepspeed_engine", return_value=True):
-            with pytest.raises(ValueError, match="never be stepped"):
+            with pytest.raises(ValueError, match="scheduler cannot be supplied"):
                 trainer.train(
                     model=self._engine(),
                     train_dataloader=dl,

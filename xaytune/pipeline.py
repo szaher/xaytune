@@ -100,23 +100,15 @@ def run_pipeline(
             elif stage.eval:
                 result = _run_eval_stage(stage, model_path)
             else:
-                raise ValueError(
-                    f"Stage '{stage.name}' must have one of: recipe, export, eval"
-                )
+                raise ValueError(f"Stage '{stage.name}' must have one of: recipe, export, eval")
         except Exception as e:
             logger.error(f"Stage '{stage.name}' failed: {e}")
-            results[stage.name] = StageResult(
-                type="error", status="failed", error=str(e)
-            )
+            results[stage.name] = StageResult(type="error", status="failed", error=str(e))
             _save_state(state_path, config.name, results)
-            return PipelineResult(
-                name=config.name, stages=results, completed=False
-            )
+            return PipelineResult(name=config.name, stages=results, completed=False)
 
         elapsed = time.time() - start
-        logger.info(
-            f"[{i + 1}/{total}] Stage '{stage.name}' completed in {elapsed:.1f}s"
-        )
+        logger.info(f"[{i + 1}/{total}] Stage '{stage.name}' completed in {elapsed:.1f}s")
         results[stage.name] = result
         _save_state(state_path, config.name, results)
 
@@ -124,23 +116,21 @@ def run_pipeline(
     return PipelineResult(name=config.name, stages=results, completed=True)
 
 
-def _run_train_stage(
-    stage: StageConfig, model_path: str | None, output_dir: str
-) -> StageResult:
+def _run_train_stage(stage: StageConfig, model_path: str | None, output_dir: str) -> StageResult:
     from xaytune.config.schema import (
         DataConfig,
+        LoraConfig,
         ModelConfig,
         OutputConfig,
         TrainConfig,
+        TrainerConfig,
     )
     from xaytune.recipes.align import align
     from xaytune.recipes.finetune import finetune
     from xaytune.recipes.pretrain import pretrain
 
     if model_path is None:
-        raise ValueError(
-            f"Stage '{stage.name}': no model specified and no previous stage output"
-        )
+        raise ValueError(f"Stage '{stage.name}': no model specified and no previous stage output")
 
     train_config = TrainConfig(
         recipe=stage.recipe,  # type: ignore[arg-type]
@@ -152,8 +142,6 @@ def _run_train_stage(
         output=OutputConfig(dir=output_dir),
         method_params=stage.method_params,
     )
-
-    from xaytune.config.schema import LoraConfig, TrainerConfig
 
     recipe_fn = {"finetune": finetune, "pretrain": pretrain, "align": align}
     fn = recipe_fn.get(stage.recipe)  # type: ignore[arg-type]
@@ -168,13 +156,9 @@ def _run_train_stage(
     )
 
 
-def _run_export_stage(
-    stage: StageConfig, model_path: str | None, output_dir: str
-) -> StageResult:
+def _run_export_stage(stage: StageConfig, model_path: str | None, output_dir: str) -> StageResult:
     if model_path is None:
-        raise ValueError(
-            f"Stage '{stage.name}': no model to export (no previous stage output)"
-        )
+        raise ValueError(f"Stage '{stage.name}': no model to export (no previous stage output)")
 
     action = stage.export
     if action == "merge":
@@ -199,9 +183,7 @@ def _run_export_stage(
         from xaytune.export import push_to_hub
 
         if not stage.repo:
-            raise ValueError(
-                f"Stage '{stage.name}': push_to_hub requires 'repo' field"
-            )
+            raise ValueError(f"Stage '{stage.name}': push_to_hub requires 'repo' field")
         push_to_hub(model_path, repo=stage.repo)
         return StageResult(type="export", output=stage.repo)
 
@@ -209,13 +191,9 @@ def _run_export_stage(
         raise ValueError(f"Unknown export action: {action}")
 
 
-def _run_eval_stage(
-    stage: StageConfig, model_path: str | None
-) -> StageResult:
+def _run_eval_stage(stage: StageConfig, model_path: str | None) -> StageResult:
     if model_path is None:
-        raise ValueError(
-            f"Stage '{stage.name}': no model to evaluate"
-        )
+        raise ValueError(f"Stage '{stage.name}': no model to evaluate")
 
     eval_cfg = stage.eval
     assert eval_cfg is not None
@@ -233,9 +211,7 @@ def _run_eval_stage(
             dataset = [_json.loads(line) for line in raw.strip().splitlines() if line.strip()]
 
         if dataset:
-            results = evaluate(
-                model=model_path, dataset=dataset, metrics=eval_cfg.metrics
-            )
+            results = evaluate(model=model_path, dataset=dataset, metrics=eval_cfg.metrics)
             all_metrics.update(results)
 
     if eval_cfg.benchmarks:
@@ -281,9 +257,7 @@ def _print_plan(config: PipelineConfig) -> None:
             prev = output
 
 
-def _save_state(
-    path: Path, name: str, results: dict[str, StageResult]
-) -> None:
+def _save_state(path: Path, name: str, results: dict[str, StageResult]) -> None:
     data = {
         "name": name,
         "stages": {k: v.model_dump() for k, v in results.items()},

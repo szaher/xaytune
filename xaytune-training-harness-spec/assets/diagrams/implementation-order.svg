@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1160" viewBox="0 0 1200 1160" role="img" aria-labelledby="implementation-order-title implementation-order-desc">
 <title id="implementation-order-title">Build in the order contracts become fixed</title>
-<desc id="implementation-order-desc">Bands A through J: domain hardening, transactional persistence, compile/runtime, durable evaluation, action/policy/budget, recovery/interventions, planner/branching, daemon and restart MVP, LLM planner, and platform integrations. ADR-005 gates Band B. The operation journal precedes LocalRuntime; policy precedes recovery.</desc>
+<desc id="implementation-order-desc">Bands A through J: domain hardening, transactional persistence, compile/runtime, durable evaluation, action/policy/budget, recovery/interventions, planner/branching, daemon and restart MVP, LLM planner, and platform integrations. ADR-005 is accepted, so Band B is open. The operation journal precedes LocalRuntime; policy precedes recovery.</desc>
 <defs><marker id="implementation-order-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
 <style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
 <rect width="1200" height="1160" fill="#f5f8fb"/>
@@ -57,7 +57,7 @@
 <text x="145" y="970" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Platform integrations</text>
 <text x="145" y="1000" font-size="20" fill="#52677b" font-weight="400" text-anchor="start" class="">Ray / TorchFT / Training Hub</text>
 <rect x="48" y="1051" width="1104" height="53" rx="12" fill="#fff2df" stroke="#ead6b5" stroke-width="1.5"/>
-<text x="600" y="1084" font-size="21" fill="#ad591f" font-weight="700" text-anchor="middle" class="">ADR-005 must be accepted before Band B starts, including PR-004.</text>
+<text x="600" y="1084" font-size="21" fill="#ad591f" font-weight="700" text-anchor="middle" class="">ADR-005 accepted 2026-09-21 — Band B is open and PR-004 may start.</text>
 <text x="48" y="1136" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>
 <text x="1152" y="1136" font-size="14" fill="#52677b" font-weight="400" text-anchor="end" class="">Contracts and rollout status: see linked specification</text>
 </svg>

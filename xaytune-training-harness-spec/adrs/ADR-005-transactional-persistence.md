@@ -1,7 +1,12 @@
 # ADR-005 — The persistence transaction contract
 
 ## Status
-Proposed — expanded 2026-09-21. **This is the gate on band B, including PR-004.**
+Accepted — 2026-09-21. **This gates band B, including PR-004, which may now
+start.**
+
+Expanded from a fifteen-line single-transaction rule to the contract below
+before acceptance, because band B grew to own the operation journal, the Action
+substrate and the projections.
 
 The original version of this ADR was fifteen lines describing one transaction:
 validate revision, update aggregate, increment revision, insert event, insert

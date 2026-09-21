@@ -410,8 +410,9 @@ def roadmap():
         "The numbered implementation plan remains authoritative for individual PRs and gates.",
         "Bands A through J: domain hardening, transactional persistence, compile/runtime, "
         "durable evaluation, action/policy/budget, recovery/interventions, planner/branching, "
-        "daemon and restart MVP, LLM planner, and platform integrations. ADR-005 gates Band B. "
-        "The operation journal precedes LocalRuntime; policy precedes recovery.",
+        "daemon and restart MVP, LLM planner, and platform integrations. ADR-005 is "
+        "accepted, so Band B is open. The operation journal precedes LocalRuntime; "
+        "policy precedes recovery.",
     )
     stages = [
         ("A", "Domain contracts", "IDs · state machines · immutable scientific identity", TEAL),
@@ -452,7 +453,7 @@ def roadmap():
     d.text(
         600,
         1084,
-        "ADR-005 must be accepted before Band B starts, including PR-004.",
+        "ADR-005 accepted 2026-09-21 \u2014 Band B is open and PR-004 may start.",
         21,
         ORANGE,
         bold=True,

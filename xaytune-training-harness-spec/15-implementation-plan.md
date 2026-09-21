@@ -101,6 +101,7 @@ matter of record rather than of review:
 | ADR | Gates |
 |---|---|
 | ADR-001 — experiment control plane | the premise every later ADR assumes |
+| ADR-005 — the persistence transaction contract | band B, including PR-004; every transaction boundary and repository invariant the repository must hold |
 | ADR-006 — fingerprints (identity model) | PR-007 fingerprint framework; reuse policy split out to ADR-017 |
 | ADR-007 — evaluation independence | band D; extended by ADR-015 |
 | ADR-011 — candidates, interventions, overrides | PR-005 event schema; supersedes ADR-003's two-level lineage and extends ADR-006 |
@@ -118,7 +119,6 @@ that does not depend on it:
 | ADR | Blocks |
 |---|---|
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
-| ADR-005 — the persistence transaction contract | **must be accepted before band B starts, including PR-004**; expanded 2026-09-21 to cover the operation journal, Action–effect atomicity, projection consistency, isolation and crash semantics that band B now owns |
 | ADR-008 — versioned plugin ABI | band C (compiler/runtime plugin loading) |
 | ADR-009 — checkpoint layers | band F |
 | ADR-017 — reuse policy | band G (planner reuse decisions); split out of ADR-006 |
@@ -135,22 +135,27 @@ be acted on: ADR-001 is now `Accepted` because everything after it assumes it,
 ADR-007 because ADR-015 depends on it, and ADR-006's genuinely open half became
 ADR-017 rather than a second status on one document.
 
-**ADR-005 is the live one.** It is the next ADR that must be accepted, and the
-gate is **before PR-004**, not before PR-005.
+**ADR-005 was accepted on 2026-09-21, so band B is unblocked and PR-004 may
+start.** It was expanded before acceptance rather than accepted as written: the
+original fifteen lines covered one transaction, which was adequate when band B
+owned the experiment aggregates and the outbox. Band B also owns
+`RuntimeOperation`, the Action substrate and its linkage, operation and
+cancellation intent, `RunRealization` projections and telemetry generation
+durability, so the short version would have frozen the schema while leaving the
+transaction boundaries that matter unstated.
 
-Gating it on PR-005 would be one PR too late by this document's own "what
-freezes what" principle. ADR-005 decides transaction boundaries, revision
-semantics and state/event/outbox consistency; PR-004 is where the tables and
-revision-based persistence are written. A repository built against assumptions
-ADR-005 then contradicts has to be rewritten — or, more likely, kept.
+The gate was **before PR-004**, not PR-005, for this document's own "what
+freezes what" reason: PR-004 is where the tables and revision-based persistence
+are written, and a repository built against assumptions ADR-005 then contradicts
+has to be rewritten — or, more likely, kept.
 
-It was expanded on 2026-09-21 rather than accepted as written. The original
-fifteen lines covered one transaction, which was adequate when band B owned the
-experiment aggregates and the outbox. Band B now also owns `RuntimeOperation`,
-the Action substrate and its linkage, operation and cancellation intent,
-`RunRealization` projections and telemetry generation durability — so accepting
-the short version would have frozen the schema while leaving the transaction
-boundaries that matter unstated.
+**No ADR now blocks work that is ready to start.** The remaining `Proposed`
+ones gate later bands: ADR-008 blocks band C, ADR-009 band F, ADR-017 band G and
+ADR-004 band H. Each must be accepted before its own band, not before PR-004.
+
+From here, changes to these contracts should come from an implementation
+finding, a failing test or a demonstrated contradiction — not from another pass
+over the design on paper.
 
 Exit criteria, per band rather than globally:
 

@@ -126,20 +126,21 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-006, ADR-007, ADR-011 – ADR-016 |
+  | Accepted by decision | ADR-001, ADR-005 – ADR-007, ADR-011 – ADR-016 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-004, ADR-005, ADR-008, ADR-009, ADR-017 |
+  | Still `Proposed` | ADR-004, ADR-008, ADR-009, ADR-017 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.
 
   `15-implementation-plan.md` §Phase 0 holds the same table with the work each
-  still-open ADR blocks. **ADR-005 is the live one** — band B cannot start until
-  it is accepted, and that gate is before **PR-004**, not PR-005: PR-004 is
-  where persistence assumptions freeze. It was expanded on 2026-09-21 from a
+  still-open ADR blocks. **ADR-005 was accepted on 2026-09-21, so band B is
+  unblocked and PR-004 may start.** It was expanded before acceptance from a
   single transaction rule into the full persistence transaction contract,
-  because band B now owns the operation journal, the Action substrate and the
-  projections as well as the experiment aggregates.
+  because band B owns the operation journal, the Action substrate and the
+  projections as well as the experiment aggregates. Nothing ready to start is
+  now blocked: ADR-008 gates band C, ADR-009 band F, ADR-017 band G and ADR-004
+  band H.
 - `schemas/` — proposed YAML and JSON/Python schema examples. The SQLite file is
   **migrations 001 and 002 only**, not the target schema — 001 is the core
   aggregates plus the operation journal, 002 the minimal Action substrate, and
@@ -151,8 +152,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 The ADR gate is **per-ADR, not global** — an ADR must be settled before the work
 that depends on it, not before all work. See `15-implementation-plan.md`
 §Phase 0 for which ADRs are ratified, accepted, or still open, and what each
-still-open one blocks. **ADR-005 is the next one that must be accepted**, before
-PR-004 — the whole persistence band, not just the event integration.
+still-open one blocks. **Band B is open: ADR-005 is accepted and PR-004 is the
+next implementation step.** The remaining `Proposed` ADRs gate later bands.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

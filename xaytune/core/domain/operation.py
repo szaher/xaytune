@@ -33,7 +33,7 @@ from typing import Literal
 from pydantic import Field
 
 from xaytune.core.clock import utc_now
-from xaytune.core.errors import InvalidTransitionError
+from xaytune.core.errors import DomainError, InvalidTransitionError
 from xaytune.core.ids import ActionId, OperationId
 from xaytune.core.immutable import AggregateModel, FrozenDomainModel
 from xaytune.core.refs import RuntimeRef
@@ -121,6 +121,15 @@ class RuntimeOperation(AggregateModel):
     revision: int = 0
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    def model_post_init(self, _context: object) -> None:
+        if self.type == "cancel" and self.caused_by_action_id is None:
+            raise DomainError(
+                "a cancel operation must name the Action that caused it: "
+                "cancellation intent lives in the Action, and an external "
+                "effect with no recorded cause is the state ADR-005 §5 exists "
+                "to prevent"
+            )
 
     @property
     def is_terminal(self) -> bool:

@@ -208,7 +208,14 @@ class OperationJournal:
         """
         differing = tuple(
             field
-            for field in ("target", "type", "request_digest")
+            # caused_by_action_id is compared even though it is not part of the
+            # external request. Once an effect has an Action behind it, that
+            # cause is part of its control-plane identity: without this check a
+            # second Action could reuse the operation id, see an "identical"
+            # request, and commit while the operation still pointed at the
+            # first -- leaving an Action with no effect and an effect whose
+            # recorded cause is not the one that asked for it (ADR-005 §5).
+            for field in ("target", "type", "request_digest", "caused_by_action_id")
             if getattr(existing, field) != getattr(requested, field)
         )
         if differing:

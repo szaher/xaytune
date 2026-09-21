@@ -18,7 +18,9 @@ import pytest
 
 from xaytune.core import Actor, RunAttemptStatus
 from xaytune.core.domain.action import Action, ActionOutcome, ActionStatus, ActionTarget
+from xaytune.core.ids import ActionId, OperationId
 from xaytune.storage import ControlPlaneRepository, connect, write_transaction
+from xaytune.storage.journal import IdempotencyConflictError
 
 from .conftest import make_attempt, make_experiment, make_node, make_run
 
@@ -46,6 +48,21 @@ def live_attempt(repo: ControlPlaneRepository) -> Any:
 
 def _target(attempt: Any) -> ActionTarget:
     return ActionTarget(kind="training-attempt", id=str(attempt.id))
+
+
+def _drive_to(repo: ControlPlaneRepository, attempt: Any, final: RunAttemptStatus) -> Any:
+    """Walk an attempt to *final* one committed transition at a time."""
+    path = [RunAttemptStatus.QUEUED, RunAttemptStatus.STARTING, RunAttemptStatus.RUNNING]
+    if final not in path:
+        path.append(final)
+    else:
+        path = path[: path.index(final) + 1]
+
+    current = attempt
+    for status in path:
+        current = current.with_status(status)
+        repo.transition(current, actor=ACTOR)
+    return current
 
 
 # ---- §11.5 Action + caused operation are atomic --------------------------
@@ -148,14 +165,7 @@ def test_a_workload_that_finishes_first_supersedes_the_cancellation(
     The attempt stays SUCCEEDED, and the action records that it did what it was
     asked -- the answer being that there was nothing left to stop.
     """
-    queued = live_attempt.with_status(RunAttemptStatus.QUEUED)
-    repo.transition(queued, actor=ACTOR)
-    starting = queued.with_status(RunAttemptStatus.STARTING)
-    repo.transition(starting, actor=ACTOR)
-    running = starting.with_status(RunAttemptStatus.RUNNING)
-    repo.transition(running, actor=ACTOR)
-    finished = running.with_status(RunAttemptStatus.SUCCEEDED)
-    repo.transition(finished, actor=ACTOR)
+    _drive_to(repo, live_attempt, RunAttemptStatus.SUCCEEDED)
 
     action, operation = repo.request_cancellation(
         _target(live_attempt), reason="too late", actor=ACTOR, request_digest=CANCEL_DIGEST
@@ -175,8 +185,13 @@ def test_a_cancellation_that_takes_effect_is_applied(
     )
     assert operation is not None
 
+    # Both halves of the evidence: the effect is confirmed and the attempt
+    # observed CANCELLED. Neither alone is enough.
     repo.confirm_operation(operation, actor=ACTOR)
-    settled = repo.resolve_cancellation(action, outcome=ActionOutcome.APPLIED, actor=ACTOR)
+    cancelled = _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
+    assert cancelled.status is RunAttemptStatus.CANCELLED
+
+    settled = repo.reconcile_cancellation(action, actor=ACTOR)
 
     assert settled.status is ActionStatus.SUCCEEDED
     assert settled.outcome is ActionOutcome.APPLIED
@@ -297,3 +312,192 @@ def test_run_and_experiment_cancellation_are_refused_as_sagas(
             )
 
     assert repo.actions.unresolved() == ()
+
+
+# ---- retry safety at the public boundary ---------------------------------
+
+
+def test_request_cancellation_is_idempotent(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """The lost-response retry, which submission already handled and this did not."""
+    action_id = ActionId.generate()
+    operation_id = OperationId.generate()
+    target = _target(live_attempt)
+
+    first = repo.request_cancellation(
+        target,
+        reason="user asked",
+        actor=ACTOR,
+        request_digest=CANCEL_DIGEST,
+        action_id=action_id,
+        operation_id=operation_id,
+    )
+    second = repo.request_cancellation(
+        target,
+        reason="user asked",
+        actor=ACTOR,
+        request_digest=CANCEL_DIGEST,
+        action_id=action_id,
+        operation_id=operation_id,
+    )
+
+    assert second[0].id == first[0].id
+    assert second[1] is not None and first[1] is not None
+    assert second[1].id == first[1].id
+
+    assert len(repo.actions.for_target("training-attempt", str(live_attempt.id))) == 1
+    cancels = [
+        op
+        for op in repo.operations.for_target("training-attempt", str(live_attempt.id))
+        if op.type == "cancel"
+    ]
+    assert len(cancels) == 1
+
+    requested = [
+        event
+        for event in repo.events.events_for_aggregate(str(action_id))
+        if event.event_type == "CancellationRequested"
+    ]
+    assert len(requested) == 1
+
+
+def test_a_second_action_cannot_adopt_an_existing_operation(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """The state ADR-005 §5 says must never exist.
+
+    Before the cause joined the identity check, a second Action could reuse an
+    operation id, see an "identical" request, and commit -- while the operation
+    still pointed at the first. The result was one Action with an effect and
+    another with none.
+    """
+    target = _target(live_attempt)
+    operation_id = OperationId.generate()
+
+    first_action, _ = repo.request_cancellation(
+        target,
+        reason="first",
+        actor=ACTOR,
+        request_digest=CANCEL_DIGEST,
+        operation_id=operation_id,
+    )
+
+    second_action_id = ActionId.generate()
+    with pytest.raises(IdempotencyConflictError, match="caused_by_action_id"):
+        repo.request_cancellation(
+            target,
+            reason="second",
+            actor=ACTOR,
+            request_digest=CANCEL_DIGEST,
+            action_id=second_action_id,
+            operation_id=operation_id,
+        )
+
+    # The losing action rolled back entirely; the operation still names the first.
+    assert repo.actions.get(str(second_action_id)) is None
+    stored = repo.operations.get(str(operation_id))
+    assert stored is not None and stored.caused_by_action_id == first_action.id
+
+
+# ---- the outcome is evidence, not an argument ----------------------------
+
+
+def test_an_unconfirmed_cancellation_stays_in_flight(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """A caller must not be able to manufacture provenance.
+
+    Before this, `outcome=APPLIED` could be persisted while the operation was
+    still INTENDED and the workload still running.
+    """
+    action, operation = repo.request_cancellation(
+        _target(live_attempt), reason="user asked", actor=ACTOR, request_digest=CANCEL_DIGEST
+    )
+    assert operation is not None and operation.state == "intended"
+
+    unchanged = repo.reconcile_cancellation(action, actor=ACTOR)
+
+    assert unchanged.status is ActionStatus.EXECUTING
+    assert unchanged.outcome is None
+
+
+def test_a_target_cancelled_by_something_else_is_not_claimed(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """CANCELLED with an unresolved effect may not be our doing.
+
+    Claiming APPLIED here would be a guess, so the action stays in flight.
+    """
+    action, operation = repo.request_cancellation(
+        _target(live_attempt), reason="user asked", actor=ACTOR, request_digest=CANCEL_DIGEST
+    )
+    assert operation is not None
+    _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
+
+    unchanged = repo.reconcile_cancellation(action, actor=ACTOR)
+
+    assert unchanged.status is ActionStatus.EXECUTING
+
+
+def test_a_target_that_ends_otherwise_supersedes_an_in_flight_cancellation(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    action, _ = repo.request_cancellation(
+        _target(live_attempt), reason="user asked", actor=ACTOR, request_digest=CANCEL_DIGEST
+    )
+    _drive_to(repo, live_attempt, RunAttemptStatus.SUCCEEDED)
+
+    settled = repo.reconcile_cancellation(action, actor=ACTOR)
+
+    assert settled.status is ActionStatus.SUCCEEDED
+    assert settled.outcome is ActionOutcome.SUPERSEDED
+
+
+# ---- already cancelled is NOOP, not SUPERSEDED ---------------------------
+
+
+def test_an_already_cancelled_target_is_a_noop(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """Already in the requested state is a different fact from being overtaken."""
+    _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
+
+    action, operation = repo.request_cancellation(
+        _target(live_attempt), reason="again", actor=ACTOR, request_digest=CANCEL_DIGEST
+    )
+
+    assert operation is None
+    assert action.status is ActionStatus.SUCCEEDED
+    assert action.outcome is ActionOutcome.NOOP
+
+
+def test_a_target_that_ended_otherwise_is_superseded(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    _drive_to(repo, live_attempt, RunAttemptStatus.FAILED)
+
+    action, operation = repo.request_cancellation(
+        _target(live_attempt), reason="too late", actor=ACTOR, request_digest=CANCEL_DIGEST
+    )
+
+    assert operation is None
+    assert action.outcome is ActionOutcome.SUPERSEDED
+
+
+# ---- a cancel effect can no longer be causeless --------------------------
+
+
+def test_a_cancel_operation_must_name_its_cause() -> None:
+    """The model no longer permits the state the public API avoids."""
+    from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
+    from xaytune.core.errors import DomainError
+    from xaytune.core.ids import OperationId as OpId
+
+    with pytest.raises(DomainError, match="must name the Action"):
+        RuntimeOperation(
+            id=OpId.generate(),
+            target=RuntimeOperationTarget(kind="training-attempt", id="attempt_x"),
+            type="cancel",
+            request_digest="d",
+        )

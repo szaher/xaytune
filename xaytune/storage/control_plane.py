@@ -10,7 +10,7 @@ transition(aggregate, ...)                  state + event + outbox        §3
 create_attempt_with_submit_intent(...)      attempt + INTENDED operation  §4
 confirm_operation / mark_operation_sent / fail_operation
 request_cancellation(...)                   Action + cancel operation     §5
-resolve_cancellation(...)                   Action settled with an outcome
+reconcile_cancellation(...)                 Action settled from observed state
 ```
 
 There is still no ``save_experiment()``. The row writers stay private on
@@ -47,10 +47,15 @@ from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.ids import ActionId, EventId, ExperimentId, OperationId
 from xaytune.core.immutable import AggregateModel, FrozenDict
 from xaytune.core.refs import Actor, RuntimeRef
+from xaytune.core.state.status import RunAttemptStatus
 from xaytune.storage.actions import ActionStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
-from xaytune.storage.journal import EventJournal, OperationJournal
+from xaytune.storage.journal import (
+    EventJournal,
+    IdempotencyConflictError,
+    OperationJournal,
+)
 from xaytune.storage.repository import AggregateStore
 
 __all__ = ["ControlPlaneRepository", "UnknownOperationTargetError"]
@@ -311,17 +316,19 @@ class ControlPlaneRepository:
     ) -> tuple[Action, RuntimeOperation | None]:
         """Record intent to cancel, and the effect it causes, in one commit.
 
-        This is the §5 unit, and it could not exist before PR-006a: the
-        ``Action`` owns the durable intent while the ``RuntimeOperation`` carries
-        the external effect, and splitting them produces two states ADR-013's
-        model cannot represent -- an intent nothing will ever act on, or an
-        effect with no recorded cause.
+        This is the §5 unit: the ``Action`` owns the durable intent while the
+        ``RuntimeOperation`` carries the external effect, and splitting them
+        produces two states ADR-013's model cannot represent -- an intent
+        nothing will act on, or an effect with no recorded cause.
+
+        **Get-or-create**, like submission. A caller that loses the response and
+        retries with the same ids gets back what is already recorded and writes
+        nothing new; without that, the retry would hit the Action primary key
+        and cancellation would lack the restart safety submission has.
 
         Cancellation is intent plus an observed terminal state, never a status
-        the target occupies (ADR-013 §4). A workload that finishes first is not
-        a failure: the action `SUCCEEDED` with outcome `SUPERSEDED`, because it
-        did what it was asked and the answer was that there was nothing left to
-        stop.
+        the target occupies (ADR-013 §4). A target that has already ended gets
+        no operation at all: there is nothing to ask a runtime to stop.
 
         Only attempt targets are accepted. Run- and experiment-level
         cancellation is a saga over descendants (ADR-013 §6) and is refused
@@ -329,53 +336,63 @@ class ControlPlaneRepository:
 
         Returns:
             The action, and the operation it caused -- or ``None`` when the
-            target was already terminal, in which case no external effect is
-            requested and the action resolves immediately.
+            target had already ended, in which case the action resolves
+            immediately.
 
         Raises:
             CancellationSagaRequiredError: If the target is a run or experiment.
             UnknownOperationTargetError: If the target does not exist.
+            IdempotencyConflictError: If either id exists against a different
+                request.
         """
         if target.kind not in _ATTEMPT_KINDS:
             raise CancellationSagaRequiredError(target.kind)
 
-        action = Action(
-            id=action_id or ActionId.generate(),
-            experiment_id=ExperimentId(self._experiment_of_action_target(target)),
-            type=_CANCEL_TYPE_FOR[target.kind],
-            target=target,
-            proposed_by=actor,
-            reason=reason,
-        )
+        action_id = action_id or ActionId.generate()
+        operation_id = operation_id or OperationId.generate()
 
         with write_transaction(self._connection):
-            experiment_id = str(action.experiment_id)
+            replayed = self._replay_cancellation(action_id, operation_id, target)
+            if replayed is not None:
+                return replayed
+
+            experiment_id = self._experiment_of_action_target(target)
+            proposed = Action(
+                id=action_id,
+                experiment_id=ExperimentId(experiment_id),
+                type=_CANCEL_TYPE_FOR[target.kind],
+                target=target,
+                proposed_by=actor,
+                reason=reason,
+            )
 
             # Validation happens before any effect is requested, so an action
             # that cannot be carried out never mints an operation.
-            validating = action.with_status(ActionStatus.VALIDATING)
-            validated = validating.with_status(ActionStatus.VALIDATED)
+            validated = proposed.with_status(ActionStatus.VALIDATING).with_status(
+                ActionStatus.VALIDATED
+            )
 
-            if self._target_is_terminal(target):
-                # Nothing to stop. Resolve without an external effect rather
-                # than asking a runtime to cancel a workload that has ended.
+            settled_outcome = self._terminal_outcome(target)
+            if settled_outcome is not None:
                 executing = validated.with_status(ActionStatus.EXECUTING)
-                settled = executing.with_status(
-                    ActionStatus.SUCCEEDED, outcome=ActionOutcome.SUPERSEDED
-                )
+                settled = executing.with_status(ActionStatus.SUCCEEDED, outcome=settled_outcome)
                 self.actions._insert(settled)
-                self._emit_action(settled, "CancellationSuperseded", actor, destinations)
+                self._emit_action(
+                    settled,
+                    f"Cancellation{settled_outcome.value.capitalize()}",
+                    actor,
+                    destinations,
+                )
                 return settled, None
 
             executing = validated.with_status(ActionStatus.EXECUTING)
             self.actions._insert(executing)
 
-            operation_target = RuntimeOperationTarget.model_validate(
-                {"kind": target.kind, "id": target.id}
-            )
             operation = RuntimeOperation(
-                id=operation_id or OperationId.generate(),
-                target=operation_target,
+                id=operation_id,
+                target=RuntimeOperationTarget.model_validate(
+                    {"kind": target.kind, "id": target.id}
+                ),
                 type="cancel",
                 request_digest=request_digest,
                 caused_by_action_id=executing.id,
@@ -387,19 +404,43 @@ class ControlPlaneRepository:
 
         return executing, stored
 
-    def resolve_cancellation(
+    def reconcile_cancellation(
         self,
         action: Action,
         *,
-        outcome: ActionOutcome,
         actor: Actor,
         destinations: tuple[str, ...] = (),
     ) -> Action:
-        """Settle a cancellation action once its outcome is observed.
+        """Settle a cancellation from observed state, or leave it in flight.
 
-        ``APPLIED`` when the workload stopped because of it, ``SUPERSEDED``
-        when it had already ended, ``NOOP`` when there was nothing to do.
+        The outcome is **derived, never supplied**. An earlier version took it
+        as an argument, which let a caller persist
+        ``SUCCEEDED``/``APPLIED`` while the operation was still ``INTENDED`` and
+        the workload still running -- an audit record asserting a cancellation
+        took effect when nothing had established it. A caller must not be able
+        to manufacture provenance, so the repository owns the rule:
+
+        ```text
+        target CANCELLED and its cancel operation CONFIRMED  -> APPLIED
+        target terminal for some other reason                -> SUPERSEDED
+        target still live, or the effect unconfirmed         -> unchanged
+        ```
+
+        ``APPLIED`` requires both halves. A target that reached ``CANCELLED``
+        while the operation is unresolved may have been stopped by something
+        else, and claiming credit for it would be a guess.
+
+        Returns:
+            The settled action, or *action* unchanged when the evidence does
+            not yet support a conclusion.
         """
+        if action.is_terminal:
+            return action
+
+        outcome = self._observed_outcome(action)
+        if outcome is None:
+            return action
+
         settled = action.with_status(ActionStatus.SUCCEEDED, outcome=outcome)
         with write_transaction(self._connection):
             self.actions._update(settled)
@@ -456,21 +497,101 @@ class ControlPlaneRepository:
         # cancellation type yet, the others wait for ADR-015's tables.
         raise UnknownOperationTargetError(target.kind, target.id)
 
-    def _target_is_terminal(self, target: ActionTarget) -> bool:
-        """Whether there is anything left to cancel.
+    def _replay_cancellation(
+        self, action_id: ActionId, operation_id: OperationId, target: ActionTarget
+    ) -> tuple[Action, RuntimeOperation | None] | None:
+        """Return the already-recorded result of this request, if there is one.
 
-        Observed, not assumed. ADR-013 §5: a workload that reached a terminal
-        state before the cancel was issued wins, and the action is superseded
-        rather than failed.
+        Raises:
+            StorageError: If exactly one half exists. The two are written in one
+                transaction, so a lone Action or a lone operation is a corrupted
+                record rather than a retry, and silently completing it would
+                paper over the corruption.
+            IdempotencyConflictError: If the recorded request differs.
         """
-        if target.kind == "training-attempt":
-            attempt = self.aggregates.load_attempt(target.id)
-            return attempt.is_terminal
-        if target.kind == "run":
-            return self.aggregates.load_run(target.id).is_terminal
-        if target.kind == "experiment":
-            return self.aggregates.load_experiment(target.id).is_terminal
-        raise UnknownOperationTargetError(target.kind, target.id)
+        existing_action = self.actions.get(str(action_id))
+        existing_operation = self.operations.get(str(operation_id))
+
+        if existing_action is None and existing_operation is None:
+            return None
+
+        if existing_action is None:
+            # An operation with no matching action is one of two things, and
+            # they need different answers. If the operation names a *different*
+            # action, this is a new action trying to adopt an effect that
+            # already has a cause -- a conflict, not a retry. If it names this
+            # action, the two halves really did come apart, which they cannot
+            # do through any code path here.
+            if existing_operation is not None and (
+                existing_operation.caused_by_action_id != action_id
+            ):
+                raise IdempotencyConflictError(str(operation_id), ("caused_by_action_id",))
+            raise StorageError(
+                f"operation {operation_id} exists but action {action_id} does "
+                f"not: they are written in one transaction, so this is a "
+                f"corrupted record rather than a retry"
+            )
+
+        if existing_action.target != target:
+            raise IdempotencyConflictError(str(action_id), ("target",))
+
+        # A terminal action with no operation is the already-ended path, which
+        # legitimately writes no effect.
+        if existing_operation is None and not existing_action.is_terminal:
+            raise StorageError(
+                f"action {action_id} is in flight but its operation "
+                f"{operation_id} does not exist: they are written in one "
+                f"transaction, so this is a corrupted record rather than a retry"
+            )
+
+        return existing_action, existing_operation
+
+    def _terminal_outcome(self, target: ActionTarget) -> ActionOutcome | None:
+        """How a cancellation resolves against a target that has already ended.
+
+        ``None`` means the target is still live and a real effect is needed.
+
+        The two terminal cases are different facts and are recorded as such: a
+        target already `CANCELLED` was **already in the requested state**, which
+        is `NOOP`; a target that ended any other way **overtook** the request,
+        which is `SUPERSEDED`. Collapsing both into `SUPERSEDED` would lose the
+        distinction the outcome enum was introduced to carry.
+        """
+        if target.kind != "training-attempt":
+            raise UnknownOperationTargetError(target.kind, target.id)
+
+        attempt = self.aggregates.load_attempt(target.id)
+        if not attempt.is_terminal:
+            return None
+        if attempt.status is RunAttemptStatus.CANCELLED:
+            return ActionOutcome.NOOP
+        return ActionOutcome.SUPERSEDED
+
+    def _observed_outcome(self, action: Action) -> ActionOutcome | None:
+        """Derive a cancellation's outcome from what is actually recorded.
+
+        ``None`` when the evidence does not yet support a conclusion, so the
+        action stays `EXECUTING` rather than being resolved on a guess.
+        """
+        if action.target.kind != "training-attempt":
+            raise UnknownOperationTargetError(action.target.kind, action.target.id)
+
+        attempt = self.aggregates.load_attempt(action.target.id)
+        if not attempt.is_terminal:
+            return None
+
+        if attempt.status is not RunAttemptStatus.CANCELLED:
+            return ActionOutcome.SUPERSEDED
+
+        # Cancelled -- but only claim credit if our effect was confirmed.
+        caused = [
+            op
+            for op in self.operations.for_target(action.target.kind, action.target.id)
+            if op.caused_by_action_id == action.id
+        ]
+        if any(op.state == "confirmed" for op in caused):
+            return ActionOutcome.APPLIED
+        return None
 
     def _emit_action(
         self,

@@ -19,7 +19,7 @@ from xaytune.core.domain.operation import RuntimeOperation
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.storage.errors import StorageError
 
-__all__ = ["EventJournal", "IdempotencyConflictError", "OperationJournal"]
+__all__ = ["IdempotencyConflictError"]
 
 
 class IdempotencyConflictError(StorageError):
@@ -47,13 +47,19 @@ class EventJournal:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def append(self, event: DomainEvent) -> int:
+    def _append(self, event: DomainEvent) -> int:
         """Insert *event* and return the sequence the database assigned.
+
+        Private, and it refuses to run outside a transaction. An event written
+        on its own is a claim that a transition happened when none did, which
+        ADR-005 §3 forbids -- and with ``isolation_level=None`` a bare call
+        would autocommit exactly that.
 
         The sequence is assigned here rather than by the caller: it is a total
         order over the database, and a caller-chosen value could collide or
         leave a hole that a consumer's cursor would read as a lost event.
         """
+        _require_transaction(self._connection, "events")
         cursor = self._connection.execute(
             "INSERT INTO events (id, experiment_id, aggregate_type, aggregate_id, "
             "aggregate_revision, event_type, schema_version, occurred_at, "
@@ -73,8 +79,13 @@ class EventJournal:
         )
         return int(cursor.lastrowid or 0)
 
-    def enqueue(self, record: OutboxRecord) -> None:
-        """Insert an outbox record for an already-inserted event."""
+    def _enqueue(self, record: OutboxRecord) -> None:
+        """Insert an outbox record for an already-inserted event.
+
+        Private for the same reason as :meth:`_append`: an outbox row without
+        its event is a delivery of something that was never recorded.
+        """
+        _require_transaction(self._connection, "outbox records")
         self._connection.execute(
             "INSERT INTO outbox (id, event_id, destination, state, attempts, "
             "next_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -160,21 +171,16 @@ class OperationJournal:
             IdempotencyConflictError: If the id exists with a different target,
                 type or request digest.
         """
+        _require_transaction(self._connection, "runtime operations")
         existing = self.get(str(operation.id))
         if existing is not None:
-            differing = tuple(
-                field
-                for field in ("target", "type", "request_digest")
-                if getattr(existing, field) != getattr(operation, field)
-            )
-            if differing:
-                raise IdempotencyConflictError(str(operation.id), differing)
+            self._assert_same_request(existing, operation)
             return existing
 
         self._connection.execute(
             "INSERT INTO runtime_operations (id, target_kind, target_id, type, "
-            "request_digest, state, runtime_ref_json, caused_by_action_id, "
-            "revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "request_digest, state, runtime_ref_json, revision, created_at, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(operation.id),
                 operation.target.kind,
@@ -183,7 +189,6 @@ class OperationJournal:
                 operation.request_digest,
                 operation.state,
                 _ref_json(operation),
-                str(operation.caused_by_action_id) if operation.caused_by_action_id else None,
                 operation.revision,
                 operation.created_at.isoformat(),
                 operation.updated_at.isoformat(),
@@ -191,12 +196,30 @@ class OperationJournal:
         )
         return operation
 
+    @staticmethod
+    def _assert_same_request(existing: RuntimeOperation, requested: RuntimeOperation) -> None:
+        """Refuse a reused operation id whose request differs (ADR-013 §2).
+
+        Raises:
+            IdempotencyConflictError: Naming every field that differs, because
+                the caller needs to know *what* it changed -- guessing which
+                request was meant would start a second workload.
+        """
+        differing = tuple(
+            field
+            for field in ("target", "type", "request_digest")
+            if getattr(existing, field) != getattr(requested, field)
+        )
+        if differing:
+            raise IdempotencyConflictError(str(existing.id), differing)
+
     def _update(self, operation: RuntimeOperation) -> None:
         """Write a transitioned operation back, guarded on its revision.
 
         Raises:
             ConcurrentModificationError: If another writer moved it first.
         """
+        _require_transaction(self._connection, "runtime operations")
         expected = operation.revision - 1
         cursor = self._connection.execute(
             "UPDATE runtime_operations SET state = ?, runtime_ref_json = ?, "
@@ -212,6 +235,23 @@ class OperationJournal:
         )
         if cursor.rowcount == 0:
             raise ConcurrentModificationError("RuntimeOperation", str(operation.id), expected)
+
+
+def _require_transaction(connection: sqlite3.Connection, what: str) -> None:
+    """Refuse a journal write outside a transaction.
+
+    ``connect()`` sets ``isolation_level=None``, so a write issued outside
+    ``write_transaction()`` autocommits on its own. For an aggregate that would
+    commit state without its event; for these tables it is the mirror image --
+    an event or an operation with nothing it belongs to. Both are the split
+    ADR-005 §3 exists to prevent, so both fail loudly here.
+    """
+    if not connection.in_transaction:
+        raise sqlite3.ProgrammingError(
+            f"{what} must be written inside write_transaction(), composed with "
+            f"the transition they describe (ADR-005 section 3). A bare write "
+            f"would autocommit a record with nothing it belongs to."
+        )
 
 
 def _ref_json(operation: RuntimeOperation) -> str | None:
@@ -261,7 +301,6 @@ def _operation_from_row(row: sqlite3.Row) -> RuntimeOperation:
         "request_digest": row["request_digest"],
         "state": row["state"],
         "runtime_ref": json.loads(row["runtime_ref_json"]) if row["runtime_ref_json"] else None,
-        "caused_by_action_id": row["caused_by_action_id"],
         "revision": row["revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

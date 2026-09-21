@@ -1,119 +1,85 @@
--- Migration 002 — minimal Action substrate (PR-006a).
+-- Migration 002 — the event log, the outbox, and the runtime operation journal.
 --
--- Required before Phase 2, not after it. ADR-013 models cancellation as
+-- Implemented as `xaytune/storage/migrations/002_events_outbox_operations.sql`.
+-- Split from 001 because an operation record is not meaningful until intent can
+-- be committed atomically with its events (ADR-005 §4), and 001 had already
+-- shipped -- a shipped migration is never edited.
 --
---     Action            durable desired intent
---     RuntimeOperation  durable external effect
+-- `caused_by_action_id` is deliberately NOT here. ADR-005 §5 requires an effect
+-- to carry the Action that caused it, and SQLite cannot attach a foreign key to
+-- an existing column without rebuilding the table, so the column and its
+-- REFERENCES arrive together in 003.
 --
--- and `handle.cancel()` is public API from Phase 2 onwards, so the Action
--- aggregate is band B work even though the PolicyEngine that later governs
--- actions is not (see 15-implementation-plan.md, PR-006a).
---
--- This migration deliberately contains only the substrate. Approval rules,
--- budget authorization and the mutating action types arrive in Phase 4 and will
--- add columns or tables of their own.
+-- `target_kind` is deliberately unconstrained. Freezing the vocabulary in a
+-- CHECK would mean rebuilding this table for each new workload kind, and
+-- ADR-015 §2 already names data preparation and reward-model scoring as likely
+-- next ones. The database enforces structural shape; the domain type and the
+-- repository validate the vocabulary.
 
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE actions (
+-- ADR-013: intent is committed with the attempt before a runtime call.
+-- Repository APIs validate transitions and revision CAS; operation transition
+-- history is appended atomically to events/outbox, not a separate table.
+--
+-- The target is typed rather than a foreign key, because evaluation attempts use
+-- this same journal (ADR-015 section 4) and live in a different table. There is
+-- deliberately no generic Execution aggregate: what training and evaluation
+-- share is the external side effect, not the domain object. The repository
+-- enforces that target_id exists in the table named by target_kind.
+CREATE TABLE runtime_operations (
   id TEXT PRIMARY KEY NOT NULL,
-  experiment_id TEXT NOT NULL REFERENCES experiments(id),
-
-  -- Action type is validated by the domain action registry, NOT by a CHECK.
-  --
-  -- The tempting version constrained this to the three cancellation types with
-  -- a note that Phase 4 would "widen the CHECK". SQLite cannot alter a CHECK in
-  -- place: widening it means rebuilding the table and copying the rows. Phase 4
-  -- adds many action types and plugin-defined ones are intended later, so that
-  -- would schedule a table rebuild a few phases out, by design.
-  --
-  -- Database constraints enforce durable STRUCTURAL invariants; an extensible
-  -- vocabulary is the domain layer's job. PR-006a's registry accepts only
-  -- cancel-attempt, cancel-run and cancel-experiment, so nothing else can be
-  -- created in band B -- enforced where the rule can actually change.
-  type TEXT NOT NULL,
-
-  -- 04-state-machines.md section 5. APPROVAL_PENDING and APPROVED are reachable
-  -- but unused until a PolicyEngine exists: a controller-owned cancellation goes
-  -- VALIDATED -> EXECUTING, and is never marked approved by nobody.
-  status TEXT NOT NULL
-    CHECK (status IN (
-      'proposed', 'validating', 'validated',
-      'approval_pending', 'approved',
-      'executing', 'succeeded', 'failed', 'rejected'
-    )),
-
-  -- How a SUCCESSFUL action resolved, distinct from whether it completed.
-  -- ADR-013 section 5: a cancellation that loses the race against natural
-  -- completion SUCCEEDED and was SUPERSEDED -- it did what it was asked and the
-  -- answer was that there was nothing left to stop.
-  --
-  -- Every member describes a success, so the field pairs with SUCCEEDED alone.
-  -- FAILED and REJECTED carry their reasons in the transition event and the
-  -- policy decision; duplicating them here would invent an outcome for states
-  -- that have none. The paired CHECK below makes that a persistent invariant
-  -- rather than a repository convention.
-  outcome TEXT
-    CHECK (outcome IS NULL OR outcome IN ('applied', 'superseded', 'noop')),
-
-  -- ActionTarget: which aggregate this action acts on. This IS a structural
-  -- invariant -- the repository resolves target_id in the table named by
-  -- target_kind -- so it is constrained here.
-  --
-  -- 'training-attempt' and 'evaluation-attempt' deliberately match
-  -- RuntimeOperationTarget (ADR-013) rather than using a separate 'run-attempt'
-  -- spelling: an Action's target and the target of the operation it causes are
-  -- the same subject, and two vocabularies for it would mean translating
-  -- between two supposedly shared contracts.
-  --
-  -- 'evaluation-attempt' is required now, not later: ADR-015 says evaluations
-  -- can be cancelled and its AC-7 requires a cancelled evaluation to leave no
-  -- executing workload, which under ADR-005 section 5 needs an Action to own
-  -- the intent.
-  target_kind TEXT NOT NULL
-    CHECK (target_kind IN (
-      'experiment', 'node', 'run',
-      'training-attempt',
-      'evaluation-run', 'evaluation-attempt'
-    )),
+  target_kind TEXT NOT NULL,
   target_id TEXT NOT NULL,
-
-  proposed_by_json TEXT NOT NULL,      -- Actor
-  reason TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-
-  -- Set only once a PolicyEngine exists; NULL means no policy applied, which is
-  -- distinguishable from "a policy applied and allowed it".
-  policy_decision_id TEXT,
-
+  type TEXT NOT NULL CHECK (type IN ('submit', 'cancel')),
+  request_digest TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('intended', 'sent', 'confirmed', 'failed')),
+  runtime_ref_json TEXT,
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-
-  -- outcome is present exactly when the action succeeded.
-  CHECK (
-    (status = 'succeeded' AND outcome IS NOT NULL)
-    OR
-    (status <> 'succeeded' AND outcome IS NULL)
-  )
+  updated_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_actions_experiment
-  ON actions(experiment_id, created_at);
+CREATE INDEX idx_runtime_operations_target
+  ON runtime_operations(target_kind, target_id);
 
-CREATE INDEX idx_actions_target
-  ON actions(target_kind, target_id);
+CREATE INDEX idx_runtime_operations_unresolved
+  ON runtime_operations(state, updated_at)
+  WHERE state IN ('intended', 'sent');
 
-CREATE INDEX idx_actions_unresolved
-  ON actions(status, updated_at)
-  WHERE status NOT IN ('succeeded', 'failed', 'rejected');
+CREATE TABLE events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT NOT NULL UNIQUE,
+  experiment_id TEXT NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_id TEXT NOT NULL,
+  aggregate_revision INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  actor_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
 
--- The linkage ADR-013 requires: an action's intent and the external effects it
--- caused. Populated in the SAME transaction that creates the operation, so a
--- crash can never leave an operation whose cause is unrecorded, or an action
--- claiming an effect that was never requested (ADR-005 section 5).
-ALTER TABLE runtime_operations
-  ADD COLUMN caused_by_action_id TEXT REFERENCES actions(id);
+CREATE TABLE outbox (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL REFERENCES events(id),
+  destination TEXT NOT NULL,
+  state TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
-CREATE INDEX idx_runtime_operations_action
-  ON runtime_operations(caused_by_action_id);
+CREATE INDEX idx_events_experiment_sequence
+  ON events(experiment_id, sequence);
+
+CREATE INDEX idx_nodes_experiment
+  ON experiment_nodes(experiment_id);
+
+CREATE INDEX idx_runs_node
+  ON runs(node_id);
+
+CREATE INDEX idx_attempts_run
+  ON run_attempts(run_id);

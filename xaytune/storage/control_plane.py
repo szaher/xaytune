@@ -6,11 +6,14 @@ other half: every operation here is one transaction, and the units are the ones
 the ADR names.
 
 ```text
-transition(aggregate, event)                state + event + outbox
-create_attempt_with_submit_intent(...)      attempt + INTENDED operation + events
-record_cancellation_intent(...)             cancel operation + event
-confirm_operation(...) / fail_operation(...)
+transition(aggregate, ...)                  state + event + outbox        §3
+create_attempt_with_submit_intent(...)      attempt + INTENDED operation  §4
+confirm_operation / mark_operation_sent / fail_operation
 ```
+
+§5 -- intent plus the effect it causes -- has no public method here. It needs
+the `Action` aggregate to own the intent, which arrives in PR-006a; exposing
+cancellation before then could only record an effect whose cause is unwritten.
 
 There is still no ``save_experiment()``. The row writers stay private on
 :class:`~xaytune.storage.repository.AggregateStore` and
@@ -41,7 +44,7 @@ from xaytune.core.ids import EventId, OperationId
 from xaytune.core.immutable import AggregateModel, FrozenDict
 from xaytune.core.refs import Actor, RuntimeRef
 from xaytune.storage.database import write_transaction
-from xaytune.storage.errors import StorageError
+from xaytune.storage.errors import AggregateNotFoundError, StorageError
 from xaytune.storage.journal import EventJournal, OperationJournal
 from xaytune.storage.repository import AggregateStore
 
@@ -125,7 +128,6 @@ class ControlPlaneRepository:
         self,
         aggregate: AggregateModel,
         *,
-        experiment_id: str,
         actor: Actor,
         event_type: str | None = None,
         destinations: tuple[str, ...] = (),
@@ -136,6 +138,12 @@ class ControlPlaneRepository:
         own ``with_status()`` -- so the state machine has already validated the
         edge and bumped the revision. This writes it under a revision guard and
         records what happened.
+
+        The owning experiment is **derived**, never supplied. A caller-provided
+        id can disagree with the aggregate's own ownership, and the result is
+        silent: the state change lands on one experiment while its event is
+        filed under another's history. Nothing errors, and the provenance record
+        is wrong in a way no later query can detect.
 
         Raises:
             ConcurrentModificationError: If another writer moved it first.
@@ -148,7 +156,7 @@ class ControlPlaneRepository:
             self._emit(
                 aggregate,
                 event_type or f"{type(aggregate).__name__}StatusChanged",
-                experiment_id,
+                self._owning_experiment(aggregate),
                 actor,
                 destinations,
             )
@@ -159,7 +167,6 @@ class ControlPlaneRepository:
         self,
         attempt: RunAttempt,
         *,
-        experiment_id: str,
         request_digest: str,
         actor: Actor,
         operation_id: OperationId | None = None,
@@ -172,9 +179,21 @@ class ControlPlaneRepository:
         ADR-013 defines as *reconcile*, not *re-issue blindly* -- so the effect
         may exist, but never without a record that it was intended.
 
+        **Get-or-create.** This is the method a crash retries, so retrying it
+        with the same ids and request returns what is already recorded and
+        writes nothing new. Idempotency in the journal alone would not be
+        enough: the attempt insert runs first, so a naive retry would hit the
+        attempt's primary key before the journal ever checked the operation id
+        -- which is precisely the crash-and-retry case ADR-013 exists to make
+        safe.
+
         Returns:
             The attempt and the operation, so the caller has the id to pass to
             ``submit_or_get``.
+
+        Raises:
+            IdempotencyConflictError: If the operation id exists against a
+                different target, type or request digest.
         """
         operation = RuntimeOperation(
             id=operation_id or OperationId.generate(),
@@ -184,6 +203,20 @@ class ControlPlaneRepository:
         )
 
         with write_transaction(self._connection):
+            existing = self.operations.get(str(operation.id))
+            if existing is not None:
+                self.operations._assert_same_request(existing, operation)
+                stored_attempt = self.aggregates.get_attempt(existing.target.id)
+                if stored_attempt is None:
+                    raise StorageError(
+                        f"operation {existing.id} references attempt "
+                        f"{existing.target.id}, which does not exist: the two "
+                        f"are written in one transaction, so this is a "
+                        f"corrupted record rather than a retry"
+                    )
+                return stored_attempt, existing
+
+            experiment_id = self._experiment_of_run(str(attempt.run_id))
             self.aggregates._insert_attempt(attempt)
             stored = self.operations._insert(operation)
             self._emit(attempt, "RunAttemptCreated", experiment_id, actor, destinations)
@@ -195,22 +228,17 @@ class ControlPlaneRepository:
         self,
         operation: RuntimeOperation,
         *,
-        experiment_id: str,
         actor: Actor,
         runtime_ref: RuntimeRef | None = None,
     ) -> RuntimeOperation:
         """Record that an operation took effect, with the runtime's reference."""
-        return self._settle(operation, "confirmed", experiment_id, actor, runtime_ref=runtime_ref)
+        return self._settle(operation, "confirmed", actor, runtime_ref=runtime_ref)
 
-    def mark_operation_sent(
-        self, operation: RuntimeOperation, *, experiment_id: str, actor: Actor
-    ) -> RuntimeOperation:
+    def mark_operation_sent(self, operation: RuntimeOperation, *, actor: Actor) -> RuntimeOperation:
         """Record that the request was issued but its outcome is not yet known."""
-        return self._settle(operation, "sent", experiment_id, actor)
+        return self._settle(operation, "sent", actor)
 
-    def fail_operation(
-        self, operation: RuntimeOperation, *, experiment_id: str, actor: Actor
-    ) -> RuntimeOperation:
+    def fail_operation(self, operation: RuntimeOperation, *, actor: Actor) -> RuntimeOperation:
         """Record that the request definitively did not take effect.
 
         Only for a **known** negative outcome. A lost response is not a failure:
@@ -218,46 +246,24 @@ class ControlPlaneRepository:
         is the difference between "it did not happen" and "we do not know"
         (ADR-005 §6).
         """
-        return self._settle(operation, "failed", experiment_id, actor)
+        return self._settle(operation, "failed", actor)
 
     # ---- ADR-005 §5 ----------------------------------------------------
 
-    def record_cancellation_intent(
-        self,
-        target: RuntimeOperationTarget,
-        *,
-        experiment_id: str,
-        request_digest: str,
-        actor: Actor,
-        operation_id: OperationId | None = None,
-        destinations: tuple[str, ...] = (),
-    ) -> RuntimeOperation:
-        """Record durable intent to cancel a workload, before asking the runtime.
-
-        Cancellation is intent plus an observed terminal state, never a status
-        the attempt occupies (ADR-013 §4). This writes the intent; whether the
-        workload stops is observed separately, and a workload that finishes
-        first simply means the cancel arrived too late.
-
-        Once the Action substrate lands (PR-006a), the ``Action`` that owns this
-        intent commits in the same transaction and the operation carries its
-        ``caused_by_action_id`` -- the column already exists for that.
-        """
-        operation = RuntimeOperation(
-            id=operation_id or OperationId.generate(),
-            target=target,
-            type="cancel",
-            request_digest=request_digest,
-        )
-
-        with write_transaction(self._connection):
-            self._require_target(target)
-            stored = self.operations._insert(operation)
-            self._emit_operation(
-                stored, "CancellationRequested", experiment_id, actor, destinations
-            )
-
-        return stored
+    # Cancellation is deliberately NOT public in PR-005.
+    #
+    # ADR-005 §5 makes the Action the durable owner of the intent and requires
+    # it to commit with the RuntimeOperation it causes. The Action aggregate
+    # arrives in PR-006a, so a public request_cancel() here could only write the
+    # effect with `caused_by_action_id = None` -- an external effect whose cause
+    # is unrecorded, which is the exact state §5 exists to prevent. Emitting a
+    # CancellationRequested event instead does not close the gap: an event is a
+    # record of what happened, not the durable intent the contract names.
+    #
+    # The journal already supports `type="cancel"`, so PR-006a adds the public
+    # method without schema or model changes. §11.9 -- cancellation intent
+    # survives a restart -- belongs there with it, because that is when the
+    # intent exists as something other than an operation row.
 
     # ---- machinery ------------------------------------------------------
 
@@ -265,13 +271,13 @@ class ControlPlaneRepository:
         self,
         operation: RuntimeOperation,
         state: Literal["sent", "confirmed", "failed"],
-        experiment_id: str,
         actor: Actor,
         *,
         runtime_ref: RuntimeRef | None = None,
     ) -> RuntimeOperation:
         moved = operation.with_state(state, runtime_ref=runtime_ref)
         with write_transaction(self._connection):
+            experiment_id = self._experiment_of_operation(moved)
             self.operations._update(moved)
             self._emit_operation(
                 moved, f"RuntimeOperation{state.capitalize()}", experiment_id, actor
@@ -289,6 +295,41 @@ class ControlPlaneRepository:
             "RunAttempt": self.aggregates._update_attempt,
         }[name]
         writer(aggregate)  # type: ignore[operator, arg-type]
+
+    def _owning_experiment(self, aggregate: AggregateModel) -> str:
+        """Return the experiment an aggregate belongs to, from the record itself.
+
+        Derived rather than accepted from the caller, so an event cannot be
+        filed under an experiment that does not own the thing it describes.
+        """
+        if isinstance(aggregate, Experiment):
+            return str(aggregate.id)
+        if isinstance(aggregate, (ExperimentNode, Run)):
+            return str(aggregate.experiment_id)
+        if isinstance(aggregate, RunAttempt):
+            return self._experiment_of_run(str(aggregate.run_id))
+        raise StorageError(f"{type(aggregate).__name__} has no owning experiment")
+
+    def _experiment_of_run(self, run_id: str) -> str:
+        """Resolve a run's experiment, which an attempt does not carry."""
+        row = self._connection.execute(
+            "SELECT experiment_id FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise AggregateNotFoundError("Run", run_id)
+        return str(row["experiment_id"])
+
+    def _experiment_of_operation(self, operation: RuntimeOperation) -> str:
+        """Resolve an operation's experiment through the attempt it targets."""
+        table = _TARGET_TABLES.get(operation.target.kind)
+        if table != "run_attempts":
+            raise UnknownOperationTargetError(operation.target.kind, operation.target.id)
+        row = self._connection.execute(
+            "SELECT run_id FROM run_attempts WHERE id = ?", (operation.target.id,)
+        ).fetchone()
+        if row is None:
+            raise UnknownOperationTargetError(operation.target.kind, operation.target.id)
+        return self._experiment_of_run(str(row["run_id"]))
 
     def _require_target(self, target: RuntimeOperationTarget) -> None:
         """Enforce ADR-005 §10.1, which SQLite cannot."""
@@ -354,10 +395,10 @@ class ControlPlaneRepository:
         return self._write_event(event, destinations)
 
     def _write_event(self, event: DomainEvent, destinations: tuple[str, ...]) -> DomainEvent:
-        self.events.append(event)
+        self.events._append(event)
         now = utc_now()
         for destination in destinations:
-            self.events.enqueue(
+            self.events._enqueue(
                 OutboxRecord(
                     id=f"obx_{uuid.uuid4().hex}",
                     event_id=event.id,

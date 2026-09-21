@@ -6,7 +6,7 @@ Implement:
 - revision-based optimistic concurrency
 - atomic aggregate transition + event insert + outbox insert
 - experiment/node/run/attempt persistence
-- ADR-013 `RuntimeOperation` journal in migration 001, separate from the outbox
+- ADR-013 `RuntimeOperation` journal in migration 002, separate from the outbox
 - operation ID, typed target (`training-attempt` | `evaluation-attempt` — never a
   `RunAttemptId` column, because evaluation attempts use this same journal),
   submit/cancel type, canonical request digest, state, runtime reference and
@@ -25,12 +25,19 @@ Implement:
 - event sequence
 - crash consistency tests
 
-Use `schemas/sqlite-schema-migration-001.sql` as a starting point, adapting as
-needed. It is migration 001 only — an initial subset, not the target schema.
-Its header lists the tables still to come and the ADR that defines each. Do not
-read the absence of a table there as a decision that it is not needed.
-`schemas/sqlite-schema-migration-002.sql` adds `actions` and belongs to PR-006a,
-not this PR; both must land before Phase 2.
+Use `schemas/sqlite-schema-migration-001.sql` and `-002.sql` as a starting
+point, adapting as needed. The shipped sequence is:
+
+```text
+001  core aggregates                      PR-004
+002  events, outbox, runtime_operations    PR-005
+003  actions                               PR-006a
+```
+
+001's header lists the tables still to come and the ADR that defines each. Do
+not read the absence of a table there as a decision that it is not needed.
+`-003.sql` adds `actions` and belongs to PR-006a, not this PR; all three must
+land before Phase 2.
 
 **ADR-005 is the contract this PR implements.** Read it in full before starting:
 §3 through §10 define every transaction boundary and repository invariant below,

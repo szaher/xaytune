@@ -15,7 +15,7 @@ from xaytune.core import Actor, ExperimentStatus, RunAttemptStatus, RuntimeRef
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.errors import ConcurrentModificationError, InvalidTransitionError
 from xaytune.core.ids import OperationId
-from xaytune.storage import ControlPlaneRepository, UnknownOperationTargetError
+from xaytune.storage import ControlPlaneRepository
 from xaytune.storage.journal import IdempotencyConflictError
 
 from .conftest import make_attempt, make_experiment, make_node, make_run
@@ -47,9 +47,7 @@ def test_a_transition_writes_its_event_in_the_same_commit(
     repo: ControlPlaneRepository, experiment: Any
 ) -> None:
     activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(
-        activated, experiment_id=str(experiment.id), actor=ACTOR, event_type="ExperimentActivated"
-    )
+    repo.transition(activated, actor=ACTOR, event_type="ExperimentActivated")
 
     events = repo.events.events_for_aggregate(str(experiment.id))
     assert [event.event_type for event in events] == [
@@ -64,12 +62,7 @@ def test_an_outbox_row_is_written_with_the_event(
 ) -> None:
     """§11.6."""
     activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(
-        activated,
-        experiment_id=str(experiment.id),
-        actor=ACTOR,
-        destinations=("mlflow", "webhook"),
-    )
+    repo.transition(activated, actor=ACTOR, destinations=("mlflow", "webhook"))
 
     pending = repo.events.pending_outbox()
     assert sorted(record.destination for record in pending) == ["mlflow", "webhook"]
@@ -86,18 +79,18 @@ def test_a_failure_rolls_back_state_event_and_outbox_together(
 
     # Fail after the state update and the event insert have both been issued,
     # so the rollback has something of each to discard.
-    original_append = repo.events.append
+    original_append = repo.events._append
 
     def exploding(event: Any) -> int:
         original_append(event)
         raise RuntimeError("injected after the event insert")
 
-    repo.events.append = exploding  # type: ignore[method-assign]
+    repo.events._append = exploding  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="injected"):
-        repo.transition(activated, experiment_id=str(experiment.id), actor=ACTOR)
+        repo.transition(activated, actor=ACTOR)
 
-    repo.events.append = original_append  # type: ignore[method-assign]
+    repo.events._append = original_append  # type: ignore[method-assign]
 
     # Neither half survived.
     assert repo.aggregates.load_experiment(str(experiment.id)).status is ExperimentStatus.CREATED
@@ -111,7 +104,7 @@ def test_every_aggregate_revision_has_exactly_one_event(
 ) -> None:
     """§10.2: an aggregate's revision equals its latest event's revision."""
     activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(activated, experiment_id=str(experiment.id), actor=ACTOR)
+    repo.transition(activated, actor=ACTOR)
 
     stored = repo.aggregates.load_experiment(str(experiment.id))
     events = repo.events.events_for_aggregate(str(experiment.id))
@@ -123,7 +116,7 @@ def test_every_aggregate_revision_has_exactly_one_event(
 def test_events_carry_a_total_order(repo: ControlPlaneRepository, experiment: Any) -> None:
     """§6 of chapter 07: consumers order on sequence, not on wall clock."""
     activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(activated, experiment_id=str(experiment.id), actor=ACTOR)
+    repo.transition(activated, actor=ACTOR)
 
     sequences = [e.sequence for e in repo.events.events_for_experiment(str(experiment.id))]
     assert sequences == sorted(sequences)
@@ -139,7 +132,6 @@ def test_attempt_and_submit_intent_commit_together(
     """§11.4 and §4: intent is durable before the runtime is called."""
     attempt, operation = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
@@ -169,7 +161,6 @@ def test_a_failure_rolls_back_attempt_and_intent_together(
     with pytest.raises(RuntimeError, match="injected"):
         repo.create_attempt_with_submit_intent(
             attempt,
-            experiment_id=str(experiment.id),
             request_digest=DIGEST,
             actor=ACTOR,
             operation_id=operation_id,
@@ -195,7 +186,6 @@ def test_committed_intent_and_digest_survive_a_reopen(
 
     _, operation = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
@@ -223,7 +213,6 @@ def test_reusing_an_operation_id_with_the_same_request_is_a_no_op(
 
     _, first = repo.create_attempt_with_submit_intent(
         attempt,
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
         operation_id=operation_id,
@@ -244,7 +233,6 @@ def test_reusing_an_operation_id_with_a_different_request_is_refused(
     attempt = make_attempt(run)
     _, first = repo.create_attempt_with_submit_intent(
         attempt,
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
         operation_id=operation_id,
@@ -268,11 +256,10 @@ def test_illegal_operation_transitions_are_refused(
     """§11.8, and §10.3: terminal records are immutable."""
     _, operation = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    confirmed = repo.confirm_operation(operation, experiment_id=str(experiment.id), actor=ACTOR)
+    confirmed = repo.confirm_operation(operation, actor=ACTOR)
 
     with pytest.raises(InvalidTransitionError):
         confirmed.with_state("failed")
@@ -284,14 +271,13 @@ def test_a_stale_operation_revision_is_refused(
     """§11.8: two writers, one read; the second loses."""
     _, operation = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    repo.confirm_operation(operation, experiment_id=str(experiment.id), actor=ACTOR)
+    repo.confirm_operation(operation, actor=ACTOR)
 
     with pytest.raises(ConcurrentModificationError):
-        repo.fail_operation(operation, experiment_id=str(experiment.id), actor=ACTOR)
+        repo.fail_operation(operation, actor=ACTOR)
 
 
 # ---- §11.12 a lost response stays unresolved -----------------------------
@@ -303,11 +289,10 @@ def test_an_unresolved_operation_is_never_recorded_as_failed(
     """§11.12: "we do not know" must not collapse into "it did not happen"."""
     _, operation = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    sent = repo.mark_operation_sent(operation, experiment_id=str(experiment.id), actor=ACTOR)
+    sent = repo.mark_operation_sent(operation, actor=ACTOR)
 
     # The response was lost. Nothing transitions it; it stays queryable.
     assert sent.is_unresolved
@@ -319,15 +304,11 @@ def test_confirmed_operations_leave_the_unresolved_queue(
 ) -> None:
     _, operation = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
     repo.confirm_operation(
-        operation,
-        experiment_id=str(experiment.id),
-        actor=ACTOR,
-        runtime_ref=RuntimeRef(backend="local", external_id="pid-1"),
+        operation, actor=ACTOR, runtime_ref=RuntimeRef(backend="local", external_id="pid-1")
     )
 
     assert repo.operations.unresolved() == ()
@@ -336,74 +317,17 @@ def test_confirmed_operations_leave_the_unresolved_queue(
     assert stored.runtime_ref.external_id == "pid-1"
 
 
-# ---- §11.9 cancellation intent -------------------------------------------
+# ---- cancellation is deferred to PR-006a ---------------------------------
 
 
-def test_cancellation_intent_survives_a_restart(
-    repo: ControlPlaneRepository,
-    connection: sqlite3.Connection,
-    db_path: Any,
-    experiment: Any,
-    run: Any,
-) -> None:
-    """§11.9: durable independently of the attempt's observed status."""
-    from xaytune.storage import connect
+def test_cancellation_has_no_public_method_yet(repo: ControlPlaneRepository) -> None:
+    """ADR-005 §5 makes the Action the durable owner of cancellation intent.
 
-    attempt, _ = repo.create_attempt_with_submit_intent(
-        make_attempt(run),
-        experiment_id=str(experiment.id),
-        request_digest=DIGEST,
-        actor=ACTOR,
-    )
-    cancel = repo.record_cancellation_intent(
-        RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id)),
-        experiment_id=str(experiment.id),
-        request_digest="sha256:cancel",
-        actor=ACTOR,
-    )
-    connection.close()
-
-    reopened = connect(db_path)
-    try:
-        recovered = ControlPlaneRepository(reopened).operations.get(str(cancel.id))
-        assert recovered is not None
-        assert recovered.type == "cancel"
-        assert recovered.is_unresolved
-    finally:
-        reopened.close()
-
-
-# ---- §11.10 evaluation targets behave identically ------------------------
-
-
-def test_an_operation_against_a_missing_target_is_refused(
-    repo: ControlPlaneRepository, experiment: Any
-) -> None:
-    """§10.1: SQLite cannot enforce a typed target, so the repository does."""
-    with pytest.raises(UnknownOperationTargetError):
-        repo.record_cancellation_intent(
-            RuntimeOperationTarget(kind="training-attempt", id="attempt_does_not_exist"),
-            experiment_id=str(experiment.id),
-            request_digest="sha256:cancel",
-            actor=ACTOR,
-        )
-
-
-def test_an_evaluation_target_is_refused_until_its_table_exists(
-    repo: ControlPlaneRepository, experiment: Any
-) -> None:
-    """ADR-015's tables have not landed, so the target cannot be resolved.
-
-    Refused rather than accepted unchecked: an operation naming a target that
-    cannot be verified is exactly the dangling reference §10.1 forbids.
+    Exposing it here could only write the effect with no recorded cause, which
+    is the state §5 exists to prevent. §11.9 belongs with PR-006a, because that
+    is when the intent exists as something other than an operation row.
     """
-    with pytest.raises(UnknownOperationTargetError, match="evaluation-attempt"):
-        repo.record_cancellation_intent(
-            RuntimeOperationTarget(kind="evaluation-attempt", id="eval_attempt_1"),
-            experiment_id=str(experiment.id),
-            request_digest="sha256:cancel",
-            actor=ACTOR,
-        )
+    assert not [name for name in dir(repo) if "cancel" in name.lower()]
 
 
 # ---- the write boundary still holds --------------------------------------
@@ -422,14 +346,11 @@ def test_attempt_transitions_carry_their_events(
 ) -> None:
     attempt, _ = repo.create_attempt_with_submit_intent(
         make_attempt(run),
-        experiment_id=str(experiment.id),
         request_digest=DIGEST,
         actor=ACTOR,
     )
     queued = attempt.with_status(RunAttemptStatus.QUEUED)
-    repo.transition(
-        queued, experiment_id=str(experiment.id), actor=ACTOR, event_type="RuntimeQueued"
-    )
+    repo.transition(queued, actor=ACTOR, event_type="RuntimeQueued")
 
     types = [e.event_type for e in repo.events.events_for_aggregate(str(attempt.id))]
     assert types == ["RunAttemptCreated", "RuntimeQueued"]
@@ -449,3 +370,176 @@ class write_once:  # noqa: N801 - reads as a statement at the call site
             self._repo._connection.commit()
         else:
             self._repo._connection.rollback()
+
+
+# ---- the escape hatches that had to be closed ----------------------------
+
+
+def test_a_bare_event_write_is_refused(repo: ControlPlaneRepository) -> None:
+    """The violation this module's docstring used to claim was impossible.
+
+    ``connect()`` sets ``isolation_level=None``, so before the journal writers
+    were made private and transaction-bound, this committed a fabricated event
+    with no aggregate behind it -- exactly what ADR-005 §3 forbids.
+    """
+    from xaytune.core.domain.event import DomainEvent
+    from xaytune.core.ids import EventId
+
+    fabricated = DomainEvent(
+        id=EventId.generate(),
+        experiment_id="exp_nonexistent",
+        aggregate_type="Experiment",
+        aggregate_id="exp_nonexistent",
+        aggregate_revision=0,
+        event_type="Fabricated",
+        actor=ACTOR,
+    )
+
+    assert not hasattr(repo.events, "append")
+    with pytest.raises(sqlite3.ProgrammingError, match="write_transaction"):
+        repo.events._append(fabricated)
+
+    assert repo.events.events_for_aggregate("exp_nonexistent") == ()
+
+
+def test_a_bare_operation_write_is_refused(repo: ControlPlaneRepository, run: Any) -> None:
+    from xaytune.core.domain.operation import RuntimeOperation
+
+    orphan = RuntimeOperation(
+        id=OperationId.generate(),
+        target=RuntimeOperationTarget(kind="training-attempt", id="attempt_nonexistent"),
+        type="submit",
+        request_digest=DIGEST,
+    )
+
+    with pytest.raises(sqlite3.ProgrammingError, match="write_transaction"):
+        repo.operations._insert(orphan)
+
+    assert repo.operations.get(str(orphan.id)) is None
+
+
+def test_the_journal_classes_are_not_part_of_the_public_api() -> None:
+    """Exporting them invited exactly the bare write above."""
+    import xaytune.storage as storage
+
+    assert "EventJournal" not in storage.__all__
+    assert "OperationJournal" not in storage.__all__
+
+
+# ---- §11.7 at the layer where it matters ---------------------------------
+
+
+def test_the_public_compound_write_is_idempotent(
+    repo: ControlPlaneRepository, experiment: Any, run: Any
+) -> None:
+    """The crash-and-retry case ADR-013 exists to make safe.
+
+    Journal-level idempotency alone is not enough: the attempt insert runs
+    first, so a naive retry hits the attempt's primary key before the operation
+    id is ever consulted.
+    """
+    attempt = make_attempt(run)
+    operation_id = OperationId.generate()
+
+    first = repo.create_attempt_with_submit_intent(
+        attempt, request_digest=DIGEST, actor=ACTOR, operation_id=operation_id
+    )
+    second = repo.create_attempt_with_submit_intent(
+        attempt, request_digest=DIGEST, actor=ACTOR, operation_id=operation_id
+    )
+
+    assert second[0].id == first[0].id
+    assert second[1].id == first[1].id
+
+    assert len(repo.aggregates.attempts_for_run(str(run.id))) == 1
+    assert len(repo.operations.for_target("training-attempt", str(attempt.id))) == 1
+    created = [
+        event
+        for event in repo.events.events_for_aggregate(str(attempt.id))
+        if event.event_type == "RunAttemptCreated"
+    ]
+    assert len(created) == 1
+
+
+def test_a_retry_with_a_changed_request_is_refused(repo: ControlPlaneRepository, run: Any) -> None:
+    operation_id = OperationId.generate()
+    attempt = make_attempt(run)
+    repo.create_attempt_with_submit_intent(
+        attempt, request_digest=DIGEST, actor=ACTOR, operation_id=operation_id
+    )
+
+    with pytest.raises(IdempotencyConflictError, match="request_digest"):
+        repo.create_attempt_with_submit_intent(
+            attempt,
+            request_digest="sha256:changed",
+            actor=ACTOR,
+            operation_id=operation_id,
+        )
+
+
+# ---- provenance: the owning experiment is derived, never supplied --------
+
+
+def test_an_event_cannot_be_filed_under_the_wrong_experiment(
+    repo: ControlPlaneRepository, experiment: Any, run: Any
+) -> None:
+    """A caller-supplied experiment id could disagree with actual ownership.
+
+    The state change would land on one experiment and its event under another's
+    history, with nothing raising and no later query able to detect it.
+    """
+    other = repo.create_experiment(make_experiment("other"), actor=ACTOR)
+    attempt, _ = repo.create_attempt_with_submit_intent(
+        make_attempt(run), request_digest=DIGEST, actor=ACTOR
+    )
+
+    queued = attempt.with_status(RunAttemptStatus.QUEUED)
+    repo.transition(queued, actor=ACTOR)
+
+    # `other` has only its own creation event; nothing from this run leaked in.
+    assert [e.aggregate_type for e in repo.events.events_for_experiment(str(other.id))] == [
+        "Experiment"
+    ]
+    filed = {e.experiment_id for e in repo.events.events_for_aggregate(str(attempt.id))}
+    assert filed == {str(experiment.id)}
+
+
+# ---- observational events share an aggregate revision --------------------
+
+
+def test_many_events_may_share_one_aggregate_revision(
+    repo: ControlPlaneRepository, connection: sqlite3.Connection, experiment: Any, run: Any
+) -> None:
+    """ADR-014 emits thousands of observations per attempt.
+
+    §10.2 requires the aggregate's revision to equal that of its latest
+    *state-transition* event -- not that a revision carries exactly one event.
+    A unique index here would have made the second observation impossible and
+    forced a revision bump per metric.
+    """
+    attempt, _ = repo.create_attempt_with_submit_intent(
+        make_attempt(run), request_digest=DIGEST, actor=ACTOR
+    )
+
+    from xaytune.core.domain.event import DomainEvent
+    from xaytune.core.ids import EventId
+    from xaytune.storage import write_transaction
+
+    with write_transaction(connection):
+        for observation in ("MetricObserved", "MetricObserved", "Heartbeat"):
+            repo.events._append(
+                DomainEvent(
+                    id=EventId.generate(),
+                    experiment_id=str(experiment.id),
+                    aggregate_type="RunAttempt",
+                    aggregate_id=str(attempt.id),
+                    aggregate_revision=attempt.revision,
+                    event_type=observation,
+                    actor=ACTOR,
+                )
+            )
+
+    events = repo.events.events_for_aggregate(str(attempt.id))
+    at_revision = [e for e in events if e.aggregate_revision == attempt.revision]
+    assert len(at_revision) == 4
+    assert repo.aggregates.load_attempt(str(attempt.id)).revision == attempt.revision

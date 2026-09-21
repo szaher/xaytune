@@ -47,7 +47,19 @@ CREATE TABLE events (
 CREATE INDEX idx_events_experiment_sequence
   ON events(experiment_id, sequence);
 
-CREATE UNIQUE INDEX idx_events_aggregate_revision
+-- NOT unique. ADR-005 §10.2 requires that an aggregate's revision equals the
+-- revision of its latest *state-transition* event -- not that only one event
+-- may carry a given revision. Observational events are recorded against the
+-- state they were observed at and do not advance it, so one RunAttempt
+-- revision legitimately carries many:
+--
+--     RunAttempt revision 7   MetricObserved, MetricObserved,
+--                             CheckpointCommitted, Heartbeat, ...
+--
+-- ADR-014 emits thousands of those per attempt. A unique index here would make
+-- the second one impossible, which would force a revision bump per metric and
+-- turn provenance into state churn.
+CREATE INDEX idx_events_aggregate_revision
   ON events(aggregate_type, aggregate_id, aggregate_revision);
 
 -- ADR-005 §10.6: the outbox PUBLISHES events. It never submits or cancels
@@ -86,8 +98,13 @@ CREATE INDEX idx_outbox_pending
 -- separate journal-transition table.
 CREATE TABLE runtime_operations (
   id TEXT PRIMARY KEY NOT NULL,
-  target_kind TEXT NOT NULL
-    CHECK (target_kind IN ('training-attempt', 'evaluation-attempt')),
+  -- Deliberately NOT constrained to a fixed set of kinds. SQLite cannot alter a
+  -- CHECK in place, so freezing the vocabulary here would mean rebuilding this
+  -- table for each new workload type -- and ADR-015 §2 already names data
+  -- preparation and reward-model scoring as the likely next ones. The database
+  -- enforces structural shape; the domain type and _require_target() validate
+  -- the vocabulary, which is the same division used for Action types.
+  target_kind TEXT NOT NULL,
   target_id TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('submit', 'cancel')),
   -- Canonical hash of the FULL external request, not the ExecutionFingerprint.
@@ -96,10 +113,6 @@ CREATE TABLE runtime_operations (
   request_digest TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('intended', 'sent', 'confirmed', 'failed')),
   runtime_ref_json TEXT,
-  -- ADR-005 §5: an effect caused by an Action carries its cause. The Action
-  -- table arrives in 003, so the foreign key is added there rather than
-  -- referencing a table that does not exist yet.
-  caused_by_action_id TEXT,
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -115,6 +128,9 @@ CREATE INDEX idx_runtime_operations_unresolved
   ON runtime_operations(state, updated_at)
   WHERE state IN ('intended', 'sent');
 
-CREATE INDEX idx_runtime_operations_action
-  ON runtime_operations(caused_by_action_id)
-  WHERE caused_by_action_id IS NOT NULL;
+-- ADR-005 §5's caused_by_action_id is NOT here. Adding the column now would
+-- mean adding it without REFERENCES actions(id), since that table arrives in
+-- 003 -- and SQLite cannot attach a foreign key to an existing column
+-- afterwards without rebuilding the table. Migration 003 adds the column and
+-- its foreign key together, so the relationship gets real referential
+-- integrity instead of permanently relying on an application check.

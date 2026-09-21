@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
 from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.ids import (
     DecisionId,
@@ -22,34 +23,37 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import AggregateModel, FrozenDict, FrozenDomainModel
-from xaytune.core.refs import Actor, ControllerHostRef, DatasetRef, ModelRef
+from xaytune.core.refs import Actor, ControllerHostRef
 from xaytune.core.state.machines import EXPERIMENT_MACHINE, NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 
 __all__ = [
+    "CandidateSpecSnapshot",
     "Experiment",
     "ExperimentNode",
-    "TrainingSpecSnapshot",
 ]
 
 
-class TrainingSpecSnapshot(FrozenDomainModel):
-    """Immutable snapshot of the training intent attached to a node.
+class CandidateSpecSnapshot(FrozenDomainModel):
+    """Immutable snapshot of the scientific proposition a node tests.
 
     Frozen on purpose: a scientific change creates a child node rather than
     editing an existing snapshot (Rule 5).
 
-    Phase 1 placeholder. The typed SFT/pretrain/DPO/GRPO schemas and the
-    fingerprint framework arrive with the TrainingSpec work; until then the
-    payload stays opaque so nothing in the core depends on trainer-specific
-    field names.
+    Wraps a :class:`~xaytune.core.domain.candidate.CandidateSpec` rather than
+    being one, so a node keeps the exact bytes it was created with even if the
+    spec's own schema later gains fields. ``spec_version`` records which shape
+    those bytes are.
     """
 
-    kind: str
-    spec_version: str = "0"
-    model: ModelRef | None = None
-    dataset: DatasetRef | None = None
-    payload: FrozenDict = Field(default_factory=FrozenDict)
+    candidate: CandidateSpec
+    spec_version: str = "1"
+    metadata: FrozenDict = Field(default_factory=FrozenDict)
+
+    @property
+    def kind(self) -> TrainingKind:
+        """The training program this candidate runs."""
+        return self.candidate.training.kind
 
 
 class Experiment(AggregateModel):
@@ -112,13 +116,16 @@ class ExperimentNode(AggregateModel):
     hypothesis: str | None = None
     reason: str | None = None
 
-    training_spec: TrainingSpecSnapshot
-    training_fingerprint: str
+    candidate: CandidateSpecSnapshot
+    candidate_fingerprint: str = Field(
+        validation_alias=AliasChoices("candidate_fingerprint", "training_fingerprint"),
+        serialization_alias="candidate_fingerprint",
+    )
 
     status: ExperimentNodeStatus = ExperimentNodeStatus.CREATED
 
     run_ids: tuple[RunId, ...] = Field(default_factory=tuple)
-    evaluation_ids: tuple[EvaluationId, ...] = Field(default_factory=tuple)
+    evaluation_run_ids: tuple[EvaluationId, ...] = Field(default_factory=tuple)
     decision_ids: tuple[DecisionId, ...] = Field(default_factory=tuple)
 
     created_by: Actor

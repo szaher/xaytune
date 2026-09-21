@@ -221,7 +221,7 @@ def test_node_fingerprint_is_queryable_as_a_column(
     """ "Has this hypothesis been explored?" must not require parsing payloads."""
     row = connection.execute(
         "SELECT id FROM experiment_nodes WHERE candidate_fingerprint = ?",
-        (seeded["node"].training_fingerprint,),
+        (seeded["node"].candidate_fingerprint,),
     ).fetchone()
     assert row["id"] == str(seeded["node"].id)
 
@@ -231,7 +231,7 @@ def test_run_fingerprint_is_queryable_as_a_column(
 ) -> None:
     row = connection.execute(
         "SELECT id FROM runs WHERE candidate_fingerprint = ?",
-        (seeded["run"].training_fingerprint,),
+        (seeded["run"].candidate_fingerprint,),
     ).fetchone()
     assert row["id"] == str(seeded["run"].id)
 

@@ -13,12 +13,14 @@ of an approved action (ADR-011).
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from xaytune.core.clock import utc_now
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import (
     ExperimentId,
     ExperimentNodeId,
@@ -36,6 +38,8 @@ __all__ = [
     "ExecutionOverrideKind",
     "Run",
     "RunAttempt",
+    "artifact_lineage_fingerprint",
+    "run_history_fingerprint",
 ]
 
 ExecutionOverrideKind = Literal[
@@ -87,7 +91,10 @@ class Run(AggregateModel):
     seed: int | None = None
     replicate: int | None = None
 
-    training_fingerprint: str
+    candidate_fingerprint: str = Field(
+        validation_alias=AliasChoices("candidate_fingerprint", "training_fingerprint"),
+        serialization_alias="candidate_fingerprint",
+    )
     execution_plan_ref: str | None = None
 
     attempt_ids: tuple[RunAttemptId, ...] = Field(default_factory=tuple)
@@ -173,3 +180,62 @@ class RunAttempt(AggregateModel):
     def is_terminal(self) -> bool:
         """Whether this attempt has reached a final state."""
         return ATTEMPT_MACHINE.is_terminal(self.status)
+
+
+def run_history_fingerprint(
+    run: Run,
+    applications: Sequence[Mapping[str, Any]],
+) -> str:
+    """Identify **everything this run did** — for audit (ADR-011).
+
+    Covers the candidate, the run's seed and replicate, and the ordered
+    sequence of *every* `InterventionApplication`, including any whose work was
+    later rolled back and discarded.
+
+    That inclusion is the point of having two fingerprints. A run that applied
+    an intervention, rolled back past it and applied it again did something
+    different from one that applied it once, even where both produced the same
+    artifact. This hash says so; :func:`artifact_lineage_fingerprint` does not.
+
+    Provisional until the run is terminal: a reuse lookup must never match an
+    in-flight run, whose history is still being written.
+    """
+    return fingerprint(
+        {
+            "kind": "run-history",
+            "candidate_fingerprint": run.candidate_fingerprint,
+            "seed": run.seed,
+            "replicate": run.replicate,
+            "applications": [dict(a) for a in applications],
+        }
+    )
+
+
+def artifact_lineage_fingerprint(
+    run: Run,
+    retained_applications: Sequence[Mapping[str, Any]],
+    checkpoint_ancestry: Sequence[str],
+) -> str:
+    """Identify **the trajectory that produced an artifact** — for reuse (ADR-011).
+
+    Covers the candidate, the seed and replicate, the artifact's causal
+    checkpoint ancestry, and only the applications on the retained trajectory.
+
+    Work that was rolled back is deliberately absent. It happened, and it is in
+    the history hash, but it did not causally contribute to the artifact — so
+    including it would make two runs that produced the same trajectory look
+    different because one of them had a bad afternoon, and "has this trajectory
+    been run?" would answer no.
+
+    Provisional until the run is terminal, for the same reason.
+    """
+    return fingerprint(
+        {
+            "kind": "artifact-lineage",
+            "candidate_fingerprint": run.candidate_fingerprint,
+            "seed": run.seed,
+            "replicate": run.replicate,
+            "checkpoint_ancestry": list(checkpoint_ancestry),
+            "applications": [dict(a) for a in retained_applications],
+        }
+    )

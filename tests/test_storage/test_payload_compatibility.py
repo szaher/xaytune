@@ -1,20 +1,13 @@
-"""Durable payload compatibility across a domain field rename.
+"""Durable payload compatibility across the `candidate_fingerprint` rename.
 
-The aggregate body is stored as JSON in ``payload_json``, which is what lets a
-new domain field ship without a SQL migration. It does **not** make renames
-free, and the reason is easy to miss: :class:`FrozenDomainModel` sets
-``extra="forbid"``, so a payload written before a rename fails to load
-afterwards with two errors at once -- the old key is unexpected, and the new one
-is missing.
+Written in PR-004 against stand-in models, because the rename had not happened
+yet. It has now, so these assert the real thing: a payload written before the
+rename still loads, and every write since carries the new key.
 
-PR-007 renames ``training_fingerprint`` to ``candidate_fingerprint`` when
-``CandidateSpec`` lands, and by then PR-004 databases exist. These tests pin the
-pattern that makes that rename safe, and they are written to fail if it is done
-naively.
-
-The pattern: accept both keys on the way in, write only the new one on the way
-out. A database converges on the new spelling as its aggregates are next
-written, and no backfill migration is needed.
+The hazard was never the SQL column -- that was named for its destination from
+the start. It was ``payload_json``: :class:`FrozenDomainModel` sets
+``extra="forbid"``, so a naive rename fails to load an older payload with two
+errors at once, the old key unexpected and the new one missing.
 """
 
 from __future__ import annotations
@@ -24,140 +17,134 @@ import sqlite3
 from typing import Any
 
 import pytest
-from pydantic import AliasChoices, Field, create_model
 
-from xaytune.core import ExperimentNodeStatus
+from xaytune.core import Actor, ExperimentNodeStatus
 from xaytune.core.domain.experiment import ExperimentNode
-from xaytune.storage import AggregateStore, write_transaction
+from xaytune.storage import ControlPlaneRepository, write_transaction
 
-# ---------------------------------------------------------------------------
-# Stand-ins for the PR-007-era model. Built here rather than imported because
-# the rename has not happened yet -- the point is to cross the boundary now,
-# while the fix is still cheap.
-# ---------------------------------------------------------------------------
+ACTOR = Actor(type="system", id="controller")
 
 
-def _renamed_model(*, with_alias: bool) -> type[ExperimentNode]:
-    """Return ``ExperimentNode`` with the PR-007 field name.
-
-    ``with_alias=False`` is the naive rename: the one a coding agent would write
-    by search-and-replace.
-    """
-    fields: dict[str, Any] = {
-        name: (info.annotation, info) for name, info in ExperimentNode.model_fields.items()
-    }
-    del fields["training_fingerprint"]
-
-    if with_alias:
-        fields["candidate_fingerprint"] = (
-            str,
-            Field(
-                validation_alias=AliasChoices("candidate_fingerprint", "training_fingerprint"),
-                serialization_alias="candidate_fingerprint",
-            ),
-        )
-    else:
-        fields["candidate_fingerprint"] = (str, ...)
-
-    return create_model(  # type: ignore[no-any-return, call-overload]
-        "RenamedExperimentNode",
-        __base__=ExperimentNode.__mro__[1],
-        **fields,
-    )
+def _legacy_payload(node: ExperimentNode) -> str:
+    """The same node as a PR-004-era database would have stored it."""
+    payload = node.model_dump(mode="json", by_alias=True)
+    payload["training_fingerprint"] = payload.pop("candidate_fingerprint")
+    return json.dumps(payload, sort_keys=True)
 
 
-def test_a_naive_rename_cannot_read_a_pr004_payload(seeded: dict[str, Any]) -> None:
-    """The failure this whole module exists to prevent.
-
-    ``extra="forbid"`` turns a rename into a hard read failure, not a silently
-    dropped field -- which is the better of the two, but only if someone has
-    planned for it.
-    """
-    payload = json.dumps(seeded["node"].model_dump(mode="json"))
-    naive = _renamed_model(with_alias=False)
-
-    with pytest.raises(Exception) as caught:
-        naive.model_validate_json(payload)
-
-    message = str(caught.value)
-    assert "training_fingerprint" in message
-    assert "candidate_fingerprint" in message
-
-
-def test_an_aliased_rename_reads_a_pr004_payload(seeded: dict[str, Any]) -> None:
+def test_a_payload_written_before_the_rename_still_loads(seeded: dict[str, Any]) -> None:
+    """The compatibility this whole module exists for."""
     node = seeded["node"]
-    payload = json.dumps(node.model_dump(mode="json"))
 
-    renamed = _renamed_model(with_alias=True).model_validate_json(payload)
+    restored = ExperimentNode.model_validate_json(_legacy_payload(node))
 
-    assert renamed.candidate_fingerprint == node.training_fingerprint  # type: ignore[attr-defined]
+    assert restored.candidate_fingerprint == node.candidate_fingerprint
+    assert restored == node
 
 
-def test_a_rewritten_payload_converges_on_the_new_key(
-    store: AggregateStore, connection: sqlite3.Connection, seeded: dict[str, Any]
+def test_a_payload_missing_both_spellings_is_refused(seeded: dict[str, Any]) -> None:
+    """Accepting either name must not become accepting neither."""
+    payload = json.loads(_legacy_payload(seeded["node"]))
+    del payload["training_fingerprint"]
+
+    with pytest.raises(Exception, match="candidate_fingerprint"):
+        ExperimentNode.model_validate_json(json.dumps(payload))
+
+
+def test_an_unknown_key_is_still_refused(seeded: dict[str, Any]) -> None:
+    """``extra="forbid"`` is what made the rename a hard failure rather than a
+    silently dropped field. It is still in force."""
+    payload = json.loads(_legacy_payload(seeded["node"]))
+    payload["fingerprint"] = "sha256:wrong-name"
+
+    with pytest.raises(Exception, match="fingerprint"):
+        ExperimentNode.model_validate_json(json.dumps(payload))
+
+
+def test_writes_carry_only_the_new_key(
+    connection: sqlite3.Connection, seeded: dict[str, Any]
 ) -> None:
-    """PR-004 writes it, PR-007 reads it, transitions it, and writes it back.
+    """Every payload the repository writes uses the new spelling."""
+    for table, key in (("experiment_nodes", "node"), ("runs", "run")):
+        row = connection.execute(
+            f"SELECT payload_json FROM {table} WHERE id = ?",  # noqa: S608
+            (str(seeded[key].id),),
+        ).fetchone()
+        assert "candidate_fingerprint" in row["payload_json"]
+        assert "training_fingerprint" not in row["payload_json"]
 
-    The assertion that matters is the last one: the rewritten payload carries
-    only the new key, so a database converges on the new spelling as its rows
-    are next written rather than needing a backfill.
 
-    The write below is direct SQL rather than a repository call. The stand-in
-    PR-007 model is not one of the aggregate types the store maps, so it cannot
-    go through the typed writer -- and the property under test is the payload
-    encoding, not the write path. Naming this "through the real store" would
-    have claimed a path it does not take.
+def test_a_legacy_row_converges_on_the_next_write(
+    connection: sqlite3.Connection, seeded: dict[str, Any]
+) -> None:
+    """No backfill migration: a row adopts the new key when it is next written.
+
+    This is what makes naming the column for its destination pay off rather
+    than merely defer the cost.
     """
-    node_id = str(seeded["node"].id)
-    model = _renamed_model(with_alias=True)
+    node = seeded["node"]
+    repo = ControlPlaneRepository(connection)
 
-    # 1. Read the PR-004-era row with the PR-007-era model.
-    row = connection.execute(
-        "SELECT payload_json FROM experiment_nodes WHERE id = ?", (node_id,)
-    ).fetchone()
-    assert "training_fingerprint" in row["payload_json"]
-    loaded = model.model_validate_json(row["payload_json"])
-
-    # 2. Transition it, as any controller would. Done by hand because the
-    #    stand-in model is built from the aggregate base and so has no
-    #    with_status(); the real PR-007 ExperimentNode will keep its own.
-    planned = model.model_validate(
-        {
-            **loaded.model_dump(mode="python", by_alias=True),
-            "status": ExperimentNodeStatus.PLANNED,
-            "revision": loaded.revision + 1,
-        }
-    )
-
-    # 3. Persist it back through the real writer.
+    # Rewind the stored payload to its pre-rename form.
     with write_transaction(connection):
         connection.execute(
-            "UPDATE experiment_nodes SET status = ?, revision = ?, payload_json = ? "
-            "WHERE id = ? AND revision = ?",
-            (
-                planned.status.value,
-                planned.revision,
-                json.dumps(planned.model_dump(mode="json", by_alias=True), sort_keys=True),
-                node_id,
-                loaded.revision,
-            ),
+            "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
+            (_legacy_payload(node), str(node.id)),
         )
-
-    # 4. The stored payload has converged on the new key.
-    rewritten = connection.execute(
-        "SELECT payload_json FROM experiment_nodes WHERE id = ?", (node_id,)
+    before = connection.execute(
+        "SELECT payload_json FROM experiment_nodes WHERE id = ?", (str(node.id),)
     ).fetchone()["payload_json"]
+    assert "training_fingerprint" in before
 
+    # A perfectly ordinary transition, through the real repository.
+    repo.transition_node(
+        node.id,
+        expected_revision=node.revision,
+        new_status=ExperimentNodeStatus.PLANNED,
+        actor=ACTOR,
+    )
+
+    rewritten = connection.execute(
+        "SELECT payload_json FROM experiment_nodes WHERE id = ?", (str(node.id),)
+    ).fetchone()["payload_json"]
     assert "candidate_fingerprint" in rewritten
     assert "training_fingerprint" not in rewritten
 
 
-def test_the_sql_column_never_needed_the_rename(
+def test_the_column_never_needed_renaming(connection: sqlite3.Connection) -> None:
+    """Why it was named for the destination in the first place."""
+    for table in ("experiment_nodes", "runs"):
+        columns = {
+            row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        assert "candidate_fingerprint" in columns
+        assert "training_fingerprint" not in columns
+
+
+def test_the_payload_and_its_column_agree(
     connection: sqlite3.Connection, seeded: dict[str, Any]
 ) -> None:
-    """Why the column was named for the destination rather than the origin."""
-    columns = {
-        row["name"] for row in connection.execute("PRAGMA table_info(experiment_nodes)").fetchall()
-    }
-    assert "candidate_fingerprint" in columns
-    assert "training_fingerprint" not in columns
+    """A row whose index says one thing and whose body says another is worse
+    than either being wrong alone."""
+    row = connection.execute(
+        "SELECT candidate_fingerprint, payload_json FROM experiment_nodes WHERE id = ?",
+        (str(seeded["node"].id),),
+    ).fetchone()
+
+    assert (
+        json.loads(row["payload_json"])["candidate_fingerprint"] == (row["candidate_fingerprint"])
+    )
+
+
+def test_unencodable_values_are_refused() -> None:
+    """The snapshot is fingerprinted, so it must stay canonically encodable.
+
+    ``FrozenDict`` rejects the set at construction, so it surfaces as a
+    validation error rather than later at fingerprint time.
+    """
+    from pydantic import ValidationError
+
+    from xaytune.core.domain.candidate import TrainingKind, TrainingSpec
+
+    with pytest.raises(ValidationError, match="sets are not allowed"):
+        TrainingSpec(kind=TrainingKind.SFT, metadata={"seen": {1, 2}})

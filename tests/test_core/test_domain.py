@@ -12,6 +12,7 @@ from xaytune.core import (
     ArtifactId,
     ArtifactRef,
     BudgetSpec,
+    CandidateSpecSnapshot,
     CheckpointId,
     CheckpointRef,
     ControllerHostRef,
@@ -35,7 +36,13 @@ from xaytune.core import (
     RunAttemptStatus,
     RunId,
     RunStatus,
-    TrainingSpecSnapshot,
+)
+from xaytune.core.domain.candidate import (
+    CandidateSpec,
+    DataSpec,
+    ModelSpec,
+    TrainingKind,
+    TrainingSpec,
 )
 from xaytune.core.errors import InvalidDomainValueError, InvalidTransitionError
 from xaytune.core.immutable import FrozenDict, deep_freeze, thaw
@@ -61,13 +68,17 @@ def make_node(experiment_id: ExperimentId | None = None, **overrides) -> Experim
     defaults = dict(
         id=ExperimentNodeId.generate(),
         experiment_id=experiment_id or ExperimentId.generate(),
-        training_spec=TrainingSpecSnapshot(
-            kind="sft",
-            model=ModelRef(uri="Qwen/Qwen3-8B", revision="main"),
-            dataset=DatasetRef(uri="support-v4", revision="2026-01-01"),
-            payload={"learning_rate": 2e-5},
+        candidate=CandidateSpecSnapshot(
+            candidate=CandidateSpec(
+                model=ModelSpec(model=ModelRef(uri="Qwen/Qwen3-8B")),
+                data=DataSpec(dataset=DatasetRef(uri="./data.jsonl")),
+                training=TrainingSpec(
+                    kind=TrainingKind.SFT,
+                    metadata={"learning_rate": 2e-5},
+                ),
+            )
         ),
-        training_fingerprint="sha256:abc",
+        candidate_fingerprint="sha256:abc",
         created_by=Actor(type="rule", id="plateau-v1"),
     )
     defaults.update(overrides)
@@ -79,7 +90,7 @@ def make_run(**overrides) -> Run:
         id=RunId.generate(),
         node_id=ExperimentNodeId.generate(),
         experiment_id=ExperimentId.generate(),
-        training_fingerprint="sha256:abc",
+        candidate_fingerprint="sha256:abc",
         seed=42,
     )
     defaults.update(overrides)
@@ -154,31 +165,33 @@ class TestDeepImmutability:
 
     def test_caller_cannot_mutate_a_snapshot_through_a_retained_reference(self):
         source = {"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}}
-        snapshot = TrainingSpecSnapshot(kind="sft", payload=source)
+        snapshot = TrainingSpec(kind=TrainingKind.SFT, metadata=source)
 
         source["optimizer"]["lr"] = 7
 
-        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+        assert snapshot.metadata["optimizer"]["lr"] == 2e-5
 
     def test_nested_mapping_cannot_be_mutated(self):
-        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"lr": 2e-5}})
+        snapshot = TrainingSpec(kind=TrainingKind.SFT, metadata={"optimizer": {"lr": 2e-5}})
 
         with pytest.raises(TypeError):
-            snapshot.payload["optimizer"]["lr"] = 7
+            snapshot.metadata["optimizer"]["lr"] = 7
         with pytest.raises(TypeError):
-            snapshot.payload["new_key"] = 1
+            snapshot.metadata["new_key"] = 1
         with pytest.raises(TypeError):
-            snapshot.payload.update({"new_key": 1})
+            snapshot.metadata.update({"new_key": 1})
 
-        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+        assert snapshot.metadata["optimizer"]["lr"] == 2e-5
 
     def test_nested_sequence_cannot_be_mutated(self):
-        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"betas": [0.9, 0.95]}})
+        snapshot = TrainingSpec(
+            kind=TrainingKind.SFT, metadata={"optimizer": {"betas": [0.9, 0.95]}}
+        )
 
         # Lists become tuples on the way in.
-        assert snapshot.payload["optimizer"]["betas"] == (0.9, 0.95)
+        assert snapshot.metadata["optimizer"]["betas"] == (0.9, 0.95)
         with pytest.raises(AttributeError):
-            snapshot.payload["optimizer"]["betas"].append(1.0)
+            snapshot.metadata["optimizer"]["betas"].append(1.0)
 
     def test_aggregate_id_lists_cannot_be_appended_to(self):
         """An id list that accepts post-construction appends also skips validation."""
@@ -210,21 +223,22 @@ class TestDeepImmutability:
             override.values["micro_batch_size"] = 8
 
     def test_frozen_containers_still_round_trip_as_plain_json(self):
-        snapshot = TrainingSpecSnapshot(
-            kind="sft", payload={"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}}
+        snapshot = TrainingSpec(
+            kind=TrainingKind.SFT,
+            metadata={"optimizer": {"lr": 2e-5, "betas": [0.9, 0.95]}},
         )
         payload = snapshot.model_dump_json()
 
         assert '"betas":[0.9,0.95]' in payload
-        assert TrainingSpecSnapshot.model_validate_json(payload) == snapshot
+        assert TrainingSpec.model_validate_json(payload) == snapshot
 
     def test_thaw_returns_a_mutable_copy_without_affecting_the_record(self):
-        snapshot = TrainingSpecSnapshot(kind="sft", payload={"optimizer": {"lr": 2e-5}})
+        snapshot = TrainingSpec(kind=TrainingKind.SFT, metadata={"optimizer": {"lr": 2e-5}})
 
-        working = thaw(snapshot.payload)
+        working = thaw(snapshot.metadata)
         working["optimizer"]["lr"] = 7
 
-        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+        assert snapshot.metadata["optimizer"]["lr"] == 2e-5
 
 
 class TestFrozenDictInvariants:
@@ -237,20 +251,20 @@ class TestFrozenDictInvariants:
 
     def test_a_preconstructed_frozen_dict_is_still_deeply_frozen(self):
         source = FrozenDict({"optimizer": {"lr": 2e-5}})
-        snapshot = TrainingSpecSnapshot(kind="sft", payload=source)
+        snapshot = TrainingSpec(kind=TrainingKind.SFT, metadata=source)
 
         with pytest.raises(TypeError):
             source["optimizer"]["lr"] = 7
 
-        assert snapshot.payload["optimizer"]["lr"] == 2e-5
+        assert snapshot.metadata["optimizer"]["lr"] == 2e-5
 
     def test_the_backing_store_cannot_be_reached_through(self):
-        snapshot = TrainingSpecSnapshot(kind="sft", payload={"a": 1})
+        snapshot = TrainingSpec(kind=TrainingKind.SFT, metadata={"a": 1})
 
         with pytest.raises(TypeError):
-            snapshot.payload._data["injected"] = True
+            snapshot.metadata._data["injected"] = True
 
-        assert "injected" not in snapshot.payload
+        assert "injected" not in snapshot.metadata
 
     def test_attributes_cannot_be_replaced_or_deleted(self):
         frozen = FrozenDict({"a": 1})
@@ -268,13 +282,13 @@ class TestValidatedModelCopy:
     """
 
     def test_updated_mapping_is_refrozen(self):
-        original = TrainingSpecSnapshot(kind="sft", payload={"a": {"b": 1}})
+        original = TrainingSpec(kind=TrainingKind.SFT, metadata={"a": {"b": 1}})
 
-        copied = original.model_copy(update={"payload": {"a": {"b": 2}}})
+        copied = original.model_copy(update={"metadata": {"a": {"b": 2}}})
 
-        assert isinstance(copied.payload, FrozenDict)
+        assert isinstance(copied.metadata, FrozenDict)
         with pytest.raises(TypeError):
-            copied.payload["a"]["b"] = 3
+            copied.metadata["a"]["b"] = 3
 
     def test_updated_metadata_is_refrozen(self):
         ref = DatasetRef(uri="s3://x")
@@ -339,7 +353,7 @@ class TestAggregateUpdatesAreRefused:
         node = make_node()
 
         with pytest.raises(TypeError):
-            node.model_copy(update={"training_fingerprint": "sha256:different"})
+            node.model_copy(update={"candidate_fingerprint": "sha256:different"})
 
     def test_aggregate_id_cannot_be_rewritten(self):
         experiment = make_experiment()
@@ -399,7 +413,7 @@ class TestDomainValueContract:
     def test_non_string_keys_are_rejected(self):
         """{1: 'x'} serializes to {'1': 'x'} and stops comparing equal."""
         with pytest.raises(ValidationError):
-            TrainingSpecSnapshot(kind="sft", payload={1: "x"})
+            TrainingSpec(kind=TrainingKind.SFT, metadata={1: "x"})
 
     def test_sets_are_rejected(self):
         """Sets have no stable order, so fingerprints would vary by process."""
@@ -434,11 +448,11 @@ class TestDomainValueContract:
 
     def test_nested_structures_round_trip_unchanged(self):
         payload = {"a": {"b": [1, {"c": "d"}]}, "e": None, "f": True}
-        snapshot = TrainingSpecSnapshot(kind="sft", payload=payload)
+        snapshot = TrainingSpec(kind=TrainingKind.SFT, metadata=payload)
 
-        restored = TrainingSpecSnapshot.model_validate_json(snapshot.model_dump_json())
+        restored = TrainingSpec.model_validate_json(snapshot.model_dump_json())
         assert restored == snapshot
-        assert restored.payload["a"]["b"][1]["c"] == "d"
+        assert restored.metadata["a"]["b"][1]["c"] == "d"
 
 
 class TestImmutability:
@@ -453,9 +467,9 @@ class TestImmutability:
         """Rule 5: a scientific change creates a child node, never an edit."""
         node = make_node()
         with pytest.raises(ValidationError):
-            node.training_spec.payload = {}
+            node.candidate.metadata = {}
         with pytest.raises(ValidationError):
-            node.training_fingerprint = "sha256:other"
+            node.candidate_fingerprint = "sha256:other"
 
 
 class TestExperimentTransitions:

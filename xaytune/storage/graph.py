@@ -291,7 +291,7 @@ class ExperimentGraph:
             right=right,
             common_ancestors=common,
             nearest_common_ancestors=lowest,
-            same_candidate=left.training_fingerprint == right.training_fingerprint,
+            same_candidate=left.candidate_fingerprint == right.candidate_fingerprint,
         )
 
     # ---- validation ------------------------------------------------------

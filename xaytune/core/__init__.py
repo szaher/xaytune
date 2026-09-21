@@ -17,6 +17,7 @@ from xaytune.core.domain import (
     ActionOutcome,
     ActionTarget,
     BudgetSpec,
+    CandidateSpecSnapshot,
     DomainEvent,
     ExecutionOverride,
     Experiment,
@@ -29,7 +30,6 @@ from xaytune.core.domain import (
     RunAttempt,
     RuntimeOperation,
     RuntimeOperationTarget,
-    TrainingSpecSnapshot,
 )
 from xaytune.core.errors import (
     ConcurrentModificationError,
@@ -129,7 +129,7 @@ __all__ = [
     "RuntimeOperationTarget",
     "RuntimeRef",
     "StateMachine",
-    "TrainingSpecSnapshot",
+    "CandidateSpecSnapshot",
     "TypedId",
     "utc_now",
     "XaytuneError",

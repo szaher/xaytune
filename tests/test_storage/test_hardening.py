@@ -404,7 +404,7 @@ def test_a_run_must_realize_its_node_s_candidate(
 
     run = make_run(node)
     divergent = type(run).model_validate(
-        {**run.model_dump(mode="python"), "training_fingerprint": "sha256:something-else"}
+        {**run.model_dump(mode="python"), "candidate_fingerprint": "sha256:something-else"}
     )
 
     with pytest.raises(StorageError, match="realizes its node"):

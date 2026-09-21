@@ -15,6 +15,7 @@ import pytest
 
 from xaytune.core import (
     Actor,
+    CandidateSpecSnapshot,
     ControllerHostRef,
     Experiment,
     ExperimentId,
@@ -26,8 +27,15 @@ from xaytune.core import (
     RunAttempt,
     RunAttemptId,
     RunId,
-    TrainingSpecSnapshot,
 )
+from xaytune.core.domain.candidate import (
+    CandidateSpec,
+    DataSpec,
+    ModelSpec,
+    TrainingKind,
+    TrainingSpec,
+)
+from xaytune.core.refs import DatasetRef, ModelRef
 from xaytune.storage import AggregateStore, connect, migrate, write_transaction
 
 
@@ -47,6 +55,17 @@ def connection(db_path: Path) -> Iterator[sqlite3.Connection]:
 @pytest.fixture
 def store(connection: sqlite3.Connection) -> AggregateStore:
     return AggregateStore(connection)
+
+
+def _snapshot() -> CandidateSpecSnapshot:
+    """A minimal candidate, for tests that care about lineage rather than spec."""
+    return CandidateSpecSnapshot(
+        candidate=CandidateSpec(
+            model=ModelSpec(model=ModelRef(uri="Qwen/Qwen3-8B")),
+            data=DataSpec(dataset=DatasetRef(uri="./data/support-v4.jsonl")),
+            training=TrainingSpec(kind=TrainingKind.SFT),
+        )
+    )
 
 
 def make_experiment(name: str = "support-qwen") -> Experiment:
@@ -70,8 +89,8 @@ def make_node(
         id=ExperimentNodeId.generate(),
         experiment_id=experiment.id,
         parent_ids=parents,
-        training_spec=TrainingSpecSnapshot(kind="sft"),
-        training_fingerprint=fingerprint,
+        candidate=_snapshot(),
+        candidate_fingerprint=fingerprint,
         created_by=Actor(type="system", id="controller"),
     )
 
@@ -81,7 +100,7 @@ def make_run(node: ExperimentNode) -> Run:
         id=RunId.generate(),
         node_id=node.id,
         experiment_id=node.experiment_id,
-        training_fingerprint=node.training_fingerprint,
+        candidate_fingerprint=node.candidate_fingerprint,
     )
 
 

@@ -18,9 +18,9 @@ from xaytune.core.domain.event import (
     OutboxState,
 )
 from xaytune.core.domain.experiment import (
+    CandidateSpecSnapshot,
     Experiment,
     ExperimentNode,
-    TrainingSpecSnapshot,
 )
 from xaytune.core.domain.objective import (
     BudgetSpec,
@@ -68,6 +68,6 @@ __all__ = [
     "RunAttempt",
     "RuntimeOperation",
     "RuntimeOperationTarget",
-    "TrainingSpecSnapshot",
+    "CandidateSpecSnapshot",
     "UnknownActionTypeError",
 ]

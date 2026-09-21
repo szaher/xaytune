@@ -802,10 +802,10 @@ class ControlPlaneRepository:
 
         # PR-007 renames both fields to candidate_fingerprint; the rule is the
         # same either way, and pinning it here keeps the rename honest.
-        if node.training_fingerprint != run.training_fingerprint:
+        if node.candidate_fingerprint != run.candidate_fingerprint:
             raise StorageError(
-                f"run {run.id} carries fingerprint {run.training_fingerprint!r} "
-                f"but its node proposes {node.training_fingerprint!r}: a run "
+                f"run {run.id} carries fingerprint {run.candidate_fingerprint!r} "
+                f"but its node proposes {node.candidate_fingerprint!r}: a run "
                 f"realizes its node's candidate, not a different one"
             )
 

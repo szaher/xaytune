@@ -212,7 +212,7 @@ def test_two_nodes_with_one_fingerprint_are_replicates_not_alternatives(
     """Treating them as competing candidates would count one hypothesis twice."""
     twin = repo.create_node(
         make_node(
-            experiment, fingerprint=chain["c"].training_fingerprint, parents=(chain["b"].id,)
+            experiment, fingerprint=chain["c"].candidate_fingerprint, parents=(chain["b"].id,)
         ),
         actor=ACTOR,
     )
@@ -462,7 +462,7 @@ def test_lineage_respects_every_edge_in_a_wide_graph(
     edges = [(a, b), (a, c), (b, d), (c, d), (a, n), (d, n)]
     for parent, child in edges:
         assert position[str(parent.id)] < position[str(child.id)], (
-            f"{parent.training_fingerprint} must precede {child.training_fingerprint}"
+            f"{parent.candidate_fingerprint} must precede {child.candidate_fingerprint}"
         )
     assert len(order) == 5
 

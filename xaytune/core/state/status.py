@@ -10,6 +10,7 @@ from __future__ import annotations
 from enum import Enum
 
 __all__ = [
+    "ActionStatus",
     "ExperimentNodeStatus",
     "ExperimentStatus",
     "RunAttemptStatus",
@@ -80,3 +81,31 @@ class RunAttemptStatus(str, Enum):
     FAILED = "failed"
     PREEMPTED = "preempted"
     CANCELLED = "cancelled"
+
+
+class ActionStatus(str, Enum):
+    """Lifecycle of a typed control-plane action.
+
+    Approval is a **branch**, not a stage every action passes through:
+    ``VALIDATED`` may go straight to ``EXECUTING`` when no policy requires
+    approval. Routing everything through ``APPROVAL_PENDING -> APPROVED`` would
+    mean a controller-owned cancellation had to be marked approved by nobody,
+    which is a fiction in the audit record -- and it becomes load-bearing in
+    band B, where cancellations exist before any ``PolicyEngine`` does.
+
+    The three concepts stay separate::
+
+        validation      is this well-formed and applicable?   always
+        authorization   is this permitted by policy?          when a policy applies
+        approval        does a human have to say yes?         when policy says so
+    """
+
+    PROPOSED = "proposed"
+    VALIDATING = "validating"
+    VALIDATED = "validated"
+    APPROVAL_PENDING = "approval_pending"
+    APPROVED = "approved"
+    EXECUTING = "executing"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    REJECTED = "rejected"

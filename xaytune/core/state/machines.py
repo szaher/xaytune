@@ -33,6 +33,7 @@ from typing import Generic, TypeVar
 
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.state.status import (
+    ActionStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -40,6 +41,7 @@ from xaytune.core.state.status import (
 )
 
 __all__ = [
+    "ACTION_MACHINE",
     "ATTEMPT_MACHINE",
     "EXPERIMENT_MACHINE",
     "NODE_MACHINE",
@@ -251,5 +253,44 @@ ATTEMPT_MACHINE: StateMachine[RunAttemptStatus] = StateMachine(
         RunAttemptStatus.FAILED: set(),
         RunAttemptStatus.PREEMPTED: set(),
         RunAttemptStatus.CANCELLED: set(),
+    },
+)
+
+
+ACTION_MACHINE: StateMachine[ActionStatus] = StateMachine(
+    "Action",
+    ActionStatus.PROPOSED,
+    {
+        ActionStatus.PROPOSED: {
+            ActionStatus.VALIDATING,
+            ActionStatus.REJECTED,
+        },
+        ActionStatus.VALIDATING: {
+            ActionStatus.VALIDATED,
+            ActionStatus.REJECTED,
+        },
+        # Approval is conditional. A controller-owned action with no policy
+        # attached goes straight to EXECUTING rather than being marked APPROVED
+        # by nobody (04-state-machines.md section 5).
+        ActionStatus.VALIDATED: {
+            ActionStatus.EXECUTING,
+            ActionStatus.APPROVAL_PENDING,
+            ActionStatus.REJECTED,
+        },
+        ActionStatus.APPROVAL_PENDING: {
+            ActionStatus.APPROVED,
+            ActionStatus.REJECTED,
+        },
+        ActionStatus.APPROVED: {
+            ActionStatus.EXECUTING,
+            ActionStatus.REJECTED,
+        },
+        ActionStatus.EXECUTING: {
+            ActionStatus.SUCCEEDED,
+            ActionStatus.FAILED,
+        },
+        ActionStatus.SUCCEEDED: set(),
+        ActionStatus.FAILED: set(),
+        ActionStatus.REJECTED: set(),
     },
 )

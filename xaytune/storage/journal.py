@@ -179,8 +179,8 @@ class OperationJournal:
 
         self._connection.execute(
             "INSERT INTO runtime_operations (id, target_kind, target_id, type, "
-            "request_digest, state, runtime_ref_json, revision, created_at, "
-            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "request_digest, state, runtime_ref_json, caused_by_action_id, "
+            "revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(operation.id),
                 operation.target.kind,
@@ -189,6 +189,7 @@ class OperationJournal:
                 operation.request_digest,
                 operation.state,
                 _ref_json(operation),
+                str(operation.caused_by_action_id) if operation.caused_by_action_id else None,
                 operation.revision,
                 operation.created_at.isoformat(),
                 operation.updated_at.isoformat(),
@@ -222,6 +223,10 @@ class OperationJournal:
         _require_transaction(self._connection, "runtime operations")
         expected = operation.revision - 1
         cursor = self._connection.execute(
+            # caused_by_action_id is deliberately not updated: an effect's cause
+            # is fixed when it is created, and rewriting it would let a later
+            # transition reassign responsibility for a side effect that already
+            # happened.
             "UPDATE runtime_operations SET state = ?, runtime_ref_json = ?, "
             "revision = ?, updated_at = ? WHERE id = ? AND revision = ?",
             (
@@ -301,6 +306,7 @@ def _operation_from_row(row: sqlite3.Row) -> RuntimeOperation:
         "request_digest": row["request_digest"],
         "state": row["state"],
         "runtime_ref": json.loads(row["runtime_ref_json"]) if row["runtime_ref_json"] else None,
+        "caused_by_action_id": row["caused_by_action_id"],
         "revision": row["revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

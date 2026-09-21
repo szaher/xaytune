@@ -1,4 +1,9 @@
--- Migration 003 — minimal Action substrate (PR-006a).
+-- Migration 003 — minimal Action substrate.
+--
+-- ADR-005 §5's caused_by_action_id arrives here rather than in 002, together
+-- with its REFERENCES actions(id): SQLite cannot attach a foreign key to an
+-- existing column without rebuilding the table, so deferring the whole column
+-- is what buys real referential integrity instead of an application check.
 --
 -- Required before Phase 2, not after it. ADR-013 models cancellation as
 --
@@ -12,8 +17,6 @@
 -- This migration deliberately contains only the substrate. Approval rules,
 -- budget authorization and the mutating action types arrive in Phase 4 and will
 -- add columns or tables of their own.
-
-PRAGMA foreign_keys = ON;
 
 CREATE TABLE actions (
   id TEXT PRIMARY KEY NOT NULL,

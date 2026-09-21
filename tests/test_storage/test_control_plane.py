@@ -317,19 +317,6 @@ def test_confirmed_operations_leave_the_unresolved_queue(
     assert stored.runtime_ref.external_id == "pid-1"
 
 
-# ---- cancellation is deferred to PR-006a ---------------------------------
-
-
-def test_cancellation_has_no_public_method_yet(repo: ControlPlaneRepository) -> None:
-    """ADR-005 §5 makes the Action the durable owner of cancellation intent.
-
-    Exposing it here could only write the effect with no recorded cause, which
-    is the state §5 exists to prevent. §11.9 belongs with PR-006a, because that
-    is when the intent exists as something other than an operation row.
-    """
-    assert not [name for name in dir(repo) if "cancel" in name.lower()]
-
-
 # ---- the write boundary still holds --------------------------------------
 
 

@@ -9,11 +9,9 @@ the ADR names.
 transition(aggregate, ...)                  state + event + outbox        §3
 create_attempt_with_submit_intent(...)      attempt + INTENDED operation  §4
 confirm_operation / mark_operation_sent / fail_operation
+request_cancellation(...)                   Action + cancel operation     §5
+resolve_cancellation(...)                   Action settled with an outcome
 ```
-
-§5 -- intent plus the effect it causes -- has no public method here. It needs
-the `Action` aggregate to own the intent, which arrives in PR-006a; exposing
-cancellation before then could only record an effect whose cause is unwritten.
 
 There is still no ``save_experiment()``. The row writers stay private on
 :class:`~xaytune.storage.repository.AggregateStore` and
@@ -33,6 +31,12 @@ import uuid
 from typing import Literal
 
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.action import (
+    Action,
+    ActionOutcome,
+    ActionStatus,
+    ActionTarget,
+)
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.operation import (
@@ -40,9 +44,10 @@ from xaytune.core.domain.operation import (
     RuntimeOperationTarget,
 )
 from xaytune.core.domain.run import Run, RunAttempt
-from xaytune.core.ids import EventId, OperationId
+from xaytune.core.ids import ActionId, EventId, ExperimentId, OperationId
 from xaytune.core.immutable import AggregateModel, FrozenDict
 from xaytune.core.refs import Actor, RuntimeRef
+from xaytune.storage.actions import ActionStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
 from xaytune.storage.journal import EventJournal, OperationJournal
@@ -57,6 +62,26 @@ _AGGREGATE_TABLES: dict[str, str] = {
     "RunAttempt": "run_attempts",
 }
 
+_ATTEMPT_KINDS: frozenset[str] = frozenset({"training-attempt", "evaluation-attempt"})
+"""The target kinds a single cancel operation can address.
+
+Run- and experiment-level cancellation fans out over descendants (ADR-013 §6),
+so it is a saga rather than one effect, and PR-006a refuses it rather than
+writing intent nothing will carry out.
+"""
+
+_CANCEL_TYPE_FOR: dict[str, str] = {
+    "experiment": "cancel-experiment",
+    "run": "cancel-run",
+    "training-attempt": "cancel-attempt",
+    "evaluation-attempt": "cancel-attempt",
+}
+"""Which cancellation action a target kind implies.
+
+``cancel-attempt`` covers both attempt kinds: cancelling is the same operation
+on the same kind of subject, and only the table differs.
+"""
+
 _TARGET_TABLES: dict[str, str] = {
     "training-attempt": "run_attempts",
     # ADR-015's tables arrive with the evaluation lifecycle; until then an
@@ -64,6 +89,28 @@ _TARGET_TABLES: dict[str, str] = {
     # than accepted unchecked.
     "evaluation-attempt": "evaluation_attempts",
 }
+
+
+class CancellationSagaRequiredError(StorageError):
+    """Run- and experiment-level cancellation is a saga, not one operation.
+
+    ADR-013 §6: cancelling an experiment fans out to its descendants, and the
+    invariant is that it must not reach ``CANCELLED`` while any descendant is
+    unresolved. That coordination is a controller concern and is not built yet.
+
+    Refused rather than half-implemented. Writing the `Action` and no operation
+    would leave durable intent that nothing carries out and nothing retries --
+    the exact state ADR-005 §5 exists to prevent -- and minting a single
+    operation against a run id would ask a runtime to cancel something it has
+    no handle on.
+    """
+
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+        super().__init__(
+            f"cancelling a {kind} requires the descendant saga of ADR-013 §6, "
+            f"which is not implemented. Cancel its attempts individually."
+        )
 
 
 class UnknownOperationTargetError(StorageError):
@@ -88,6 +135,7 @@ class ControlPlaneRepository:
         self.aggregates = AggregateStore(connection)
         self.events = EventJournal(connection)
         self.operations = OperationJournal(connection)
+        self.actions = ActionStore(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
 
@@ -250,20 +298,115 @@ class ControlPlaneRepository:
 
     # ---- ADR-005 §5 ----------------------------------------------------
 
-    # Cancellation is deliberately NOT public in PR-005.
-    #
-    # ADR-005 §5 makes the Action the durable owner of the intent and requires
-    # it to commit with the RuntimeOperation it causes. The Action aggregate
-    # arrives in PR-006a, so a public request_cancel() here could only write the
-    # effect with `caused_by_action_id = None` -- an external effect whose cause
-    # is unrecorded, which is the exact state §5 exists to prevent. Emitting a
-    # CancellationRequested event instead does not close the gap: an event is a
-    # record of what happened, not the durable intent the contract names.
-    #
-    # The journal already supports `type="cancel"`, so PR-006a adds the public
-    # method without schema or model changes. §11.9 -- cancellation intent
-    # survives a restart -- belongs there with it, because that is when the
-    # intent exists as something other than an operation row.
+    def request_cancellation(
+        self,
+        target: ActionTarget,
+        *,
+        reason: str,
+        actor: Actor,
+        request_digest: str,
+        action_id: ActionId | None = None,
+        operation_id: OperationId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[Action, RuntimeOperation | None]:
+        """Record intent to cancel, and the effect it causes, in one commit.
+
+        This is the §5 unit, and it could not exist before PR-006a: the
+        ``Action`` owns the durable intent while the ``RuntimeOperation`` carries
+        the external effect, and splitting them produces two states ADR-013's
+        model cannot represent -- an intent nothing will ever act on, or an
+        effect with no recorded cause.
+
+        Cancellation is intent plus an observed terminal state, never a status
+        the target occupies (ADR-013 §4). A workload that finishes first is not
+        a failure: the action `SUCCEEDED` with outcome `SUPERSEDED`, because it
+        did what it was asked and the answer was that there was nothing left to
+        stop.
+
+        Only attempt targets are accepted. Run- and experiment-level
+        cancellation is a saga over descendants (ADR-013 §6) and is refused
+        here rather than half-built.
+
+        Returns:
+            The action, and the operation it caused -- or ``None`` when the
+            target was already terminal, in which case no external effect is
+            requested and the action resolves immediately.
+
+        Raises:
+            CancellationSagaRequiredError: If the target is a run or experiment.
+            UnknownOperationTargetError: If the target does not exist.
+        """
+        if target.kind not in _ATTEMPT_KINDS:
+            raise CancellationSagaRequiredError(target.kind)
+
+        action = Action(
+            id=action_id or ActionId.generate(),
+            experiment_id=ExperimentId(self._experiment_of_action_target(target)),
+            type=_CANCEL_TYPE_FOR[target.kind],
+            target=target,
+            proposed_by=actor,
+            reason=reason,
+        )
+
+        with write_transaction(self._connection):
+            experiment_id = str(action.experiment_id)
+
+            # Validation happens before any effect is requested, so an action
+            # that cannot be carried out never mints an operation.
+            validating = action.with_status(ActionStatus.VALIDATING)
+            validated = validating.with_status(ActionStatus.VALIDATED)
+
+            if self._target_is_terminal(target):
+                # Nothing to stop. Resolve without an external effect rather
+                # than asking a runtime to cancel a workload that has ended.
+                executing = validated.with_status(ActionStatus.EXECUTING)
+                settled = executing.with_status(
+                    ActionStatus.SUCCEEDED, outcome=ActionOutcome.SUPERSEDED
+                )
+                self.actions._insert(settled)
+                self._emit_action(settled, "CancellationSuperseded", actor, destinations)
+                return settled, None
+
+            executing = validated.with_status(ActionStatus.EXECUTING)
+            self.actions._insert(executing)
+
+            operation_target = RuntimeOperationTarget.model_validate(
+                {"kind": target.kind, "id": target.id}
+            )
+            operation = RuntimeOperation(
+                id=operation_id or OperationId.generate(),
+                target=operation_target,
+                type="cancel",
+                request_digest=request_digest,
+                caused_by_action_id=executing.id,
+            )
+            stored = self.operations._insert(operation)
+
+            self._emit_action(executing, "CancellationRequested", actor, destinations)
+            self._emit_operation(stored, "RuntimeOperationIntended", experiment_id, actor)
+
+        return executing, stored
+
+    def resolve_cancellation(
+        self,
+        action: Action,
+        *,
+        outcome: ActionOutcome,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> Action:
+        """Settle a cancellation action once its outcome is observed.
+
+        ``APPLIED`` when the workload stopped because of it, ``SUPERSEDED``
+        when it had already ended, ``NOOP`` when there was nothing to do.
+        """
+        settled = action.with_status(ActionStatus.SUCCEEDED, outcome=outcome)
+        with write_transaction(self._connection):
+            self.actions._update(settled)
+            self._emit_action(
+                settled, f"Cancellation{outcome.value.capitalize()}", actor, destinations
+            )
+        return settled
 
     # ---- machinery ------------------------------------------------------
 
@@ -295,6 +438,66 @@ class ControlPlaneRepository:
             "RunAttempt": self.aggregates._update_attempt,
         }[name]
         writer(aggregate)  # type: ignore[operator, arg-type]
+
+    def _experiment_of_action_target(self, target: ActionTarget) -> str:
+        """Resolve the experiment an action's target belongs to."""
+        if target.kind == "experiment":
+            if self.aggregates.get_experiment(target.id) is None:
+                raise UnknownOperationTargetError(target.kind, target.id)
+            return target.id
+        if target.kind == "run":
+            return self._experiment_of_run(target.id)
+        if target.kind == "training-attempt":
+            attempt = self.aggregates.get_attempt(target.id)
+            if attempt is None:
+                raise UnknownOperationTargetError(target.kind, target.id)
+            return self._experiment_of_run(str(attempt.run_id))
+        # node / evaluation-run / evaluation-attempt: the first has no
+        # cancellation type yet, the others wait for ADR-015's tables.
+        raise UnknownOperationTargetError(target.kind, target.id)
+
+    def _target_is_terminal(self, target: ActionTarget) -> bool:
+        """Whether there is anything left to cancel.
+
+        Observed, not assumed. ADR-013 §5: a workload that reached a terminal
+        state before the cancel was issued wins, and the action is superseded
+        rather than failed.
+        """
+        if target.kind == "training-attempt":
+            attempt = self.aggregates.load_attempt(target.id)
+            return attempt.is_terminal
+        if target.kind == "run":
+            return self.aggregates.load_run(target.id).is_terminal
+        if target.kind == "experiment":
+            return self.aggregates.load_experiment(target.id).is_terminal
+        raise UnknownOperationTargetError(target.kind, target.id)
+
+    def _emit_action(
+        self,
+        action: Action,
+        event_type: str,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> DomainEvent:
+        event = DomainEvent(
+            id=EventId.generate(),
+            experiment_id=str(action.experiment_id),
+            aggregate_type="Action",
+            aggregate_id=str(action.id),
+            aggregate_revision=action.revision,
+            event_type=event_type,
+            actor=actor,
+            payload=FrozenDict(
+                {
+                    "type": action.type,
+                    "status": action.status.value,
+                    "outcome": action.outcome.value if action.outcome else None,
+                    "target_kind": action.target.kind,
+                    "target_id": action.target.id,
+                }
+            ),
+        )
+        return self._write_event(event, destinations)
 
     def _owning_experiment(self, aggregate: AggregateModel) -> str:
         """Return the experiment an aggregate belongs to, from the record itself.

@@ -34,7 +34,7 @@ from pydantic import Field
 
 from xaytune.core.clock import utc_now
 from xaytune.core.errors import InvalidTransitionError
-from xaytune.core.ids import OperationId
+from xaytune.core.ids import ActionId, OperationId
 from xaytune.core.immutable import AggregateModel, FrozenDomainModel
 from xaytune.core.refs import RuntimeRef
 
@@ -98,12 +98,13 @@ class RuntimeOperation(AggregateModel):
             arguments or dataset, so deriving idempotency from the fingerprint
             would return the original workload for a request that was not the
             same request (ADR-013 §2).
-    ``caused_by_action_id`` is deliberately absent until PR-006a. ADR-005 §5
-    requires an effect to carry the ``Action`` that caused it, and that column
-    arrives with its foreign key in migration 003 -- SQLite cannot attach one to
-    an existing column afterwards. A field with nowhere to persist it would be a
-    declaration the storage layer silently drops, which is the same
-    declared-but-unenforced split this contract exists to prevent.
+        caused_by_action_id: The ``Action`` whose intent this effect carries
+            (ADR-005 §5), so no external effect exists without a recorded cause.
+            Migration 003 backs it with a real ``REFERENCES actions(id)``, which
+            is why the column waited for that table rather than shipping as an
+            unenforced string in 002. ``None`` only for operations the
+            controller issues directly, which after this PR means none of the
+            cancellation path.
     """
 
     id: OperationId
@@ -114,6 +115,8 @@ class RuntimeOperation(AggregateModel):
 
     state: OperationState = "intended"
     runtime_ref: RuntimeRef | None = None
+
+    caused_by_action_id: ActionId | None = None
 
     revision: int = 0
     created_at: datetime = Field(default_factory=utc_now)

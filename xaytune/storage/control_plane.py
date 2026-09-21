@@ -51,6 +51,7 @@ from xaytune.core.state.status import RunAttemptStatus
 from xaytune.storage.actions import ActionStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
+from xaytune.storage.graph import ExperimentGraph
 from xaytune.storage.journal import (
     EventJournal,
     IdempotencyConflictError,
@@ -141,6 +142,7 @@ class ControlPlaneRepository:
         self.events = EventJournal(connection)
         self.operations = OperationJournal(connection)
         self.actions = ActionStore(connection)
+        self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
 
@@ -164,8 +166,17 @@ class ControlPlaneRepository:
         actor: Actor,
         destinations: tuple[str, ...] = (),
     ) -> ExperimentNode:
-        """Create a node, its creation event and any outbox records."""
+        """Create a node, its creation event and any outbox records.
+
+        Lineage is validated first: a parent that does not exist, sits in
+        another experiment, or already descends from this node is refused
+        before anything is written.
+
+        Raises:
+            LineageError: If the node's parents would make the graph unsound.
+        """
         with write_transaction(self._connection):
+            self.graph.validate_parents(node)
             self.aggregates._insert_node(node)
             self._emit(node, "NodeCreated", str(node.experiment_id), actor, destinations)
         return node

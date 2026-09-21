@@ -352,10 +352,6 @@ class ControlPlaneRepository:
         operation_id = operation_id or OperationId.generate()
 
         with write_transaction(self._connection):
-            replayed = self._replay_cancellation(action_id, operation_id, target)
-            if replayed is not None:
-                return replayed
-
             experiment_id = self._experiment_of_action_target(target)
             proposed = Action(
                 id=action_id,
@@ -365,6 +361,11 @@ class ControlPlaneRepository:
                 proposed_by=actor,
                 reason=reason,
             )
+
+            replayed = self._replay_cancellation(proposed, operation_id)
+            if replayed is not None:
+                self._assert_same_effect_request(replayed[1], request_digest)
+                return replayed
 
             # Validation happens before any effect is requested, so an action
             # that cannot be carried out never mints an operation.
@@ -406,7 +407,7 @@ class ControlPlaneRepository:
 
     def reconcile_cancellation(
         self,
-        action: Action,
+        action_id: ActionId,
         *,
         actor: Actor,
         destinations: tuple[str, ...] = (),
@@ -430,10 +431,22 @@ class ControlPlaneRepository:
         while the operation is unresolved may have been stopped by something
         else, and claiming credit for it would be a guess.
 
+        The action is **loaded by id**, not accepted as an object. A caller
+        could otherwise hand in a differently-shaped `Action` carrying a real
+        id and revision, and reconciliation would act on a record that is not
+        the durable one. Loading it here also means a stale caller naturally
+        reconciles against the latest state rather than the one it last saw.
+
         Returns:
-            The settled action, or *action* unchanged when the evidence does
-            not yet support a conclusion.
+            The settled action, or the stored action unchanged when the
+            evidence does not yet support a conclusion.
+
+        Raises:
+            AggregateNotFoundError: If no such action exists.
         """
+        action = self.actions.get(str(action_id))
+        if action is None:
+            raise AggregateNotFoundError("Action", str(action_id))
         if action.is_terminal:
             return action
 
@@ -498,17 +511,25 @@ class ControlPlaneRepository:
         raise UnknownOperationTargetError(target.kind, target.id)
 
     def _replay_cancellation(
-        self, action_id: ActionId, operation_id: OperationId, target: ActionTarget
+        self, candidate: Action, operation_id: OperationId
     ) -> tuple[Action, RuntimeOperation | None] | None:
-        """Return the already-recorded result of this request, if there is one.
+        """Return the already-recorded result of this exact request, if any.
+
+        Both halves are checked. Matching on ids alone would make a retry that
+        carried a different reason, actor or digest return the original
+        silently, and the durable record would describe a decision nobody made
+        -- the same failure the operation journal's digest check prevents, on
+        the other half of the write.
 
         Raises:
-            StorageError: If exactly one half exists. The two are written in one
-                transaction, so a lone Action or a lone operation is a corrupted
-                record rather than a retry, and silently completing it would
-                paper over the corruption.
-            IdempotencyConflictError: If the recorded request differs.
+            IdempotencyConflictError: If either half exists against a different
+                request, or if the action is paired with a different operation.
+            StorageError: If the action exists with no caused operation while
+                still in flight. The two are written in one transaction, so
+                that is a corrupted record rather than a retry, and completing
+                it silently would paper over the corruption.
         """
+        action_id = candidate.id
         existing_action = self.actions.get(str(action_id))
         existing_operation = self.operations.get(str(operation_id))
 
@@ -516,12 +537,9 @@ class ControlPlaneRepository:
             return None
 
         if existing_action is None:
-            # An operation with no matching action is one of two things, and
-            # they need different answers. If the operation names a *different*
-            # action, this is a new action trying to adopt an effect that
-            # already has a cause -- a conflict, not a retry. If it names this
-            # action, the two halves really did come apart, which they cannot
-            # do through any code path here.
+            # An operation with no matching action is one of two things. If it
+            # names a *different* action, a new action is trying to adopt an
+            # effect that already has a cause -- a conflict, not a retry.
             if existing_operation is not None and (
                 existing_operation.caused_by_action_id != action_id
             ):
@@ -532,19 +550,40 @@ class ControlPlaneRepository:
                 f"corrupted record rather than a retry"
             )
 
-        if existing_action.target != target:
-            raise IdempotencyConflictError(str(action_id), ("target",))
+        self.actions._assert_same_request(existing_action, candidate)
 
-        # A terminal action with no operation is the already-ended path, which
-        # legitimately writes no effect.
-        if existing_operation is None and not existing_action.is_terminal:
+        if existing_operation is None:
+            # The already-ended path legitimately writes no effect.
+            if existing_action.is_terminal:
+                return existing_action, None
+
+            caused = self.actions.caused_operation_ids(str(action_id))
+            if caused:
+                # The action is paired with a different operation id. That is a
+                # changed request, not corruption: the caller retried with a
+                # new effect id for an intent that already has one.
+                raise IdempotencyConflictError(str(action_id), ("operation_id",), kind="action")
+
             raise StorageError(
-                f"action {action_id} is in flight but its operation "
-                f"{operation_id} does not exist: they are written in one "
-                f"transaction, so this is a corrupted record rather than a retry"
+                f"action {action_id} is in flight but has no caused operation: "
+                f"they are written in one transaction, so this is a corrupted "
+                f"record rather than a retry"
             )
 
+        if existing_operation.caused_by_action_id != action_id:
+            raise IdempotencyConflictError(str(operation_id), ("caused_by_action_id",))
+
         return existing_action, existing_operation
+
+    @staticmethod
+    def _assert_same_effect_request(existing: RuntimeOperation | None, request_digest: str) -> None:
+        """Refuse a replay whose external request changed.
+
+        The action half is compared in :meth:`_replay_cancellation`; this is the
+        effect half, which only exists when the target was live.
+        """
+        if existing is not None and existing.request_digest != request_digest:
+            raise IdempotencyConflictError(str(existing.id), ("request_digest",))
 
     def _terminal_outcome(self, target: ActionTarget) -> ActionOutcome | None:
         """How a cancellation resolves against a target that has already ended.

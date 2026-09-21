@@ -29,15 +29,23 @@ class IdempotencyConflictError(StorageError):
     and anything else is refused. Guessing which one the caller meant would be
     worse than stopping, because one of the two answers starts a second
     workload.
+
+    Raised for both halves of a compound write, so *kind* names which record
+    conflicted -- an error reading "operation act_..." would send the reader
+    looking in the wrong table.
     """
 
-    def __init__(self, operation_id: str, differing: tuple[str, ...]) -> None:
-        self.operation_id = operation_id
+    def __init__(
+        self, record_id: str, differing: tuple[str, ...], *, kind: str = "operation"
+    ) -> None:
+        self.record_id = record_id
+        self.operation_id = record_id  # retained for callers that predate `kind`
         self.differing = differing
+        self.kind = kind
         super().__init__(
-            f"operation {operation_id} already exists with a different "
-            f"{', '.join(differing)}; reusing an operation id requires an "
-            f"identical request"
+            f"{kind} {record_id} already exists with a different "
+            f"{', '.join(differing)}; reusing a{'n' if kind[0] in 'aeiou' else ''} "
+            f"{kind} id requires an identical request"
         )
 
 

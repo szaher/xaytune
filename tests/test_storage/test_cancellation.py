@@ -191,7 +191,7 @@ def test_a_cancellation_that_takes_effect_is_applied(
     cancelled = _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
     assert cancelled.status is RunAttemptStatus.CANCELLED
 
-    settled = repo.reconcile_cancellation(action, actor=ACTOR)
+    settled = repo.reconcile_cancellation(action.id, actor=ACTOR)
 
     assert settled.status is ActionStatus.SUCCEEDED
     assert settled.outcome is ActionOutcome.APPLIED
@@ -416,7 +416,7 @@ def test_an_unconfirmed_cancellation_stays_in_flight(
     )
     assert operation is not None and operation.state == "intended"
 
-    unchanged = repo.reconcile_cancellation(action, actor=ACTOR)
+    unchanged = repo.reconcile_cancellation(action.id, actor=ACTOR)
 
     assert unchanged.status is ActionStatus.EXECUTING
     assert unchanged.outcome is None
@@ -435,7 +435,7 @@ def test_a_target_cancelled_by_something_else_is_not_claimed(
     assert operation is not None
     _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
 
-    unchanged = repo.reconcile_cancellation(action, actor=ACTOR)
+    unchanged = repo.reconcile_cancellation(action.id, actor=ACTOR)
 
     assert unchanged.status is ActionStatus.EXECUTING
 
@@ -448,7 +448,7 @@ def test_a_target_that_ends_otherwise_supersedes_an_in_flight_cancellation(
     )
     _drive_to(repo, live_attempt, RunAttemptStatus.SUCCEEDED)
 
-    settled = repo.reconcile_cancellation(action, actor=ACTOR)
+    settled = repo.reconcile_cancellation(action.id, actor=ACTOR)
 
     assert settled.status is ActionStatus.SUCCEEDED
     assert settled.outcome is ActionOutcome.SUPERSEDED
@@ -501,3 +501,124 @@ def test_a_cancel_operation_must_name_its_cause() -> None:
             type="cancel",
             request_digest="d",
         )
+
+
+# ---- a replay must be the same request, not just the same ids ------------
+
+
+def _first_request(repo: ControlPlaneRepository, attempt: Any, action_id: Any, op_id: Any) -> Any:
+    return repo.request_cancellation(
+        _target(attempt),
+        reason="user requested cancellation",
+        actor=ACTOR,
+        request_digest=CANCEL_DIGEST,
+        action_id=action_id,
+        operation_id=op_id,
+    )
+
+
+def test_a_replay_with_a_changed_digest_is_refused(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    action_id, op_id = ActionId.generate(), OperationId.generate()
+    _first_request(repo, live_attempt, action_id, op_id)
+
+    with pytest.raises(IdempotencyConflictError, match="request_digest"):
+        repo.request_cancellation(
+            _target(live_attempt),
+            reason="user requested cancellation",
+            actor=ACTOR,
+            request_digest="sha256:changed",
+            action_id=action_id,
+            operation_id=op_id,
+        )
+
+
+def test_a_replay_with_a_changed_reason_or_actor_is_refused(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """A retry carrying a different decision must not return the first one.
+
+    Otherwise the durable record describes a decision nobody made: the caller
+    believes "budget exhausted, by bob" was recorded, and the log says "user
+    requested, by the controller".
+    """
+    action_id, op_id = ActionId.generate(), OperationId.generate()
+    first, _ = _first_request(repo, live_attempt, action_id, op_id)
+
+    with pytest.raises(IdempotencyConflictError, match="reason"):
+        repo.request_cancellation(
+            _target(live_attempt),
+            reason="budget exhausted",
+            actor=ACTOR,
+            request_digest=CANCEL_DIGEST,
+            action_id=action_id,
+            operation_id=op_id,
+        )
+
+    with pytest.raises(IdempotencyConflictError, match="proposed_by"):
+        repo.request_cancellation(
+            _target(live_attempt),
+            reason="user requested cancellation",
+            actor=Actor(type="human", id="someone-else"),
+            request_digest=CANCEL_DIGEST,
+            action_id=action_id,
+            operation_id=op_id,
+        )
+
+    stored = repo.actions.get(str(action_id))
+    assert stored is not None
+    assert stored.reason == first.reason
+    assert stored.proposed_by == first.proposed_by
+
+
+def test_a_replay_with_a_different_operation_id_is_a_conflict_not_corruption(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """An intent that already has an effect cannot be given a second one.
+
+    Reported as a conflict rather than corruption: the caller changed the
+    request, which has an obvious fix, and calling it corruption would send
+    them looking for a database problem that does not exist.
+    """
+    action_id, op_id = ActionId.generate(), OperationId.generate()
+    _first_request(repo, live_attempt, action_id, op_id)
+
+    with pytest.raises(IdempotencyConflictError, match="operation_id"):
+        _first_request(repo, live_attempt, action_id, OperationId.generate())
+
+    # The original pairing is untouched.
+    assert repo.actions.caused_operation_ids(str(action_id)) == (str(op_id),)
+    cancels = [
+        op
+        for op in repo.operations.for_target("training-attempt", str(live_attempt.id))
+        if op.type == "cancel"
+    ]
+    assert len(cancels) == 1
+
+
+def test_reconciliation_reads_the_durable_action(
+    repo: ControlPlaneRepository, live_attempt: Any
+) -> None:
+    """A caller-supplied object cannot steer reconciliation.
+
+    `reconcile_cancellation` takes an id, so a differently-shaped Action
+    carrying a real id cannot be acted on in place of the stored one.
+    """
+    action, operation = _first_request(
+        repo, live_attempt, ActionId.generate(), OperationId.generate()
+    )
+    assert operation is not None
+    repo.confirm_operation(operation, actor=ACTOR)
+    _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
+
+    settled = repo.reconcile_cancellation(action.id, actor=ACTOR)
+
+    assert settled.outcome is ActionOutcome.APPLIED
+    # The stored row and its indexed columns agree.
+    row = repo._connection.execute(
+        "SELECT status, outcome, target_id FROM actions WHERE id = ?", (str(action.id),)
+    ).fetchone()
+    assert row["status"] == "succeeded"
+    assert row["outcome"] == "applied"
+    assert row["target_id"] == str(live_attempt.id)

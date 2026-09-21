@@ -29,15 +29,23 @@ class IdempotencyConflictError(StorageError):
     and anything else is refused. Guessing which one the caller meant would be
     worse than stopping, because one of the two answers starts a second
     workload.
+
+    Raised for both halves of a compound write, so *kind* names which record
+    conflicted -- an error reading "operation act_..." would send the reader
+    looking in the wrong table.
     """
 
-    def __init__(self, operation_id: str, differing: tuple[str, ...]) -> None:
-        self.operation_id = operation_id
+    def __init__(
+        self, record_id: str, differing: tuple[str, ...], *, kind: str = "operation"
+    ) -> None:
+        self.record_id = record_id
+        self.operation_id = record_id  # retained for callers that predate `kind`
         self.differing = differing
+        self.kind = kind
         super().__init__(
-            f"operation {operation_id} already exists with a different "
-            f"{', '.join(differing)}; reusing an operation id requires an "
-            f"identical request"
+            f"{kind} {record_id} already exists with a different "
+            f"{', '.join(differing)}; reusing a{'n' if kind[0] in 'aeiou' else ''} "
+            f"{kind} id requires an identical request"
         )
 
 
@@ -179,8 +187,8 @@ class OperationJournal:
 
         self._connection.execute(
             "INSERT INTO runtime_operations (id, target_kind, target_id, type, "
-            "request_digest, state, runtime_ref_json, revision, created_at, "
-            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "request_digest, state, runtime_ref_json, caused_by_action_id, "
+            "revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(operation.id),
                 operation.target.kind,
@@ -189,6 +197,7 @@ class OperationJournal:
                 operation.request_digest,
                 operation.state,
                 _ref_json(operation),
+                str(operation.caused_by_action_id) if operation.caused_by_action_id else None,
                 operation.revision,
                 operation.created_at.isoformat(),
                 operation.updated_at.isoformat(),
@@ -207,7 +216,14 @@ class OperationJournal:
         """
         differing = tuple(
             field
-            for field in ("target", "type", "request_digest")
+            # caused_by_action_id is compared even though it is not part of the
+            # external request. Once an effect has an Action behind it, that
+            # cause is part of its control-plane identity: without this check a
+            # second Action could reuse the operation id, see an "identical"
+            # request, and commit while the operation still pointed at the
+            # first -- leaving an Action with no effect and an effect whose
+            # recorded cause is not the one that asked for it (ADR-005 §5).
+            for field in ("target", "type", "request_digest", "caused_by_action_id")
             if getattr(existing, field) != getattr(requested, field)
         )
         if differing:
@@ -222,6 +238,10 @@ class OperationJournal:
         _require_transaction(self._connection, "runtime operations")
         expected = operation.revision - 1
         cursor = self._connection.execute(
+            # caused_by_action_id is deliberately not updated: an effect's cause
+            # is fixed when it is created, and rewriting it would let a later
+            # transition reassign responsibility for a side effect that already
+            # happened.
             "UPDATE runtime_operations SET state = ?, runtime_ref_json = ?, "
             "revision = ?, updated_at = ? WHERE id = ? AND revision = ?",
             (
@@ -301,6 +321,7 @@ def _operation_from_row(row: sqlite3.Row) -> RuntimeOperation:
         "request_digest": row["request_digest"],
         "state": row["state"],
         "runtime_ref": json.loads(row["runtime_ref_json"]) if row["runtime_ref_json"] else None,
+        "caused_by_action_id": row["caused_by_action_id"],
         "revision": row["revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

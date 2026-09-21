@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from xaytune.core.state.machines import (
+    ACTION_MACHINE,
     ATTEMPT_MACHINE,
     EXPERIMENT_MACHINE,
     NODE_MACHINE,
@@ -10,6 +11,7 @@ from xaytune.core.state.machines import (
     StateMachine,
 )
 from xaytune.core.state.status import (
+    ActionStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -17,6 +19,8 @@ from xaytune.core.state.status import (
 )
 
 __all__ = [
+    "ACTION_MACHINE",
+    "ActionStatus",
     "ATTEMPT_MACHINE",
     "EXPERIMENT_MACHINE",
     "ExperimentNodeStatus",

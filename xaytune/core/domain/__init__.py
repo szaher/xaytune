@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+from xaytune.core.domain.action import (
+    Action,
+    ActionOutcome,
+    ActionTarget,
+    ActionTargetKind,
+    ActionType,
+    UnknownActionTypeError,
+    register_action_type,
+    registered_action_types,
+)
 from xaytune.core.domain.event import (
     DomainEvent,
     OutboxRecord,
@@ -33,6 +43,11 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "Action",
+    "ActionOutcome",
+    "ActionTarget",
+    "ActionTargetKind",
+    "ActionType",
     "BudgetSpec",
     "DomainEvent",
     "ExecutionOverride",
@@ -47,9 +62,12 @@ __all__ = [
     "OperationType",
     "OutboxRecord",
     "OutboxState",
+    "register_action_type",
+    "registered_action_types",
     "Run",
     "RunAttempt",
     "RuntimeOperation",
     "RuntimeOperationTarget",
     "TrainingSpecSnapshot",
+    "UnknownActionTypeError",
 ]

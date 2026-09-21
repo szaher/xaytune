@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from xaytune.core.clock import utc_now
 from xaytune.core.domain import (
+    Action,
+    ActionOutcome,
+    ActionTarget,
     BudgetSpec,
     DomainEvent,
     ExecutionOverride,
@@ -61,10 +64,12 @@ from xaytune.core.refs import (
     RuntimeRef,
 )
 from xaytune.core.state import (
+    ACTION_MACHINE,
     ATTEMPT_MACHINE,
     EXPERIMENT_MACHINE,
     NODE_MACHINE,
     RUN_MACHINE,
+    ActionStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -73,7 +78,12 @@ from xaytune.core.state import (
 )
 
 __all__ = [
+    "Action",
+    "ACTION_MACHINE",
     "ActionId",
+    "ActionOutcome",
+    "ActionStatus",
+    "ActionTarget",
     "Actor",
     "ArtifactId",
     "ArtifactRef",

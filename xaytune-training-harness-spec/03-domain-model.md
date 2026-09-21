@@ -132,6 +132,13 @@ class Run(BaseModel):
 
 Represents one infrastructure/runtime attempt.
 
+An attempt exists because the *workload* was started, restarted or replaced —
+never because observability failed. A telemetry stream that dies while the
+workload keeps running advances `telemetry_generation` on the same attempt
+instead of creating a new one; minting an attempt there would record an
+execution retry that never happened, and corrupt retry counts, per-attempt
+resource usage and incident attribution (ADR-014 §1a).
+
 ```python
 class RunAttempt(BaseModel):
     id: RunAttemptId
@@ -142,6 +149,8 @@ class RunAttempt(BaseModel):
 
     runtime_ref: RuntimeRef | None
     execution_fingerprint: str | None
+
+    telemetry_generation: int            # ADR-014; controller-owned
 
     execution_overrides: list[ExecutionOverride]
 

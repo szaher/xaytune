@@ -17,6 +17,9 @@
 --   runtime_operations          ADR-013
 --   budget_ledger               09-agent-planner-policy-budget.md
 --   controller_leases           ADR-004
+--   worker_events               ADR-014 (the telemetry stream; the `events`
+--                               table below is the controller's domain event
+--                               log and is a different thing)
 --
 -- Do not read the absence of a table here as a decision that it is not needed.
 
@@ -65,6 +68,10 @@ CREATE TABLE run_attempts (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id),
   status TEXT NOT NULL,
+  -- ADR-014: which telemetry stream of this attempt is current. Advanced when a
+  -- supervisor dies and its history cannot be replayed while the workload keeps
+  -- running -- a new attempt is NOT created for that.
+  telemetry_generation INTEGER NOT NULL DEFAULT 0,
   revision INTEGER NOT NULL,
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,

@@ -21,6 +21,9 @@ Independent StateStore/EventStore writes can diverge after crashes.
 
 ## Consequences
 
+- must be accepted before band B starts, including PR-004's SQLite repository
+  and persistent schema; transaction boundaries and revision semantics must not
+  be deferred until PR-005
 - repository is more opinionated
 - simple crash consistency
 - external sinks become eventually consistent through outbox

@@ -29,6 +29,10 @@ RuntimeSubmitted
 RuntimeStarted
 RuntimeCompleted
 
+EventGapDetected
+TelemetryStreamGenerationAdvanced
+ObservabilityDegraded
+
 MetricObserved
 
 IncidentDetected
@@ -88,6 +92,7 @@ experiment_id
 node_id
 run_id
 attempt_id
+stream_generation
 evaluation_run_id
 evaluation_attempt_id
 action_id
@@ -151,6 +156,21 @@ provenance/
   software.json
   artifacts.json
 ```
+
+### Observability-degraded intervals
+
+`TelemetryStreamGenerationAdvanced` and `ObservabilityDegraded` exist so that
+provenance can distinguish
+
+```text
+nothing happened in this interval
+we were not watching during this interval
+```
+
+which is otherwise the same absence of events. A telemetry supervisor that dies
+while its workload keeps running produces the second, and the record says so on
+the **same** `RunAttempt` — the attempt is not re-minted to represent a
+monitoring failure (ADR-014 §1a).
 
 ## 6. Resource usage
 

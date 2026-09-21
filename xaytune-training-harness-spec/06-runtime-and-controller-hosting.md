@@ -37,16 +37,18 @@ class RuntimeBackend(Protocol):
     async def watch(
         self,
         runtime_ref: RuntimeRef,
-        cursor: int | None = None,
+        cursor: StreamCursor | None = None,
     ) -> AsyncIterator[WorkerEvent]: ...
         # Yields canonical WorkerEvents per ADR-014
-        # (xaytune.telemetry/v1alpha1), in INCREASING SEQUENCE ORDER.
-        # cursor is the last sequence the controller DURABLY RECORDED, not the
-        # last it received -- an event received and then lost in a crash must be
-        # redelivered. It is the integer ADR-014 sequence, not an opaque token.
+        # (xaytune.telemetry/v1alpha1), in increasing (generation, sequence)
+        # order. cursor is the last position the controller DURABLY RECORDED,
+        # not the last it received -- an event received and then lost in a
+        # crash must be redelivered. It is StreamCursor(generation, sequence):
+        # two integers with defined meaning, never an opaque provider token.
         # Delivery is at-least-once; handlers must be idempotent on
-        # (attempt_id, sequence). A runtime that cannot replay declares
-        # supports_event_replay: false and reconnects are treated as gaps.
+        # (attempt_id, stream_generation, sequence). A runtime that cannot
+        # replay declares supports_event_replay: false and reconnects are
+        # treated as gaps.
 
     async def cancel(
         self,
@@ -66,12 +68,22 @@ crashes between submitting and persisting the `RuntimeRef` cannot otherwise
 tell a lost submission from a running workload, and retrying starts a second
 one.
 
-**Ordered delivery.** `watch()` MUST yield events in increasing `sequence`
-order. The runtime adapter buffers out-of-order transport delivery until the
-missing sequence arrives, or until the replay/gap policy declares it
-unavailable. Without this guarantee a reordered arrival (`11, 13, 12`) is
-indistinguishable from a real gap, and the controller would raise
-`EventGapDetected` for an event that is merely late.
+**Ordered delivery.** `watch()` MUST yield events in increasing
+`(generation, sequence)` order. The runtime adapter buffers out-of-order
+transport delivery until the missing sequence arrives, or until the replay/gap
+policy declares it unavailable. Without this guarantee a reordered arrival
+(`11, 13, 12`) is indistinguishable from a real gap, and the controller would
+raise `EventGapDetected` for an event that is merely late.
+
+**A lost telemetry stream is not a lost attempt.** If the telemetry supervisor
+dies and its history cannot be replayed, the controller confirms through
+`get_status()` whether the same workload is still executing. If it is, the
+`RunAttempt` is unchanged: `stream_generation` advances, the sequence restarts
+at 0, the unrecoverable range is recorded as `EventGapDetected`, and the
+interval is marked observability-degraded. A new `RunAttempt` is created only
+when the runtime actually restarts or replaces the workload — minting one for a
+telemetry failure would record an execution retry that never happened
+(ADR-014 §1a).
 
 ## 2. Initial runtimes
 
@@ -253,6 +265,11 @@ class RuntimeRef(BaseModel):
 The core must not assume Kubernetes identifiers.
 
 ## 8. Runtime events
+
+These are what the *backend* observes about the workload, and they are distinct
+from the `WorkerEvent` telemetry stream of ADR-014. They stay available through
+`get_status()` when telemetry is degraded, and that independence is what makes
+reconciliation possible at all.
 
 Normalized runtime events include:
 

@@ -21,18 +21,38 @@ Action/Policy substrate, which is a change from the original sequencing.
 The third is ADR-013: runtime side effects need reconciliation before any
 durable MVP claim, because an unreconciled submission is an orphaned GPU job.
 
+### Three different things are called "reconciliation"
+
+They land in three different bands, and conflating them is how a phase comes to
+claim restart safety it has not built:
+
+| | What it recovers | Band |
+|---|---|---|
+| **Repository recovery** | committed aggregate state and events, after the *process* restarts | B |
+| **Runtime-operation reconciliation** | in-flight submissions and live attempts, through `lookup_operation()` and `get_status()` | C |
+| **Daemon restart reconciliation** | whole-controller startup: lease acquisition, every active experiment, deadlines, control loops | H |
+
+Only the first is available in band B, because there is no controller and no
+runtime there yet. Only the third is a full controller restart. ADR-013 puts
+the second in band C explicitly — **restart safety is a property of the first
+runtime implementation, not something to defer** — so it is scheduled there
+rather than left to the daemon phase.
+
 ```text
 A  domain contract hardening     state machines, ADR-011 identity,
                                  deep immutability, data cursor (012),
                                  operation identity (013)
-B  transactional persistence     events, outbox, operation journal, projections
+B  transactional persistence     events, outbox, operation journal, projections,
+                                 repository recovery after process restart
 C  compile boundary              NativeCompiler, restart-safe LocalRuntime,
-                                 embedded controller + reconciliation
+                                 embedded controller, runtime-operation
+                                 reconciliation and attempt reattachment
 D  durable evaluation lifecycle  ADR-015
 E  minimal Action/Policy/Budget  approvals -- prerequisite for F
 F  checkpoint, recovery, interventions
 G  planner and branching
-H  daemon, kill/restart MVP
+H  daemon, kill/restart MVP      host leases, whole-controller startup
+                                 reconciliation
 I  LLM planner
 J  Ray / TorchFT / Training Hub
 ```
@@ -95,7 +115,7 @@ that does not depend on it:
 | ADR-001 — experiment control plane | nothing yet; it is the premise the rest assumes and is ratified in effect by ADR-011's acceptance |
 | ADR-003 — scientific vs execution lineage | superseded in substance by ADR-011; retained for its history |
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
-| ADR-005 — transactional persistence | band B — **must be accepted before PR-005** |
+| ADR-005 — transactional persistence | **must be accepted before band B starts, including PR-004** |
 | ADR-006 — fingerprints and reuse | extended by ADR-011; the reuse-policy half is still open and blocks band G (planner reuse decisions) |
 | ADR-007 — evaluation independence | extended by ADR-015; blocks band D |
 | ADR-008 — versioned plugin ABI | blocks band C (compiler/runtime plugin loading) |
@@ -146,6 +166,10 @@ No persistence yet.
 
 ### PR-004 — SQLite repository
 
+Prerequisite: ADR-005 is accepted before this PR starts. Its transaction,
+revision and state/event/outbox consistency rules constrain the first persistent
+repository schema, not only PR-005's event integration.
+
 Implement tables and revision-based persistence.
 
 ### PR-005 — event + outbox transaction
@@ -169,7 +193,12 @@ Phase exit:
 - experiment can be persisted
 - multiple nodes can exist
 - events are durable
-- controller restart does not lose state
+- **repository restart does not lose committed state or events** — a new process
+  against the same database reloads every aggregate and event exactly as
+  committed
+
+This phase makes no claim about active workloads. There is no controller and no
+runtime yet, so there is nothing in flight to reconcile; that is band C.
 
 ---
 
@@ -237,11 +266,34 @@ cancel
 events
 ```
 
+### PR-012a — runtime-operation reconciliation
+
+ADR-013 requires this of the **first** runtime, not of the daemon phase: an
+unreconciled submission is an orphaned GPU job, and a controller that cannot
+tell a lost submission from a running one either duplicates work or abandons
+it. PR-009 introduces the operation id; this is where the controller learns to
+use it after a restart.
+
+Implement:
+
+- the restart path: for every non-terminal attempt, `lookup_operation()` and
+  `get_status()` before any resubmission decision
+- reattachment to a live attempt, including resuming `watch()` from the durable
+  `StreamCursor`
+- escalation, not resubmission, when an adapter cannot report completed
+  operations (ADR-013)
+- the ADR-014 telemetry rule: a dead stream over a live workload advances
+  `telemetry_generation` and records a degraded interval, and never mints a
+  `RunAttempt`
+- cancellation leaves no executing workload
+
 Phase exit:
 
 - SFT runs through new compile/execute path
 - existing trainer remains functional
 - process boundaries are serializable
+- an `EmbeddedControllerHost` restarted mid-attempt reattaches to the running
+  workload instead of orphaning or duplicating it
 
 ---
 
@@ -376,9 +428,27 @@ Phase exit:
 
 ## Phase 7 — Durable local controller
 
+Runtime-operation reconciliation already exists from PR-012a. What this phase
+adds is *host* reconciliation: ownership, and recovering the whole controller
+rather than one attempt.
+
 ### PR-027 — LocalDaemonControllerHost
 
-### PR-028 — reconciliation
+Persistent process, singleton locking per state database, controlled shutdown.
+
+### PR-028 — host leases and whole-controller startup reconciliation
+
+Implement:
+
+- controller identity and lease acquisition, so two daemons cannot drive one
+  database
+- startup sweep: load every active experiment, node, run and attempt, then
+  delegate per-attempt recovery to the PR-012a path rather than reimplementing
+  it
+- deadline and budget re-evaluation after downtime
+- resuming control loops
+
+Idempotent: running it twice changes nothing the first run did not.
 
 ### PR-029 — CLI submit/attach/watch
 

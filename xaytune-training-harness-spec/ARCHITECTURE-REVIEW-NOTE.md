@@ -2,13 +2,15 @@
 
 ```yaml
 baseline_commit: a34f240          # main @ merge of PR #10
+spec_review_commit: bac8fde505edc57bc89417b5b9c1e7b346c37641
 reviewed_at: 2026-09-21
 supersedes: ARCHITECTURE-REVIEW-2026-09-20-PRE-IMPLEMENTATION.md
 ```
 
 Status: review only. No code changed by this note.
 
-> Regenerated against the tree at `a34f240`. The previous note was written
+> Implementation observations below are pinned to `a34f240`; governance and
+> sequencing are refreshed against the specification at `bac8fde`. The previous note was written
 > before any Phase 1 work landed and described a repository that no longer
 > exists — see the archived copy for the original migration mapping, which is
 > still accurate about *where code goes*.
@@ -50,28 +52,26 @@ and `pyyaml` installed, with no ML stack present.
 
 ---
 
-## 2. The one gate that is still open
+## 2. ADR governance status
 
-**ADR-001 through ADR-010 are all `Status: Proposed`.** ADR-011, 012 and 013 are
-`Accepted`.
+The original global Phase 0 gate has been resolved into a per-ADR gate. An ADR
+must be settled before the work that depends on it, not before all implementation.
 
-`15-implementation-plan.md` Phase 0 says no feature implementation begins until
-ADR-001…006 are accepted. That gate has been passed in practice, not by
-decision: the implementations of ADR-002 (state machines) and ADR-010 (core
-dependency boundary) are merged and under test on `main` right now.
+| Status | ADRs |
+|---|---|
+| Ratified by merged implementation | ADR-002, ADR-010 |
+| Accepted | ADR-011 through ADR-016 |
+| Superseded in substance | ADR-003 by ADR-011 |
+| Proposed | ADR-001, ADR-004 through ADR-009 |
 
-This is a genuine inconsistency in the package and it needs a human decision,
-not a documentation edit. An agent reading the plan literally will stop before
-Phase 1, having been told a gate is closed that the repository has already
-walked through.
-
-The options are to accept the ADRs whose implementations have landed, or to
-change the Phase 0 gate to describe what is actually required. **This note does
-not make that call.** It is listed in `22-open-questions.md`.
+The next blocking governance decision is **ADR-005**, which must be accepted
+before **Band B starts, including PR-004**. The remaining proposed ADRs retain
+their individual gates in `15-implementation-plan.md` Phase 0; they are not
+implicitly accepted by this review.
 
 ---
 
-## 3. Compatibility risk, at current `main`
+## 3. Compatibility risk, at implementation baseline `a34f240`
 
 | Risk | Where | Assessment |
 |---|---|---|
@@ -114,9 +114,24 @@ that parses the chapter, rather than a convention.
 The largest remaining architectural risk is not in any single chapter. It is
 that **persistence freezes before the contracts that determine its schema.**
 
-PR-005 writes the event and outbox schema. That schema cannot be correct
-without ADR-011 (what lineage records), ADR-012 (what a resume position is),
-ADR-013 (what an operation is), and now ADR-014 (what a worker event is) and
-ADR-015 (what an evaluation attempt is). All six exist as of this PR, which is
-what unblocks PR-005 — and is the reason they were written before it rather
-than alongside it.
+ADR-011 through ADR-016 are accepted: candidate/intervention identity, data
+cursors, operation identity, worker telemetry, durable evaluation, and persisted
+specs versus live implementations. ADR-005 still gates the start of persistence.
+
+- **Band B / Phase 1:** PR-005 implements atomic state/event/outbox writes and
+  the `runtime_operations` journal in migration 001. Attempt + INTENDED submit
+  operation + request digest commit before any runtime call. Repository restart
+  reloads committed state, events, outbox and operation intents.
+- **Band C / Phase 2:** LocalRuntime depends on that journal and uses
+  `submit_or_get(operation_id, plan)` and `lookup_operation()`. PR-012a adds
+  runtime-operation reconciliation and active-attempt reattachment.
+- **Band D / Phase 3:** ADR-015's evaluation runs, attempts, results and
+  reconciliation provide a durable evaluation lifecycle.
+- **Band H / Phase 7:** daemon hosting adds leases, ownership and whole-controller
+  startup reconciliation, reusing the earlier per-attempt recovery path.
+
+ADR-014 telemetry identifies events by `(attempt_id, stream_generation, sequence)`.
+Loss of replay history over a live workload advances the telemetry generation,
+records a gap and degraded provenance, and preserves the execution attempt.
+These are implementation contracts to verify in their scheduled PRs, not claims
+that runtime or persistence implementations have already landed.

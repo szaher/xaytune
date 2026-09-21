@@ -22,7 +22,7 @@ TrainerCompiler.compile()
    ↓
 TrainingExecutionSpec
    ↓
-RuntimeBackend.submit()
+RuntimeBackend.submit_or_get(operation_id, plan)
 ```
 
 (`02-architecture.md` shows the same seam with the node and capability

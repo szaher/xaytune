@@ -111,7 +111,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
                       │
              Capability Resolver
                       │
-             RuntimeBackend.submit
+             RuntimeBackend.submit_or_get
         ┌─────────────┼──────────────┐
         │             │              │
       Local       Ray Train     Training Hub

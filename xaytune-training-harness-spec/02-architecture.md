@@ -160,7 +160,7 @@ ResilienceProvider.augment()
   ↓
 ResolvedExecutionPlan
   ↓
-RuntimeBackend.submit()
+RuntimeBackend.submit_or_get(operation_id, plan)
   ↓
 RuntimeRef
 ```
@@ -168,11 +168,11 @@ RuntimeRef
 The controller observes the runtime using:
 
 ```text
-status()
+get_status()
 watch()
-events()
-logs()
+get_logs()
 cancel()
+lookup_operation()
 ```
 
 ## 4. Evaluation path

@@ -109,20 +109,16 @@ Need provider-specific resolution:
 
 Implement minimal provider abstraction first.
 
-## 13. The Phase 0 ADR gate versus the repository
+## 13. Phase 0 ADR governance — global-gate question resolved
 
-`15-implementation-plan.md` Phase 0 says no feature implementation begins until
-ADR-001…006 are accepted. All ten of ADR-001…010 are still `Status: Proposed`,
-and the implementations of ADR-002 (state machines) and ADR-010 (core
-dependency boundary) are merged on `main` and under test.
+The global gate has been replaced with per-ADR gates in
+`15-implementation-plan.md` Phase 0. ADR-002 and ADR-010 are ratified by merged
+implementation; ADR-011 through ADR-016 are accepted; ADR-003 is superseded in
+substance by ADR-011.
 
-So the gate has been passed in practice rather than by decision. This needs a
-human call, not a documentation edit:
-
-- **Accept** the ADRs whose implementations have landed and are stable, or
-- **restate** Phase 0 to describe what is actually required before Phase 1.
-
-Leaving it as-is means an agent reading the plan literally stops before Phase 1.
+ADR-001 and ADR-004 through ADR-009 remain proposed, each gating its dependent
+work. The next open decision is acceptance of ADR-005 **before Band B starts,
+including PR-004**, not reinstatement of a global implementation gate.
 
 ## 14. When to unify training and evaluation execution
 

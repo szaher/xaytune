@@ -13,7 +13,13 @@ Implement:
   revision persistence
 - atomic attempt + INTENDED submit operation + events/outbox creation (ADR-005 §4)
 - `BEGIN IMMEDIATE` for every write transaction, WAL, `synchronous=FULL`,
-  explicit busy timeout, single writer per database (ADR-005 §8)
+  explicit busy timeout (ADR-005 §8)
+- **correctness must not assume a single writer.** Multiple processes may
+  contend; SQLite serializes write transactions and revision CAS protects
+  aggregate concurrency, and that pairing is the guarantee this PR must
+  establish on its own. Do not require, and do not wait for, ADR-004's
+  controller lease — that lease is about two controllers making duplicate
+  *control decisions*, which is a different problem and a later band
 - journal APIs: create, get by operation ID, list by target, list unresolved,
   and revision-checked transition; indexes for these lookups
 - event sequence

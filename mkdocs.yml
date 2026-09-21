@@ -1,5 +1,5 @@
 site_name: xaytune
-site_description: An opinionated LLM training and fine-tuning library
+site_description: An agent-native experiment control plane for model post-training and adaptation
 site_url: https://szaher.github.io/xaytune/
 repo_url: https://github.com/szaher/xaytune
 repo_name: szaher/xaytune

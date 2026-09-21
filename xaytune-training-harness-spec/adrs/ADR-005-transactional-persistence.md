@@ -200,10 +200,37 @@ logic has already run — turning a clean serialization failure into a late,
 partial-feeling one. Taking the lock up front makes contention a fast, obvious
 failure that the retry path handles.
 
-**Exactly one writer process per database.** The singleton lease of ADR-004
-enforces it at the host level; the repository does not attempt multi-writer
-coordination, and this assumption must be stated wherever a remote controller is
-later proposed.
+#### Repository concurrency does not depend on ADR-004
+
+An earlier version of this section said "exactly one writer process per
+database", enforced by ADR-004's singleton lease. That made a **band B**
+correctness property depend on a mechanism that does not exist until **band H**,
+which is not a guarantee band B's own tests could establish. It also sat oddly
+beside the mechanisms above: WAL, `BEGIN IMMEDIATE`, CAS revisions and a busy
+timeout are the machinery of *contended* writers, and are largely pointless if
+only one writer can ever exist.
+
+They are two different concerns, and they are now separated:
+
+> **Repository correctness must not depend on ADR-004's controller lease.**
+> Multiple processes may contend for writes. SQLite serializes write
+> transactions, and revision CAS protects aggregate-level concurrency; together
+> those are sufficient for the repository's guarantees, and band B's crash and
+> concurrency tests exercise exactly that.
+>
+> **Controller ownership is a separate, later concern.** ADR-004's lease prevents
+> two controllers from concurrently making *control decisions* about the same
+> active experiments. That is about duplicated reasoning and duplicated side
+> effects, not about database integrity.
+
+The distinction matters in practice. Two processes writing to one database is a
+solved problem and is tested here. Two controllers both deciding to recover the
+same attempt is not a locking problem at all — both writes would be individually
+valid, and the result would be two workloads.
+
+So a CLI or an inspection tool writing while a controller runs is safe by
+construction, and band B does not need to ship an early file lock to make this
+section true.
 
 ### 9. Failure semantics
 
@@ -233,7 +260,12 @@ Checkable, and checked in tests rather than assumed:
 4. No external side effect exists without a durable `INTENDED` record that
    preceded it.
 5. Every `RuntimeOperation` caused by an `Action` carries
-   `caused_by_action_id`, and that action exists.
+   `caused_by_action_id`, and that action exists. This holds for evaluation
+   cancellation exactly as for training: `CancelAttempt` targets either attempt
+   kind, so there is always a legal Action to own the intent.
+5a. A terminal `Action` carries an `ActionOutcome`; a non-terminal one does not.
+   `SUCCEEDED` with `SUPERSEDED` is the cancellation race of ADR-013 §5 and is
+   not a failure.
 6. Outbox consumers publish events. **They never submit or cancel workloads** —
    an at-least-once outbox driving a runtime call would duplicate side effects,
    which is the failure ADR-013 exists to prevent.
@@ -244,9 +276,13 @@ Persistence is only as good as the tests that kill it at the wrong moment:
 
 1. state, event and outbox commit together; failure between them rolls back all
 2. stale revision raises `ConcurrentModificationError`
-3. concurrent writers: one wins, one retries, no lost update
+3. concurrent writers in **separate processes**: one wins, one retries, no lost
+    update, and no reliance on any external lease
 4. attempt + `INTENDED` operation are atomic; injected failure rolls back both
-5. `Action` + caused operation are atomic; neither can exist alone
+5. `Action` + caused operation are atomic; neither can exist alone — tested for
+    an evaluation-attempt target as well as a training one
+5a. a cancel that loses the race to natural completion records
+    `SUCCEEDED`/`SUPERSEDED`, and the attempt stays `SUCCEEDED`
 6. committed intent and `request_digest` survive a database reopen
 7. duplicate operation creation is idempotent; a conflicting request is rejected
 8. illegal transitions and stale revisions are rejected atomically
@@ -269,10 +305,16 @@ Persistence is only as good as the tests that kill it at the wrong moment:
 - External sinks are eventually consistent through the outbox. That is a
   deliberate trade: the alternative is a distributed transaction with a system
   that may be down.
-- Single-writer is assumed. A future remote controller must revisit §8 rather
-  than inherit it silently.
+- Repository correctness stands on SQLite plus revision CAS alone, so band B can
+  prove its own guarantees. ADR-004's lease remains necessary — for controller
+  ownership, not for database integrity — and a future remote controller must
+  revisit the *ownership* half of §8 rather than the concurrency half.
 
 ## Rejected alternatives
+
+**Requiring a single writer process.** Simpler to reason about, and it would have
+made this ADR depend on a band H mechanism for a band B guarantee — leaving the
+concurrency primitives it already mandates with nothing to do.
 
 **Independent StateStore and EventStore writes.** The original motivation for
 this ADR: two stores that can diverge after a crash, with no way to tell which

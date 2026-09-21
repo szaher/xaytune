@@ -216,6 +216,18 @@ The Action records that it was superseded rather than failing: it did what it wa
 and the answer was that there was nothing left to stop. Recording it as `FAILED` would
 make routine races look like defects.
 
+That is a first-class field, not a note in a payload:
+
+```text
+Action.status  = SUCCEEDED
+Action.outcome = SUPERSEDED
+```
+
+`status` says whether the action completed; `ActionOutcome` says how it turned
+out (`APPLIED` | `SUPERSEDED` | `NOOP`). A `SUPERSEDED` outcome under a
+`FAILED` status would be contradictory, and burying it in `payload` would make a
+lifecycle guarantee depend on an untyped dictionary. See `03-domain-model.md` §8.
+
 ### 6. Cancelling an experiment is a controller saga
 
 ```text
@@ -298,7 +310,7 @@ makes the pair unique.
 - **AC-6.** Given a cancellation in flight, when the controller restarts, then it knows
   cancellation was requested without any lifecycle state having encoded it.
 - **AC-7.** Given a workload that succeeds before a cancellation is confirmed, then the
-  attempt is `SUCCEEDED` and the Action records that it was superseded.
+  attempt is `SUCCEEDED` and the Action is `status=SUCCEEDED, outcome=SUPERSEDED`.
 - **AC-8.** Given an experiment cancellation where one descendant cannot be cancelled,
   then the experiment does **not** reach `CANCELLED`.
 - **AC-9.** Given `ExperimentStatus.CANCELLED`, when reconciliation runs, then no owned
@@ -307,6 +319,27 @@ makes the pair unique.
   alive, then it is adopted rather than relaunched — matched on PID **and** start time.
 - **AC-11.** Given a recorded PID that has been recycled by an unrelated process, when
   the daemon reconciles, then it does not adopt it.
+
+### 6a. Cancelling an evaluation uses the same path
+
+An `EvaluationAttempt` is cancelled exactly as a training attempt is: an
+`Action` holds the intent, a `RuntimeOperation` carries the effect, and both
+commit together (ADR-005 §5).
+
+```python
+Action(type="cancel-attempt",
+       target=ActionTarget(kind="evaluation-attempt", id=...))
+RuntimeOperation(target=RuntimeOperationTarget(kind="evaluation-attempt", id=...))
+```
+
+`CancelAttempt` is workload-neutral rather than split per workload type, and the
+two target vocabularies use the same spellings on purpose — an Action's target
+and the target of the operation it causes name the same subject.
+
+This is what makes ADR-015's AC-7 — a cancelled evaluation leaves no executing
+workload — actually reachable. Without an `evaluation-attempt` action target
+there would be no legal Action to own the intent, and the ADR-005 invariant
+would forbid issuing the cancel operation at all.
 
 ### 7. Sequencing: the Action substrate comes before cancellation
 

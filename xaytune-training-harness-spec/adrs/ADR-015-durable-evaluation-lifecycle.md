@@ -255,4 +255,7 @@ silent-stall failure into a detected one.
 6. A controller restart mid-evaluation recovers the attempt rather than
    orphaning it or resubmitting it.
 7. A cancelled evaluation leaves no executing workload, per the ADR-013
-   cancellation invariant.
+   cancellation invariant. The intent is owned by a `CancelAttempt` `Action`
+   targeting the `evaluation-attempt` (ADR-013 §6a), committed with its cancel
+   operation as ADR-005 §5 requires — evaluation cancellation uses the same path
+   as training, not a parallel one.

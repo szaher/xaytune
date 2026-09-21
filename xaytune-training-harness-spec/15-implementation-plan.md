@@ -250,7 +250,14 @@ This PR is the substrate only:
 - `Action`, `ActionId`, `ActionStatus` and the Action state machine
 - `ActionRepository`, committed in the same transaction as its events
 - linkage from an `Action` to the `RuntimeOperation`s it causes
-- exactly three action types: `CancelAttempt`, `CancelRun`, `CancelExperiment`
+- exactly three action types: `CancelAttempt`, `CancelRun`, `CancelExperiment`,
+  registered in a domain **action registry** rather than a database `CHECK` —
+  SQLite cannot alter a `CHECK` in place, and Phase 4 adds many types
+- `CancelAttempt` is workload-neutral: it targets a `training-attempt` or an
+  `evaluation-attempt`, using ADR-013's spellings so an Action's target and its
+  operation's target are the same vocabulary
+- `ActionOutcome` (`APPLIED` | `SUPERSEDED` | `NOOP`), so ADR-013 §5's
+  cancellation race is representable without overloading `status`
 - the Action state machine from `04-state-machines.md` §5, using the
   `VALIDATED → EXECUTING` path: a controller-owned cancellation is never marked
   `APPROVED` by nobody, and `APPROVAL_PENDING` stays reachable but unused until

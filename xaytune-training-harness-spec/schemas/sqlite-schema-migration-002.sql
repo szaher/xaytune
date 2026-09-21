@@ -19,10 +19,19 @@ CREATE TABLE actions (
   id TEXT PRIMARY KEY NOT NULL,
   experiment_id TEXT NOT NULL REFERENCES experiments(id),
 
-  -- PR-006a ships exactly these three. Phase 4 widens the CHECK rather than
-  -- dropping it, so an unrecognised type cannot be written in the meantime.
-  type TEXT NOT NULL
-    CHECK (type IN ('cancel-attempt', 'cancel-run', 'cancel-experiment')),
+  -- Action type is validated by the domain action registry, NOT by a CHECK.
+  --
+  -- The tempting version constrained this to the three cancellation types with
+  -- a note that Phase 4 would "widen the CHECK". SQLite cannot alter a CHECK in
+  -- place: widening it means rebuilding the table and copying the rows. Phase 4
+  -- adds many action types and plugin-defined ones are intended later, so that
+  -- would schedule a table rebuild a few phases out, by design.
+  --
+  -- Database constraints enforce durable STRUCTURAL invariants; an extensible
+  -- vocabulary is the domain layer's job. PR-006a's registry accepts only
+  -- cancel-attempt, cancel-run and cancel-experiment, so nothing else can be
+  -- created in band B -- enforced where the rule can actually change.
+  type TEXT NOT NULL,
 
   -- 04-state-machines.md section 5. APPROVAL_PENDING and APPROVED are reachable
   -- but unused until a PolicyEngine exists: a controller-owned cancellation goes
@@ -34,9 +43,33 @@ CREATE TABLE actions (
       'executing', 'succeeded', 'failed', 'rejected'
     )),
 
-  -- ActionTarget: which aggregate this action acts on.
+  -- How a terminal action turned out, distinct from whether it completed.
+  -- ADR-013 section 5: a cancellation that loses the race against natural
+  -- completion SUCCEEDED and was SUPERSEDED -- it did what it was asked and the
+  -- answer was that there was nothing left to stop. NULL until terminal.
+  outcome TEXT
+    CHECK (outcome IS NULL OR outcome IN ('applied', 'superseded', 'noop')),
+
+  -- ActionTarget: which aggregate this action acts on. This IS a structural
+  -- invariant -- the repository resolves target_id in the table named by
+  -- target_kind -- so it is constrained here.
+  --
+  -- 'training-attempt' and 'evaluation-attempt' deliberately match
+  -- RuntimeOperationTarget (ADR-013) rather than using a separate 'run-attempt'
+  -- spelling: an Action's target and the target of the operation it causes are
+  -- the same subject, and two vocabularies for it would mean translating
+  -- between two supposedly shared contracts.
+  --
+  -- 'evaluation-attempt' is required now, not later: ADR-015 says evaluations
+  -- can be cancelled and its AC-7 requires a cancelled evaluation to leave no
+  -- executing workload, which under ADR-005 section 5 needs an Action to own
+  -- the intent.
   target_kind TEXT NOT NULL
-    CHECK (target_kind IN ('experiment', 'node', 'run', 'run-attempt')),
+    CHECK (target_kind IN (
+      'experiment', 'node', 'run',
+      'training-attempt',
+      'evaluation-run', 'evaluation-attempt'
+    )),
   target_id TEXT NOT NULL,
 
   proposed_by_json TEXT NOT NULL,      -- Actor

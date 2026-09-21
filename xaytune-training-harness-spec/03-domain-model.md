@@ -424,8 +424,9 @@ class Action(BaseModel):
     id: ActionId
     experiment_id: ExperimentId
 
-    type: str
+    type: str                      # validated by the action registry, not a DB CHECK
     status: ActionStatus
+    outcome: ActionOutcome | None  # set only when terminal
 
     proposed_by: Actor
     reason: str
@@ -440,6 +441,64 @@ class Action(BaseModel):
     updated_at: datetime
     revision: int
 ```
+
+### ActionTarget
+
+```python
+ActionTargetKind = Literal[
+    "experiment",
+    "node",
+    "run",
+    "training-attempt",
+    "evaluation-run",
+    "evaluation-attempt",
+]
+
+class ActionTarget(BaseModel):
+    kind: ActionTargetKind
+    id: str
+```
+
+The attempt kinds match `RuntimeOperationTarget` (ADR-013) deliberately. An
+Action's target and the target of the operation it causes are the same subject,
+and a separate `run-attempt` spelling would mean translating between two
+contracts that are supposed to be shared.
+
+`evaluation-attempt` is not deferrable. ADR-015 says an evaluation can be
+cancelled and its AC-7 requires a cancelled evaluation to leave no executing
+workload; ADR-005 §5 requires an `Action` to own that intent in the same
+transaction as the cancel operation. Without this kind there is no legal Action
+for an evaluation cancellation, so the invariant could not be satisfied.
+
+`CancelAttempt` is therefore **workload-neutral** — it targets a training or an
+evaluation attempt — rather than splitting into `CancelRunAttempt` and
+`CancelEvaluationAttempt`. Cancelling is the same operation on the same kind of
+subject; only the table differs.
+
+### ActionOutcome
+
+```python
+class ActionOutcome(str, Enum):
+    APPLIED = "applied"          # the change was made
+    SUPERSEDED = "superseded"    # overtaken by events; nothing left to do
+    NOOP = "noop"                # already in the requested state
+```
+
+`status` says whether the action completed; `outcome` says how it turned out.
+Collapsing them loses ADR-013 §5:
+
+```text
+cancel requested, workload finishes naturally first
+    status  = SUCCEEDED
+    outcome = SUPERSEDED
+```
+
+That action did exactly what it was asked, and the answer was that there was
+nothing left to stop. Recording it `FAILED` would make a routine race look like
+a defect; recording it plain `SUCCEEDED` would claim it cancelled something it
+did not. The distinction generalises to every idempotent action — already at the
+requested value is `NOOP`, not a successful change — which is worth having in a
+control plane where an agent reads outcomes back.
 
 ## 9. Incident
 

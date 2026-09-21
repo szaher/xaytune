@@ -72,4 +72,8 @@ Test:
 14. an operation targeting an evaluation attempt persists and reloads exactly as a
     training one does
 15. a minimal `Action` (PR-006a) commits atomically with the cancellation
-    operations it causes
+    operations it causes, for an evaluation-attempt target as well as a training one
+16. a cancel that loses the race to natural completion records
+    `SUCCEEDED`/`SUPERSEDED` and leaves the attempt `SUCCEEDED`
+17. two separate processes writing concurrently: one wins, one retries, no lost
+    update, with no external lease involved

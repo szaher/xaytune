@@ -177,6 +177,14 @@ VALIDATING
 | EXECUTING | SUCCEEDED, FAILED |
 | SUCCEEDED, FAILED, REJECTED | *(terminal)* |
 
+**Status is not the whole outcome.** A terminal action also carries an
+`ActionOutcome` — `APPLIED`, `SUPERSEDED` or `NOOP` (`03-domain-model.md` §8).
+A cancellation that loses the race to natural completion is
+`SUCCEEDED`/`SUPERSEDED`: it did what it was asked, and the answer was that
+there was nothing left to stop (ADR-013 §5). There is deliberately no
+`SUPERSEDED` *status*, because that would make a normal race look like a fourth
+way of ending rather than a normal success.
+
 **Approval is conditional, not a stage every action passes through.** An earlier
 version routed everything through `APPROVAL_PENDING → APPROVED`, so an action
 needing no approval had to be marked `APPROVED` by nobody. That is a fiction in

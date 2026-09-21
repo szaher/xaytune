@@ -121,8 +121,14 @@ that does not depend on it:
 | ADR-008 — versioned plugin ABI | blocks band C (compiler/runtime plugin loading) |
 | ADR-009 — checkpoint layers | blocks band F |
 
-**ADR-005 is the live one.** It is the next ADR that must be accepted, because
-band B cannot start without it.
+**ADR-005 is the live one.** It is the next ADR that must be accepted, and the
+gate is **before PR-004**, not before PR-005.
+
+Gating it on PR-005 would be one PR too late by this document's own "what
+freezes what" principle. ADR-005 decides transaction boundaries, revision
+semantics and state/event/outbox consistency; PR-004 is where the tables and
+revision-based persistence are written. A repository built against assumptions
+ADR-005 then contradicts has to be rewritten — or, more likely, kept.
 
 Exit criteria, per band rather than globally:
 

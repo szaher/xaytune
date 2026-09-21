@@ -129,7 +129,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 
   `15-implementation-plan.md` §Phase 0 holds the same table with the work each
   still-open ADR blocks. **ADR-005 is the live one** — band B cannot start until
-  it is accepted.
+  it is accepted, and that gate is before **PR-004**, not PR-005: PR-004 is
+  where persistence assumptions freeze.
 - `schemas/` — proposed YAML and JSON/Python schema examples. The SQLite file is
   **migration 001 only**, not the target schema; its header lists what is still to come
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases
@@ -139,8 +140,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 The ADR gate is **per-ADR, not global** — an ADR must be settled before the work
 that depends on it, not before all work. See `15-implementation-plan.md`
 §Phase 0 for which ADRs are ratified, accepted, or still open, and what each
-still-open one blocks. **ADR-005 is the next one that must be accepted**, since
-persistence cannot start without it.
+still-open one blocks. **ADR-005 is the next one that must be accepted**, before
+PR-004 — the whole persistence band, not just the event integration.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

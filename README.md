@@ -2,18 +2,135 @@
   <img src="docs/assets/logo.png" alt="xaytune" width="400">
 </p>
 
-<p align="center">
-  An opinionated LLM training and fine-tuning library built on PyTorch.<br>
-  Recipe-based architecture with a layered API: simple one-liners for beginners, full control for experts.
-</p>
+# Xaytune
 
-**[Documentation](https://szaher.github.io/xaytune/)** | **[Examples](https://szaher.github.io/xaytune/examples/)** | **[API Reference](https://szaher.github.io/xaytune/api/)**
+**An agent-native experiment control plane for model post-training and adaptation.**
 
-> **Status: Alpha (v0.6.0)** — Core SFT and DPO paths are tested and functional. Some features are experimental. See [Maturity](#maturity) below.
+Xaytune is being built to coordinate training, evaluation, branching, recovery,
+interventions, experiment lineage, and agent-driven decisions across trainer and
+runtime backends. It answers:
 
-## Features
+> What should this training experiment do next?
+
+**Xaytune controls the experiment.** Trainer integrations compile training intent.
+Runtime integrations execute training. Infrastructure schedules and runs workloads.
+
+**[Documentation](https://szaher.github.io/xaytune/)** | **[Examples](https://szaher.github.io/xaytune/examples/)** | **[API Reference](https://szaher.github.io/xaytune/api/)** | **[Architecture specification](xaytune-training-harness-spec/README.md)**
+
+> **Xaytune 2.0 is under active development.** The domain and persistence foundations
+> have landed on `main`; Band C, the compile/execute boundary, is current work.
+> The end-to-end experiment controller and runtime integrations are not available
+> yet. The existing v0.6.0 trainer API remains usable; see
+> [Existing training capabilities](#existing-training-capabilities).
+
+## What Xaytune owns
+
+These are the responsibilities of the target control plane. Implementation status
+is tracked below.
+
+| Xaytune owns | Xaytune delegates |
+|---|---|
+| Experiment topology and candidate identity | Tensor execution and distributed training |
+| Scientific lineage and provenance | Runtime implementation |
+| Evaluation-driven decisions and interventions | Worker management |
+| Semantic recovery | Low-level fault tolerance |
+| Agent proposals and policy gates | GPU scheduling and infrastructure admission |
+| Experiment budgets and execution intent | Kubernetes workload execution |
+
+The integration layers are:
+
+- **Trainer compilers:** Xaytune Native, TRL, torchtune, verl, and future integrations.
+- **Runtime backends:** Local, Ray Train, and Training Hub.
+- **Infrastructure and resilience providers:** PyTorch/torchrun, TorchFT, Ray,
+  Kubeflow Trainer, KubeRay, Kueue, and OpenShift AI deployments.
+
+These describe the planned ecosystem, not an installed-backend support matrix.
+
+## Development status
+
+Status as of **2026-09-22**, after the Band B hardening merged.
+
+### Completed foundation
+
+- Immutable core domain models and lifecycle state machines.
+- SQLite persistence, versioned migrations, and revision-based optimistic concurrency.
+- Atomic aggregate state, event, and outbox transactions.
+- Durable `RuntimeOperation` journal with atomic attempt + submit-intent creation.
+- Idempotent persistence boundaries and durable unresolved-operation queries.
+- Action substrate and persisted cancellation intent, lifecycle, and outcome semantics.
+- Experiment DAG, cycle prevention, lineage traversal, and candidate comparison.
+- Crash/rollback and cross-process concurrency tests for the persistence layer.
+
+This establishes **repository recovery**, not a running experiment controller.
+Runtime submission, active-workload reattachment, external cancellation delivery,
+policy/budget enforcement, and daemon restart reconciliation are later work.
+
+### Current work: Band C — compile/execute boundary
+
+The next contracts are `CandidateSpec`, `TrainingSpec`, `CandidateFingerprint`,
+`RunHistoryFingerprint`, and `ArtifactLineageFingerprint`, followed by
+`TrainerCompiler`, `TrainingExecutionSpec`, and capability resolution.
+Restart-safe LocalRuntime, Native/TRL compiler adapters, the embedded controller,
+and runtime-operation reconciliation follow within this band.
+
+<details>
+<summary>Foundation implementation history</summary>
+
+Band B landed through [SQLite repository (#18)](https://github.com/szaher/xaytune/pull/18),
+[events, outbox, and journal (#19)](https://github.com/szaher/xaytune/pull/19),
+[Action substrate (#20)](https://github.com/szaher/xaytune/pull/20),
+[experiment graph (#21)](https://github.com/szaher/xaytune/pull/21), and
+[persistence hardening (#22)](https://github.com/szaher/xaytune/pull/22).
+The [implementation plan](xaytune-training-harness-spec/15-implementation-plan.md)
+defines the remaining contracts and acceptance gates.
+
+</details>
+
+## Architecture
+
+The **target architecture** separates scientific intent, compilation, capability
+resolution, and execution. The image includes planned components; it is not a
+claim that every integration is implemented.
+
+![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure.](docs/assets/architecture-overview.svg)
+
+The boundary is **experiment topology, not GPU count**. Xaytune may control a
+large distributed training job while the runtime remains responsible for
+second-scale worker recovery and distributed tensor execution.
+
+See the [architecture specification](xaytune-training-harness-spec/02-architecture.md)
+for protocol and dependency boundaries.
+
+## Roadmap
+
+| Architectural band | Status |
+|---|---|
+| Domain foundation | Complete; typed candidate/identity contracts continue in Band C |
+| B — persistence and control records | Complete |
+| C — compile/execute, local runtime, runtime reconciliation | **Current** |
+| D — durable evaluation and decisioning | Planned |
+| E — policy and budget over the Action substrate | Planned |
+| F — checkpoints, semantic recovery, interventions | Planned |
+| G — rule-based planner and experiment branching | Planned |
+| H — daemon hosting and whole-controller restart | Planned |
+| I — LLM planner | Planned |
+| J — Ray / TorchFT / Training Hub integrations | Planned |
+
+The [implementation plan](xaytune-training-harness-spec/15-implementation-plan.md)
+keeps policy before recovery and runtime reconciliation before daemon hosting.
+
+## Existing training capabilities
+
+Xaytune already contains an opinionated PyTorch-based training stack. The existing
+`finetune`, `pretrain`, `align`, `evaluate`, CLI, and deterministic pipeline APIs
+remain available during the transition. This stack will become the Native
+trainer implementation behind the new compile/execute boundary.
+
+Core SFT and DPO paths are tested and functional. The maturity labels below
+refer to this **existing trainer stack**, not to the new control plane.
 
 **Core (tested, recommended for use):**
+
 - **SFT fine-tuning** — full, LoRA, QLoRA with proper prompt masking (only response tokens contribute to loss)
 - **Multi-turn conversation masking** — per-turn label masking for chat and ShareGPT formats
 - **DPO alignment** — Direct Preference Optimization with response-only log-probability scoring
@@ -26,12 +143,13 @@
 - **Callbacks** — event-driven hooks for checkpointing, early stopping, progress, custom logic
 - **4 logging backends** — console, TensorBoard, W&B, MLflow
 
-**Experimental (functional but not battle-tested):**
+**Experimental (limitations vary; see [Maturity](#maturity)):**
+
 - **ORPO / SimPO alignment** — implemented with numerically stable loss, needs real-world validation
 - **REINFORCE alignment** — vanilla policy gradient, functional but minimal
-- **PPO** — simplified clipped policy gradient (not a full PPO trainer — no rollout buffer, GAE, or value model)
+- **PPO** — value head, rollout buffer, and multi-epoch training; requires online RL
 - **Online RL** — generate→score→train pipeline for RL methods
-- **DeepSpeed** — ZeRO integration via `ds.initialize()`, engine-aware training loop
+- **DeepSpeed** — partial ZeRO integration; optimizer/scheduler and checkpoint ownership remain open (TASK-029)
 - **FSDP** — wrapping with sharding strategy, CPU offload, mixed precision
 - **GGUF conversion** — delegates to llama.cpp tools (requires separate installation)
 - **Model merging** — Linear, SLERP, TIES, DARE weight interpolation
@@ -40,6 +158,9 @@
 - **Data preparation** — generate, filter, deduplicate, convert pipeline
 
 ## Install
+
+These commands install the existing training package; they do not provide the
+planned end-to-end 2.0 experiment API.
 
 ```bash
 pip install xaytune
@@ -57,6 +178,8 @@ pip install xaytune[all]         # Everything
 ```
 
 ## Quickstart
+
+The examples below use the existing trainer API.
 
 ### Python API
 
@@ -127,8 +250,8 @@ xaytune pipeline --config pipeline.yaml --resume-from dpo
 
 ```bash
 # Train
-xaytune train --config configs/lora_finetune.yaml
-xaytune train --config configs/lora_finetune.yaml --override model.name=mistralai/Mistral-7B-v0.3
+xaytune train --config configs/examples/lora_finetune.yaml
+xaytune train --config configs/examples/lora_finetune.yaml --override model.name=mistralai/Mistral-7B-v0.3
 
 # Evaluate
 xaytune eval --model output/my-model --benchmarks mmlu,gsm8k
@@ -139,7 +262,7 @@ xaytune export merge --checkpoint output/lora-ckpt --output output/merged
 xaytune export push --model output/merged --repo username/my-model
 
 # Distributed training
-xaytune launch --config configs/lora_finetune.yaml --nproc-per-node 4
+xaytune launch --config configs/examples/lora_finetune.yaml --nproc-per-node 4
 
 # Training Studio (experimental)
 xaytune studio --port 7860
@@ -206,7 +329,7 @@ logging:
 | SimPO | **Experimental** | Length-normalized, reference-free |
 | REINFORCE | **Experimental** | Vanilla policy gradient |
 | PPO | **Experimental** | Full PPO trainer with value head, rollout buffer, multi-epoch training. Requires `online_rl.enabled=True` |
-| DeepSpeed | **Experimental** | ZeRO via `ds.initialize`, engine-aware loop |
+| DeepSpeed | **Experimental / partial** | Optimizer/scheduler and checkpoint ownership remain open; see [TASK-029](implementation-plan/backlog.md#task-029-is-still-open) |
 | FSDP | **Experimental** | Sharding, offload, mixed precision wrapping |
 | GGUF export | **Experimental** | Requires llama.cpp tools installed separately |
 | Model merging | **Experimental** | TIES, DARE, SLERP, linear interpolation |
@@ -240,19 +363,6 @@ def brevity_reward(prompt, response, *, max_len=100):
 @on("step_end")
 def log_memory(state):
     print(f"Step {state.global_step}: loss={state.metrics.get('loss', 'N/A')}")
-```
-
-## Architecture
-
-```
-+-----------------------------------------+
-|        CLI / Pipeline / Config          |  Layer 3 - Interface
-+-----------------------------------------+
-|   pretrain | finetune | align (recipes) |  Layer 2 - Recipes
-+--------+--------+---------+--------+----+
-| models |  data  | trainer |  eval  | exp|  Layer 1 - Building Blocks
-+--------+--------+---------+--------+----+
-         PyTorch / HuggingFace / DeepSpeed
 ```
 
 ## License

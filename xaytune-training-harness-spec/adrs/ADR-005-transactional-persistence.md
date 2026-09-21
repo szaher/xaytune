@@ -263,9 +263,13 @@ Checkable, and checked in tests rather than assumed:
    `caused_by_action_id`, and that action exists. This holds for evaluation
    cancellation exactly as for training: `CancelAttempt` targets either attempt
    kind, so there is always a legal Action to own the intent.
-5a. A terminal `Action` carries an `ActionOutcome`; a non-terminal one does not.
-   `SUCCEEDED` with `SUPERSEDED` is the cancellation race of ADR-013 §5 and is
-   not a failure.
+5a. An `Action` carries an `ActionOutcome` **exactly when its status is
+   `SUCCEEDED`**, and never otherwise — every member of that enum describes a
+   way of succeeding, and `FAILED`/`REJECTED` carry their reasons in the
+   transition event and the policy decision instead. `SUCCEEDED` with
+   `SUPERSEDED` is the cancellation race of ADR-013 §5 and is not a failure.
+   Migration 002 enforces the pairing with a table `CHECK`, so it is a
+   persistent invariant rather than a repository convention.
 6. Outbox consumers publish events. **They never submit or cancel workloads** —
    an at-least-once outbox driving a runtime call would duplicate side effects,
    which is the failure ADR-013 exists to prevent.

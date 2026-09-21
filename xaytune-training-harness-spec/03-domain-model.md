@@ -426,7 +426,7 @@ class Action(BaseModel):
 
     type: str                      # validated by the action registry, not a DB CHECK
     status: ActionStatus
-    outcome: ActionOutcome | None  # set only when terminal
+    outcome: ActionOutcome | None  # set exactly when status is SUCCEEDED
 
     proposed_by: Actor
     reason: str
@@ -483,6 +483,24 @@ class ActionOutcome(str, Enum):
     SUPERSEDED = "superseded"    # overtaken by events; nothing left to do
     NOOP = "noop"                # already in the requested state
 ```
+
+Every member describes a way of *succeeding*, so the field pairs with
+`SUCCEEDED` and with nothing else:
+
+```text
+status == SUCCEEDED     outcome MUST be non-null
+status != SUCCEEDED     outcome MUST be null
+```
+
+```text
+SUCCEEDED / APPLIED       SUCCEEDED / SUPERSEDED      SUCCEEDED / NOOP
+FAILED    / null          REJECTED  / null
+```
+
+"Set when terminal" would have been wrong: `FAILED` and `REJECTED` are terminal
+too, and no member of this enum describes either. Their reasons belong to the
+transition event and the policy decision that produced them, and inventing an
+outcome to duplicate them there would make the field mean two different things.
 
 `status` says whether the action completed; `outcome` says how it turned out.
 Collapsing them loses ADR-013 §5:

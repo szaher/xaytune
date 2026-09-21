@@ -177,8 +177,9 @@ VALIDATING
 | EXECUTING | SUCCEEDED, FAILED |
 | SUCCEEDED, FAILED, REJECTED | *(terminal)* |
 
-**Status is not the whole outcome.** A terminal action also carries an
-`ActionOutcome` — `APPLIED`, `SUPERSEDED` or `NOOP` (`03-domain-model.md` §8).
+**Status is not the whole outcome.** A **succeeded** action also carries an
+`ActionOutcome` — `APPLIED`, `SUPERSEDED` or `NOOP` (`03-domain-model.md` §8) —
+and only a succeeded one does, since every member describes a kind of success.
 A cancellation that loses the race to natural completion is
 `SUCCEEDED`/`SUPERSEDED`: it did what it was asked, and the answer was that
 there was nothing left to stop (ADR-013 §5). There is deliberately no

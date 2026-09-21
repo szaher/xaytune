@@ -43,10 +43,16 @@ CREATE TABLE actions (
       'executing', 'succeeded', 'failed', 'rejected'
     )),
 
-  -- How a terminal action turned out, distinct from whether it completed.
+  -- How a SUCCESSFUL action resolved, distinct from whether it completed.
   -- ADR-013 section 5: a cancellation that loses the race against natural
   -- completion SUCCEEDED and was SUPERSEDED -- it did what it was asked and the
-  -- answer was that there was nothing left to stop. NULL until terminal.
+  -- answer was that there was nothing left to stop.
+  --
+  -- Every member describes a success, so the field pairs with SUCCEEDED alone.
+  -- FAILED and REJECTED carry their reasons in the transition event and the
+  -- policy decision; duplicating them here would invent an outcome for states
+  -- that have none. The paired CHECK below makes that a persistent invariant
+  -- rather than a repository convention.
   outcome TEXT
     CHECK (outcome IS NULL OR outcome IN ('applied', 'superseded', 'noop')),
 
@@ -82,7 +88,14 @@ CREATE TABLE actions (
 
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+
+  -- outcome is present exactly when the action succeeded.
+  CHECK (
+    (status = 'succeeded' AND outcome IS NOT NULL)
+    OR
+    (status <> 'succeeded' AND outcome IS NULL)
+  )
 );
 
 CREATE INDEX idx_actions_experiment

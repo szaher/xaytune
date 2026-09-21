@@ -315,7 +315,7 @@ The compiler consumes a `CandidateSpec`, not a `TrainingSpec` (ADR-011).
 CandidateSpec
 ├── ModelSpec
 ├── DataSpec
-├── TrainingSpec          # SFT / pretrain / DPO / GRPO
+├── TrainingSpec          # SFT / CONTINUED_PRETRAIN / DPO / GRPO
 ├── RewardSpec?
 ├── EnvironmentSpec?
 └── TrainingSchedule?     # pre-registered interventions
@@ -324,7 +324,9 @@ CandidateSpec
 Implement:
 
 - CandidateSpec with the composition above
-- TrainingSpec: SFT, pretrain, DPO, GRPO schema skeletons
+- TrainingSpec: SFT, CONTINUED_PRETRAIN, DPO, GRPO schema skeletons — the
+  control-plane spelling from `05-training-spec-and-compilation.md` §2, not
+  `PRETRAIN`; the legacy `xaytune.pretrain()` entry point keeps its name
 - fingerprint framework: `CandidateFingerprint`, `RunHistoryFingerprint` and
   `ArtifactLineageFingerprint`
   (seed belongs to `Run`, so it feeds the realization and never the candidate)
@@ -423,8 +425,19 @@ Implement:
   on top of PR-005's schema
 - idempotent evaluation submission through `submit_or_get` (ADR-013)
 - restart reconciliation for in-flight evaluations
-- the invariant check: `ExperimentNode.EVALUATING` implies a non-terminal
-  `EvaluationRun`, otherwise an incident
+- the **reconciliation** rule for a node in `EVALUATING` (ADR-015 §5), resolving
+  to exactly one of:
+
+  ```text
+  a required EvaluationRun is non-terminal        -> wait
+  all required runs terminal, results present     -> reconcile node to DECIDING
+  neither                                         -> raise EvaluationStalled
+  ```
+
+  Not "implies a non-terminal `EvaluationRun`, otherwise an incident" — ADR-015
+  rejected that form, because it fires on every successful evaluation during the
+  instant between the run reaching `SUCCEEDED` and the node advancing. The
+  middle case is what repairs the lag instead of reporting it.
 
 ### PR-014 — existing eval adapter
 

@@ -5,18 +5,15 @@
 -- atomically with its events, and 001 has since been applied -- a shipped
 -- migration is never edited, so the rest arrives here.
 --
--- !! NUMBERING DIVERGES FROM THE SPEC. `sqlite-schema-migration-002.sql` in the
--- spec is the Action substrate (PR-006a). Splitting the spec's 001 across two
--- files pushes everything after it down one, so on disk the order is:
+-- The sequence, which the spec now matches:
 --
---     001  core aggregates                       PR-004   (shipped)
---     002  events, outbox, runtime_operations     PR-005   (this file)
---     003  actions                                PR-006a
+--     001  core aggregates                      PR-004
+--     002  events, outbox, runtime_operations    PR-005   (this file)
+--     003  actions                               PR-006a
 --
--- Both 001 and 002 are still required before Phase 2 for the reason the spec
--- gives, and 003 with them: ADR-013 cancellation needs a durable Action to hold
--- the intent while the operation carries the effect, and handle.cancel() is
--- public API from Phase 2 onwards.
+-- All three are required before Phase 2: ADR-013 cancellation needs a durable
+-- Action to hold the intent while the operation carries the effect, and
+-- handle.cancel() is public API from Phase 2 onwards.
 
 -- ADR-005 §3: written in the same transaction as the transition it describes.
 -- There is no code path that writes one without the other.

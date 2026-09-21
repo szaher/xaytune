@@ -46,8 +46,13 @@ def run(repo: ControlPlaneRepository, experiment: Any) -> Any:
 def test_a_transition_writes_its_event_in_the_same_commit(
     repo: ControlPlaneRepository, experiment: Any
 ) -> None:
-    activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(activated, actor=ACTOR, event_type="ExperimentActivated")
+    repo.transition_experiment(
+        experiment.id,
+        expected_revision=experiment.revision,
+        new_status=ExperimentStatus.ACTIVE,
+        actor=ACTOR,
+        event_type="ExperimentActivated",
+    )
 
     events = repo.events.events_for_aggregate(str(experiment.id))
     assert [event.event_type for event in events] == [
@@ -61,8 +66,13 @@ def test_an_outbox_row_is_written_with_the_event(
     repo: ControlPlaneRepository, experiment: Any
 ) -> None:
     """§11.6."""
-    activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(activated, actor=ACTOR, destinations=("mlflow", "webhook"))
+    repo.transition_experiment(
+        experiment.id,
+        expected_revision=experiment.revision,
+        new_status=ExperimentStatus.ACTIVE,
+        actor=ACTOR,
+        destinations=("mlflow", "webhook"),
+    )
 
     pending = repo.events.pending_outbox()
     assert sorted(record.destination for record in pending) == ["mlflow", "webhook"]
@@ -75,8 +85,6 @@ def test_a_failure_rolls_back_state_event_and_outbox_together(
     repo: ControlPlaneRepository, experiment: Any
 ) -> None:
     """§11.1: the whole unit, or none of it."""
-    activated = experiment.with_status(ExperimentStatus.ACTIVE)
-
     # Fail after the state update and the event insert have both been issued,
     # so the rollback has something of each to discard.
     original_append = repo.events._append
@@ -88,7 +96,12 @@ def test_a_failure_rolls_back_state_event_and_outbox_together(
     repo.events._append = exploding  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="injected"):
-        repo.transition(activated, actor=ACTOR)
+        repo.transition_experiment(
+            experiment.id,
+            expected_revision=experiment.revision,
+            new_status=ExperimentStatus.ACTIVE,
+            actor=ACTOR,
+        )
 
     repo.events._append = original_append  # type: ignore[method-assign]
 
@@ -99,12 +112,22 @@ def test_a_failure_rolls_back_state_event_and_outbox_together(
     ]
 
 
-def test_every_aggregate_revision_has_exactly_one_event(
+def test_latest_state_transition_event_matches_aggregate_revision(
     repo: ControlPlaneRepository, experiment: Any
 ) -> None:
-    """§10.2: an aggregate's revision equals its latest event's revision."""
-    activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(activated, actor=ACTOR)
+    """§10.2, stated accurately.
+
+    The old name asserted exactly one event per revision, which is the
+    invariant the schema deliberately does not enforce: observational events
+    share the revision they were observed at. What §10.2 requires is that the
+    *latest state-transition* event matches the stored revision.
+    """
+    repo.transition_experiment(
+        experiment.id,
+        expected_revision=experiment.revision,
+        new_status=ExperimentStatus.ACTIVE,
+        actor=ACTOR,
+    )
 
     stored = repo.aggregates.load_experiment(str(experiment.id))
     events = repo.events.events_for_aggregate(str(experiment.id))
@@ -115,8 +138,12 @@ def test_every_aggregate_revision_has_exactly_one_event(
 
 def test_events_carry_a_total_order(repo: ControlPlaneRepository, experiment: Any) -> None:
     """§6 of chapter 07: consumers order on sequence, not on wall clock."""
-    activated = experiment.with_status(ExperimentStatus.ACTIVE)
-    repo.transition(activated, actor=ACTOR)
+    repo.transition_experiment(
+        experiment.id,
+        expected_revision=experiment.revision,
+        new_status=ExperimentStatus.ACTIVE,
+        actor=ACTOR,
+    )
 
     sequences = [e.sequence for e in repo.events.events_for_experiment(str(experiment.id))]
     assert sequences == sorted(sequences)
@@ -259,7 +286,12 @@ def test_illegal_operation_transitions_are_refused(
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    confirmed = repo.confirm_operation(operation, actor=ACTOR)
+    confirmed = repo.confirm_operation(
+        operation.id,
+        expected_revision=operation.revision,
+        actor=ACTOR,
+        runtime_ref=RuntimeRef(backend="local", external_id="pid-1"),
+    )
 
     with pytest.raises(InvalidTransitionError):
         confirmed.with_state("failed")
@@ -274,10 +306,15 @@ def test_a_stale_operation_revision_is_refused(
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    repo.confirm_operation(operation, actor=ACTOR)
+    repo.confirm_operation(
+        operation.id,
+        expected_revision=operation.revision,
+        actor=ACTOR,
+        runtime_ref=RuntimeRef(backend="local", external_id="pid-1"),
+    )
 
     with pytest.raises(ConcurrentModificationError):
-        repo.fail_operation(operation, actor=ACTOR)
+        repo.fail_operation(operation.id, expected_revision=operation.revision, actor=ACTOR)
 
 
 # ---- §11.12 a lost response stays unresolved -----------------------------
@@ -292,7 +329,7 @@ def test_an_unresolved_operation_is_never_recorded_as_failed(
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    sent = repo.mark_operation_sent(operation, actor=ACTOR)
+    sent = repo.mark_operation_sent(operation.id, expected_revision=operation.revision, actor=ACTOR)
 
     # The response was lost. Nothing transitions it; it stays queryable.
     assert sent.is_unresolved
@@ -308,7 +345,10 @@ def test_confirmed_operations_leave_the_unresolved_queue(
         actor=ACTOR,
     )
     repo.confirm_operation(
-        operation, actor=ACTOR, runtime_ref=RuntimeRef(backend="local", external_id="pid-1")
+        operation.id,
+        expected_revision=operation.revision,
+        actor=ACTOR,
+        runtime_ref=RuntimeRef(backend="local", external_id="pid-1"),
     )
 
     assert repo.operations.unresolved() == ()
@@ -336,8 +376,13 @@ def test_attempt_transitions_carry_their_events(
         request_digest=DIGEST,
         actor=ACTOR,
     )
-    queued = attempt.with_status(RunAttemptStatus.QUEUED)
-    repo.transition(queued, actor=ACTOR, event_type="RuntimeQueued")
+    repo.transition_attempt(
+        attempt.id,
+        expected_revision=attempt.revision,
+        new_status=RunAttemptStatus.QUEUED,
+        actor=ACTOR,
+        event_type="RuntimeQueued",
+    )
 
     types = [e.event_type for e in repo.events.events_for_aggregate(str(attempt.id))]
     assert types == ["RunAttemptCreated", "RuntimeQueued"]
@@ -480,8 +525,12 @@ def test_an_event_cannot_be_filed_under_the_wrong_experiment(
         make_attempt(run), request_digest=DIGEST, actor=ACTOR
     )
 
-    queued = attempt.with_status(RunAttemptStatus.QUEUED)
-    repo.transition(queued, actor=ACTOR)
+    repo.transition_attempt(
+        attempt.id,
+        expected_revision=attempt.revision,
+        new_status=RunAttemptStatus.QUEUED,
+        actor=ACTOR,
+    )
 
     # `other` has only its own creation event; nothing from this run leaked in.
     assert [e.aggregate_type for e in repo.events.events_for_experiment(str(other.id))] == [

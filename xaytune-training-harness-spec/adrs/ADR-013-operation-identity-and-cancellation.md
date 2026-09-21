@@ -86,8 +86,14 @@ CHECK ((run_attempt_id IS NULL) != (evaluation_attempt_id IS NULL))
 which buys referential integrity and pays for it with a schema migration for
 every new workload kind — and ADR-015 §2 already names data preparation and
 reward-model scoring as the likely third and fourth. Referential integrity for
-the target is enforced by the repository instead, and `target_kind` is
-constrained by `CHECK` so an unknown kind cannot be written.
+the target is enforced by the repository instead.
+
+`target_kind` is deliberately **not** constrained by a `CHECK` either, for the
+same reason: SQLite cannot alter one in place, so freezing the vocabulary in
+the schema would mean rebuilding the table for each new workload kind — which
+is the migration this design exists to avoid. The database enforces structural
+shape; the domain type and the repository's target resolution validate the
+vocabulary.
 
 The record is written **before** the call and updated after it:
 

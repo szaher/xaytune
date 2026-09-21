@@ -126,7 +126,7 @@ specs versus live implementations. ADR-005 was accepted on 2026-09-21, so
 persistence work may start.
 
 - **Band B / Phase 1:** PR-005 implements atomic state/event/outbox writes and
-  the `runtime_operations` journal in migration 001. Attempt + INTENDED submit
+  the `runtime_operations` journal in migration 002. Attempt + INTENDED submit
   operation + request digest commit before any runtime call. Repository restart
   reloads committed state, events, outbox and operation intents.
 - **Band C / Phase 2:** LocalRuntime depends on that journal and uses

@@ -356,7 +356,7 @@ cancellation does not ask.
 
 ## Consequences
 
-PR-005 implements `runtime_operations` from migration 001 and records its state
+PR-005 implements `runtime_operations` in migration 002 and records its state
 transitions in the existing domain event log, atomically with the outbox. No
 separate operation-transition table is required. The repository writes the
 INTENDED submit operation and request digest in the same transaction as the new

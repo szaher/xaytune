@@ -1,22 +1,28 @@
 """Durable persistence for the control plane (ADR-005).
 
-PR-004 scope: the schema, the migration runner, the write-transaction boundary
-and revision-based optimistic concurrency.
+The public write surface is :class:`ControlPlaneRepository`, and it is the only
+one. Every method there is a single transaction over one of the units ADR-005
+names -- transition plus event plus outbox (§3), attempt plus INTENDED operation
+(§4), intent plus the effect it causes (§5).
 
-The aggregate *write* API is intentionally absent from this namespace. ADR-005
-§3 requires a state transition to commit with its domain event and outbox
-record, and its consequences say callers must not be able to write state
-separately. PR-005 adds the events and the outbox and exposes the single
-combined operation; until then :class:`~xaytune.storage.repository.AggregateStore`
-offers reads, and its writers are private and refuse to run outside a
-transaction.
+There is deliberately no ``save_experiment()``. The row-level writers on
+:class:`~xaytune.storage.repository.AggregateStore` and in
+:mod:`xaytune.storage.journal` stay private and refuse to run outside a
+transaction, so a caller cannot write state without its event or request an
+external effect without durable intent: the API does not offer those operations
+separately.
 """
 
 from __future__ import annotations
 
 from xaytune.core.errors import ConcurrentModificationError
+from xaytune.storage.control_plane import (
+    ControlPlaneRepository,
+    UnknownOperationTargetError,
+)
 from xaytune.storage.database import connect, write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, MigrationError, StorageError
+from xaytune.storage.journal import IdempotencyConflictError
 from xaytune.storage.migrations import applied_versions, available_migrations, migrate
 from xaytune.storage.repository import AggregateStore
 
@@ -24,6 +30,9 @@ __all__ = [
     "AggregateNotFoundError",
     "AggregateStore",
     "ConcurrentModificationError",
+    "ControlPlaneRepository",
+    "IdempotencyConflictError",
+    "UnknownOperationTargetError",
     "MigrationError",
     "StorageError",
     "applied_versions",

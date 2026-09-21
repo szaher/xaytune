@@ -1,7 +1,7 @@
 {
   "name": "xaytune-training-harness-spec",
   "generated_at": "2026-09-21T00:00:00+00:00",
-  "file_count": 59,
+  "file_count": 60,
   "files": [
     "01-product-and-scope.md",
     "02-architecture.md",
@@ -61,6 +61,7 @@
     "schemas/experiment.example.yaml",
     "schemas/sqlite-schema-migration-001.sql",
     "schemas/sqlite-schema-migration-002.sql",
+    "schemas/sqlite-schema-migration-003.sql",
     "schemas/training-execution-spec.example.json"
   ]
 }

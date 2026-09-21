@@ -210,7 +210,7 @@ Implement tables and revision-based persistence.
 Implement:
 
 - atomic aggregate transition + event + outbox persistence
-- `runtime_operations` in migration 001, with operation ID, typed target
+- `runtime_operations` in migration 002, with operation ID, typed target
   (`training-attempt` | `evaluation-attempt`), type, canonical `request_digest`,
   state, runtime reference and revision (ADR-013)
 - `RuntimeOperation` repository APIs to create, get by operation ID, list by
@@ -237,12 +237,15 @@ survives restart. No runtime is required for these persistence tests.
 
 ### PR-006a — minimal durable Action substrate
 
-Ships **migration 002** (`actions`, plus `runtime_operations.caused_by_action_id`).
+Ships **migration 003** (`actions`, plus `runtime_operations.caused_by_action_id`
+added together with its `REFERENCES actions(id)` -- SQLite cannot attach a
+foreign key to an existing column afterwards, so the column waits for its
+table).
 Both 001 and 002 must land before Phase 2, because `handle.cancel()` is public
 API there and ADR-013 cancellation needs a durable Action to hold the intent
 while the operation carries the effect. The split is sequencing, not
-optionality: 001 belongs to PR-005 and 002 to this PR, which is the order they
-land in.
+optionality: 001 belongs to PR-004, 002 to PR-005, and 003 to this PR, which is
+the order they land in.
 
 ADR-013 defines cancellation as `CancelExperiment → CancelRun → runtime cancel`,
 with the Action holding the *intent* while the operation holds the effect. Phase

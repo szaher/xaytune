@@ -259,7 +259,13 @@ Checkable, and checked in tests rather than assumed:
 1. A `RuntimeOperation`'s `target_id` exists in the table named by its
    `target_kind`. SQLite cannot enforce this across heterogeneous targets
    (ADR-013), so the repository does.
-2. An aggregate's `revision` equals the revision recorded by its latest event.
+2. An aggregate's `revision` equals the revision recorded by its latest
+   **state-transition** event. Not every event is one: observational events —
+   `MetricObserved`, `Heartbeat`, `CheckpointCommitted` and the rest of
+   ADR-014's stream — are recorded against the revision they were observed at
+   and do not advance it. A schema that enforced one event per revision would
+   make the second observation impossible and force a revision bump per metric,
+   turning provenance into state churn.
 3. Terminal records are immutable. A transition out of a terminal state is
    rejected, never silently ignored.
 4. No external side effect exists without a durable `INTENDED` record that
@@ -273,7 +279,7 @@ Checkable, and checked in tests rather than assumed:
    way of succeeding, and `FAILED`/`REJECTED` carry their reasons in the
    transition event and the policy decision instead. `SUCCEEDED` with
    `SUPERSEDED` is the cancellation race of ADR-013 §5 and is not a failure.
-   Migration 002 enforces the pairing with a table `CHECK`, so it is a
+   Migration 003 enforces the pairing with a table `CHECK`, so it is a
    persistent invariant rather than a repository convention.
 6. Outbox consumers publish events. **They never submit or cancel workloads** —
    an at-least-once outbox driving a runtime call would duplicate side effects,
@@ -299,6 +305,8 @@ Persistence is only as good as the tests that kill it at the wrong moment:
 10. an operation targeting an evaluation attempt behaves identically to one
     targeting a training attempt
 11. `RunRealization` rebuilt from events equals the stored projection
+11a. many observational events may share one aggregate revision, while the
+    latest state-transition event still matches the stored revision
 12. a lost runtime response leaves the operation unresolved, never `FAILED`
 
 ## Consequences
@@ -309,8 +317,8 @@ Persistence is only as good as the tests that kill it at the wrong moment:
 - The repository is opinionated. Callers cannot write state without an event, or
   request an external effect without durable intent, because the API does not
   offer those operations separately.
-- Band B is larger than it was: `runtime_operations` (migration 001) and
-  `actions` (migration 002) are both prerequisites for Phase 2 cancellation.
+- Band B is larger than it was: `runtime_operations` (migration 002) and
+  `actions` (migration 003) are both prerequisites for Phase 2 cancellation.
 - External sinks are eventually consistent through the outbox. That is a
   deliberate trade: the alternative is a distributed transaction with a system
   that may be down.

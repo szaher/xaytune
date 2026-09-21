@@ -93,7 +93,7 @@ def test_an_aliased_rename_reads_a_pr004_payload(seeded: dict[str, Any]) -> None
     assert renamed.candidate_fingerprint == node.training_fingerprint  # type: ignore[attr-defined]
 
 
-def test_the_boundary_round_trips_through_the_real_store(
+def test_a_rewritten_payload_converges_on_the_new_key(
     store: AggregateStore, connection: sqlite3.Connection, seeded: dict[str, Any]
 ) -> None:
     """PR-004 writes it, PR-007 reads it, transitions it, and writes it back.
@@ -101,6 +101,12 @@ def test_the_boundary_round_trips_through_the_real_store(
     The assertion that matters is the last one: the rewritten payload carries
     only the new key, so a database converges on the new spelling as its rows
     are next written rather than needing a backfill.
+
+    The write below is direct SQL rather than a repository call. The stand-in
+    PR-007 model is not one of the aggregate types the store maps, so it cannot
+    go through the typed writer -- and the property under test is the payload
+    encoding, not the write path. Naming this "through the real store" would
+    have claimed a path it does not take.
     """
     node_id = str(seeded["node"].id)
     model = _renamed_model(with_alias=True)

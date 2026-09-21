@@ -239,9 +239,12 @@ makes the pair unique.
 
 ## Consequences
 
-Two tables are added in PR-005: `runtime_operations` and its state transitions. The
-repository writes the operation record in the same transaction as the attempt, which is
-what makes the intent durable before the effect happens.
+PR-005 implements `runtime_operations` from migration 001 and records its state
+transitions in the existing domain event log, atomically with the outbox. No
+separate operation-transition table is required. The repository writes the
+INTENDED submit operation and request digest in the same transaction as the new
+attempt, which makes intent durable before the effect happens. PR-009 depends
+on these repository APIs; the journal is not deferred to a later migration.
 
 Runtime adapters gain `submit_or_get` and `lookup_operation`, and must declare whether
 they can report completed operations. That capability is not optional metadata — the

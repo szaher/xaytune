@@ -172,9 +172,32 @@ repository schema, not only PR-005's event integration.
 
 Implement tables and revision-based persistence.
 
-### PR-005 — event + outbox transaction
+### PR-005 — transactional events, outbox, and operation journal
 
-Integrate events/outbox atomically with transitions.
+Implement:
+
+- atomic aggregate transition + event + outbox persistence
+- `runtime_operations` in migration 001, with operation ID, attempt ID, type,
+  canonical `request_digest`, state, runtime reference and revision (ADR-013)
+- `RuntimeOperation` repository APIs to create, get by operation ID, list by
+  attempt ID, list unresolved operations, and transition with revision checks
+- operation transitions: INTENDED → SENT / CONFIRMED / FAILED;
+  SENT → CONFIRMED / FAILED; CONFIRMED and FAILED are terminal
+- atomic creation of a `RunAttempt` and its INTENDED submit operation, including
+  the request digest and their events/outbox records, before any runtime call
+- durable cancellation intent for an existing attempt through the same journal
+- primary-key operation lookup and indexes for attempt and unresolved-state queries
+
+An unknown submission outcome stays unresolved, not FAILED; reconcile it using
+ADR-013. Reusing an operation ID with the same request returns the existing
+record; changing its attempt, type or digest raises `IdempotencyConflict`.
+Operation transition history uses the domain event log, not a separate journal
+transition table. The outbox publishes events; it never dispatches runtime calls.
+
+Tests: crash rollback of attempt + intent + events + outbox as a unit; committed
+intent survives reopen; duplicate/conflicting operation IDs; legal/illegal and
+stale-revision transitions; unresolved-operation queries; cancellation intent
+survives restart. No runtime is required for these persistence tests.
 
 ### PR-006 — experiment graph
 
@@ -193,6 +216,7 @@ Phase exit:
 - experiment can be persisted
 - multiple nodes can exist
 - events are durable
+- operation intents, request digests and outbox records survive repository restart
 - **repository restart does not lose committed state or events** — a new process
   against the same database reloads every aggregate and event exactly as
   committed
@@ -237,6 +261,10 @@ Implement:
 - CapabilityDocument skeleton
 
 ### PR-009 — LocalRuntime
+
+Prerequisite: PR-005's operation journal and atomic attempt/intent APIs have
+landed. Persist intent before `submit_or_get`; runtime submission cannot use
+outbox delivery as a substitute for the journal (ADR-013).
 
 Subprocess + operation idempotency.
 

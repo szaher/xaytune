@@ -166,6 +166,13 @@ how many streams it has attached to this attempt because it is the thing that
 attaches, so `RunAttempt.telemetry_generation` is durable controller state and
 a fresh supervisor may safely start at sequence 0.
 
+Before starting or attaching a replacement telemetry supervisor, the
+controller/runtime adapter durably allocates the next generation if continuity
+was lost, or reuses the current generation if complete replay is available. It
+passes that assigned generation in the startup/attachment contract. The
+supervisor includes it unchanged in every `WorkerEvent` and allocates only the
+sequence within that generation.
+
 ```text
 RunAttempt        execution history
 telemetry stream  observability history
@@ -326,6 +333,8 @@ orders them through the RunAttempt state machine.
    only when the runtime restarts or replaces the workload.
 1d. `stream_generation` is assigned from durable controller-side state
    (`RunAttempt.telemetry_generation`); a supervisor never has to remember it.
+   The startup/attachment contract passes this assigned generation to the
+   supervisor, which emits it unchanged on every event.
 2. `sequence` is monotonic and gapless within a generation, starting at 0;
    `stream_generation` is monotonic within an attempt, starting at 0.
 3. Duplicate `(attempt_id, stream_generation, sequence)` is a no-op in every

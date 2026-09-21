@@ -1,7 +1,8 @@
 -- Migration 001 — INITIAL SUBSET, NOT THE TARGET SCHEMA.
 --
 -- This file covers only the aggregates Phase 1-2 needs: experiments, nodes,
--- edges, runs, attempts, events and the outbox. It is deliberately not the
+-- edges, runs, attempts, runtime operations, events and the outbox. PR-005
+-- implements the operation journal before PR-009 can submit. This is not the
 -- schema the spec as a whole calls for.
 --
 -- Still to come, each in its own migration, and each gated on the ADR that
@@ -14,7 +15,6 @@
 --   evaluations (results)       ADR-007, ADR-015 cache key
 --   checkpoints                 ADR-009, ADR-012 (carries the DataCursor)
 --   artifacts                   ADR-006
---   runtime_operations          ADR-013
 --   budget_ledger               09-agent-planner-policy-budget.md
 --   controller_leases           ADR-004
 --   worker_events               ADR-014 (the telemetry stream; the `events`
@@ -77,6 +77,28 @@ CREATE TABLE run_attempts (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- ADR-013: intent is committed with the attempt before a runtime call.
+-- Repository APIs validate transitions and revision CAS; operation transition
+-- history is appended atomically to events/outbox, not a separate table.
+CREATE TABLE runtime_operations (
+  id TEXT PRIMARY KEY NOT NULL,
+  attempt_id TEXT NOT NULL REFERENCES run_attempts(id),
+  type TEXT NOT NULL CHECK (type IN ('submit', 'cancel')),
+  request_digest TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('intended', 'sent', 'confirmed', 'failed')),
+  runtime_ref_json TEXT,
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_runtime_operations_attempt
+  ON runtime_operations(attempt_id);
+
+CREATE INDEX idx_runtime_operations_unresolved
+  ON runtime_operations(state, updated_at)
+  WHERE state IN ('intended', 'sent');
 
 CREATE TABLE events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,

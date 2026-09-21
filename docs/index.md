@@ -58,7 +58,8 @@ for the remaining work.
 
 ## Target architecture
 
-The diagram includes planned components, not only implemented features.
+Solid green boxes show the implemented foundation; dashed boxes show planned
+components. The runtime feedback path is separate from the path that submits work.
 
 ![Xaytune target architecture: experiment control plane, trainer compilation, capability and resilience resolution, runtime backends, and infrastructure.](assets/architecture-overview.svg)
 

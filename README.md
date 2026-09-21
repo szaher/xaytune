@@ -89,8 +89,9 @@ defines the remaining contracts and acceptance gates.
 ## Architecture
 
 The **target architecture** separates scientific intent, compilation, capability
-resolution, and execution. The image includes planned components; it is not a
-claim that every integration is implemented.
+resolution, and execution. Solid green boxes show the implemented foundation;
+dashed boxes show planned components. The runtime feedback path is separate
+from the path that submits work.
 
 ![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure.](docs/assets/architecture-overview.svg)
 

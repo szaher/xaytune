@@ -1,58 +1,94 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1390" viewBox="0 0 1200 1390" role="img" aria-labelledby="architecture-overview-title architecture-overview-desc">
-<title id="architecture-overview-title">One control plane. Multiple execution backends.</title>
-<desc id="architecture-overview-desc">Clients enter the experiment control plane. CandidateSpec passes to trainer compilers, TrainingExecutionSpec to capability and resilience resolution, and ResolvedExecutionPlan to runtime backends using submit_or_get. Runtime backends delegate to infrastructure. Training Hub is the preferred path to Kubeflow or KubeRay and Kueue.</desc>
-<defs><marker id="architecture-overview-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1240" viewBox="0 0 1600 1240" role="img" aria-labelledby="architecture-title architecture-description">
+<title id="architecture-title">Xaytune system architecture and implementation boundaries</title>
+<desc id="architecture-description">Planned experiment interfaces call the experiment control plane. Its controller, planning, policy, evaluation and recovery components use implemented domain models, experiment graph and Action records, backed by implemented SQLite aggregates, event/outbox transactions and RuntimeOperation journal. CandidateSpec passes to trainer compilation, TrainingExecutionSpec to capability and resilience resolution, and ResolvedExecutionPlan to runtime backends. Runtime backends delegate execution to infrastructure and return status, metrics and incidents to the controller. Solid green boxes mark foundations implemented after Band B; dashed boxes mark planned components. Existing native trainer code is retained, but its compiler integration is planned.</desc>
+<defs>
+<marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#34475d"/></marker>
+<marker id="feedback-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#187dc0"/></marker>
+</defs>
 <style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
-<rect width="1200" height="1390" fill="#f5f8fb"/>
-<text x="48" y="40" font-size="15" fill="#087f79" font-weight="700" text-anchor="start" class="">XAYTUNE  /  ARCHITECTURE SPECIFICATION</text>
-<text x="48" y="86" font-size="34" fill="#172b40" font-weight="700" text-anchor="start" class="">One control plane. Multiple execution backends.</text>
-<text x="48" y="119" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Experiment intent stays separate from trainer compilation and runtime execution.</text>
-<rect x="48" y="153" width="1104" height="94" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
-<rect x="68" y="177" width="5" height="46" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
-<text x="90" y="195" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">Interfaces</text>
-<text x="90" y="227" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Python SDK  ·  CLI  ·  Studio  ·  Coding agents</text>
-<path d="M 600 247 L 600 281" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
-<rect x="48" y="285" width="1104" height="266" rx="16" fill="#eaf6f3" stroke="#b7dcd5" stroke-width="1.5"/>
-<text x="76" y="324" font-size="27" fill="#087f79" font-weight="700" text-anchor="start" class="">Experiment control plane</text>
-<text x="76" y="354" font-size="20" fill="#52677b" font-weight="400" text-anchor="start" class="">ExperimentController coordinates durable, governed experiments</text>
-<text x="76" y="400" font-size="21" fill="#087f79" font-weight="700" text-anchor="start" class="">Scientific lineage</text>
-<text x="76" y="430" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">ExperimentGraph</text>
-<text x="76" y="459" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Provenance / Memory</text>
-<text x="438" y="400" font-size="21" fill="#087f79" font-weight="700" text-anchor="start" class="">Adaptive decisions</text>
-<text x="438" y="430" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Planner / SearchProvider</text>
-<text x="438" y="459" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Evaluation / DecisionEngine</text>
-<text x="800" y="400" font-size="21" fill="#087f79" font-weight="700" text-anchor="start" class="">Governance &amp; recovery</text>
-<text x="800" y="430" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">PolicyEngine / BudgetLedger</text>
-<text x="800" y="459" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Incident / RecoveryCoordinator</text>
-<text x="76" y="520" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Planning: rules · LLM proposals · search adapters (Ray Tune / Katib / Optuna)</text>
-<path d="M 600 551 L 600 616" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
-<rect x="465.0" y="566.5" width="270" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
-<text x="600" y="589.5" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">CandidateSpec</text>
-<rect x="48" y="620" width="1104" height="102" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
-<rect x="68" y="644" width="5" height="54" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
-<text x="90" y="662" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Trainer compilers</text>
-<text x="90" y="694" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">NativeCompiler  ·  TRLCompiler  ·  TorchtuneCompiler  ·  VerlCompiler</text>
-<path d="M 600 722 L 600 792" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
-<rect x="454.0" y="740.0" width="292" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
-<text x="600" y="763.0" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">TrainingExecutionSpec</text>
-<rect x="48" y="796" width="1104" height="102" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
-<rect x="68" y="820" width="5" height="54" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
-<text x="90" y="838" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Capability &amp; resilience resolution</text>
-<text x="90" y="870" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">CapabilityResolver  ·  ResilienceProvider  ·  Checkpoint contract</text>
-<path d="M 600 898 L 600 968" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
-<rect x="454.0" y="916.0" width="292" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
-<text x="600" y="939.0" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">ResolvedExecutionPlan</text>
-<rect x="48" y="972" width="1104" height="120" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
-<rect x="68" y="996" width="5" height="72" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
-<text x="90" y="1014" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">Runtime backends</text>
-<text x="90" y="1046" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">LocalRuntime  ·  RayTrainRuntime  ·  TrainingHubRuntime</text>
-<text x="90" y="1075" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">RuntimeBackend.submit_or_get(operation_id, plan)</text>
-<path d="M 600 1092 L 600 1130" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
-<rect x="48" y="1134" width="1104" height="188" rx="16" fill="#fff6ed" stroke="#ecd8c5" stroke-width="1.5"/>
-<text x="76" y="1174" font-size="25" fill="#ad591f" font-weight="700" text-anchor="start" class="">Platform / infrastructure</text>
-<text x="76" y="1210" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Local: subprocess / torchrun  ·  Ray: Ray Train / Jobs</text>
-<text x="76" y="1247" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Training Hub path: Kubeflow Trainer / KubeRay → Kueue</text>
-<text x="76" y="1287" font-size="18" fill="#52677b" font-weight="400" text-anchor="start" class="">Integrations land incrementally; this diagram describes the target architecture.</text>
-<text x="48" y="1366" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>
-<text x="1152" y="1366" font-size="14" fill="#52677b" font-weight="400" text-anchor="end" class="">Contracts and rollout status: see linked specification</text>
+<rect width="1600" height="1240" fill="#fff"/>
+
+<text x="60" y="45" font-size="17" fill="#18746c" font-weight="700" text-anchor="start" class="">XAYTUNE  /  SYSTEM ARCHITECTURE</text>
+<text x="60" y="95" font-size="38" fill="#172d45" font-weight="700" text-anchor="start" class="">Control the experiment. Delegate execution.</text>
+<text x="60" y="128" font-size="20" fill="#576a80" font-weight="400" text-anchor="start" class="">Target system with implementation status after Band B · 22 September 2026</text>
+<rect x="60" y="168" width="1480" height="78" rx="10" fill="#f3f6fa" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="800" y="201" font-size="17" fill="#576a80" font-weight="700" text-anchor="middle" class="">EXPERIMENT INTERFACES</text>
+<text x="800" y="230" font-size="23" fill="#172d45" font-weight="400" text-anchor="middle" class="">Python SDK  ·  CLI  ·  Studio  ·  Coding agents</text>
+<path d="M 515 246 L 515 291" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<text x="539" y="278" font-size="18" fill="#576a80" font-weight="400" text-anchor="start" class="">submit / attach / inspect</text>
+<rect x="60" y="295" width="930" height="343" rx="14" fill="#f4f8fc" stroke="#34475d" stroke-width="2"/>
+<text x="84" y="331" font-size="20" fill="#34475d" font-weight="700" text-anchor="start" class="">XAYTUNE EXPERIMENT CONTROL PLANE</text>
+<rect x="84" y="355" width="280" height="124" rx="10" fill="#fff" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="224.0" y="397" font-size="22" fill="#172d45" font-weight="700" text-anchor="middle" class="">ExperimentController</text>
+<text x="224.0" y="434" font-size="17" fill="#576a80" font-weight="400" text-anchor="middle" class="">Orchestration / reconciliation</text>
+<text x="224.0" y="461" font-size="14" fill="#65778d" font-weight="700" text-anchor="middle" class="">PLANNED</text>
+<rect x="384" y="355" width="286" height="124" rx="10" fill="#fff" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="527.0" y="397" font-size="22" fill="#172d45" font-weight="700" text-anchor="middle" class="">Planning &amp; governance</text>
+<text x="527.0" y="434" font-size="17" fill="#576a80" font-weight="400" text-anchor="middle" class="">Proposals / policy / budget</text>
+<text x="527.0" y="461" font-size="14" fill="#65778d" font-weight="700" text-anchor="middle" class="">PLANNED</text>
+<rect x="690" y="355" width="276" height="124" rx="10" fill="#fff" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="828.0" y="397" font-size="22" fill="#172d45" font-weight="700" text-anchor="middle" class="">Evaluation &amp; recovery</text>
+<text x="828.0" y="434" font-size="17" fill="#576a80" font-weight="400" text-anchor="middle" class="">Decisions / interventions</text>
+<text x="828.0" y="461" font-size="14" fill="#65778d" font-weight="700" text-anchor="middle" class="">PLANNED</text>
+<path d="M 364 417 L 380 417" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<path d="M 670 417 L 686 417" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<rect x="84" y="520" width="882" height="88" rx="10" fill="#e9f6ef" stroke="#198260" stroke-width="2"/>
+<text x="106" y="552" font-size="16" fill="#14714f" font-weight="700" text-anchor="start" class="">IMPLEMENTED FOUNDATION</text>
+<text x="106" y="584" font-size="23" fill="#172d45" font-weight="400" text-anchor="start" class="">Immutable domain  ·  Experiment DAG / lineage  ·  Action records</text>
+<path d="M 224 479 L 224 516" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<rect x="1120" y="295" width="420" height="343" rx="14" fill="#e9f6ef" stroke="#198260" stroke-width="2"/>
+<text x="1146" y="332" font-size="18" fill="#14714f" font-weight="700" text-anchor="start" class="">DURABLE STATE</text>
+<text x="1146" y="376" font-size="28" fill="#172d45" font-weight="700" text-anchor="start" class="">SQLite persistence</text>
+<text x="1146" y="416" font-size="22" fill="#172d45" font-weight="400" text-anchor="start" class="">Aggregates + revisions</text>
+<text x="1146" y="450" font-size="22" fill="#172d45" font-weight="400" text-anchor="start" class="">Atomic events + outbox</text>
+<text x="1146" y="484" font-size="22" fill="#172d45" font-weight="400" text-anchor="start" class="">RuntimeOperation journal</text>
+<text x="1146" y="518" font-size="22" fill="#172d45" font-weight="400" text-anchor="start" class="">Cancellation intent + outcomes</text>
+<text x="1146" y="564" font-size="18" fill="#14714f" font-weight="700" text-anchor="start" class="">Intent commits before runtime effects.</text>
+<text x="1146" y="607" font-size="14" fill="#14714f" font-weight="700" text-anchor="start" class="">IMPLEMENTED</text>
+<path d="M 990 447 L 1115 447" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<text x="1055" y="422" font-size="16" fill="#576a80" font-weight="400" text-anchor="middle" class="">Persist / load</text>
+<path d="M 305 638 L 305 770" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<rect x="195" y="679" width="220" height="36" rx="0" fill="#fff" stroke="#fff" stroke-width="2"/>
+<text x="305" y="704" font-size="21" fill="#654b9a" font-weight="700" text-anchor="middle" class="">CandidateSpec</text>
+<path d="M 1300 774 L 1300 690 L 850 690 L 850 644" stroke="#187dc0" stroke-width="2.5" fill="none" marker-end="url(#feedback-arrow)" stroke-dasharray="8 6"/>
+<text x="1115" y="677" font-size="20" fill="#187dc0" font-weight="700" text-anchor="middle" class="">Status · metrics · incidents</text>
+<rect x="60" y="774" width="460" height="172" rx="10" fill="#faf8fd" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="82" y="807" font-size="15" fill="#654b9a" font-weight="700" text-anchor="start" class="">COMPILE INTENT</text>
+<text x="82" y="846" font-size="26" fill="#172d45" font-weight="700" text-anchor="start" class="">Trainer compilation</text>
+<text x="82" y="884" font-size="20" fill="#34475d" font-weight="400" text-anchor="start" class="">Native / TRL / torchtune / verl</text>
+<text x="82" y="916" font-size="18" fill="#34475d" font-weight="400" text-anchor="start" class="">Output: TrainingExecutionSpec</text>
+<rect x="620" y="774" width="360" height="172" rx="10" fill="#faf8fd" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="642" y="807" font-size="15" fill="#654b9a" font-weight="700" text-anchor="start" class="">RESOLVE REQUIREMENTS</text>
+<text x="642" y="846" font-size="26" fill="#172d45" font-weight="700" text-anchor="start" class="">Capability resolution</text>
+<text x="642" y="884" font-size="20" fill="#34475d" font-weight="400" text-anchor="start" class="">Resilience / checkpoint contract</text>
+<text x="642" y="916" font-size="18" fill="#34475d" font-weight="400" text-anchor="start" class="">Output: ResolvedExecutionPlan</text>
+<rect x="1080" y="774" width="460" height="172" rx="10" fill="#f2f7fc" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="1102" y="807" font-size="15" fill="#2567ad" font-weight="700" text-anchor="start" class="">EXECUTE &amp; OBSERVE</text>
+<text x="1102" y="846" font-size="26" fill="#172d45" font-weight="700" text-anchor="start" class="">Runtime backends</text>
+<text x="1102" y="884" font-size="20" fill="#34475d" font-weight="400" text-anchor="start" class="">Local / Ray Train / Training Hub</text>
+<text x="1102" y="916" font-size="18" fill="#34475d" font-weight="400" text-anchor="start" class="">submit_or_get(operation_id, plan)</text>
+<path d="M 520 857 L 615 857" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<path d="M 980 857 L 1075 857" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<text x="300" y="975" font-size="16" fill="#576a80" font-weight="400" text-anchor="middle" class="">Existing trainer code retained; compiler adapter planned.</text>
+<path d="M 1310 946 L 1310 1015" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<text x="1336" y="985" font-size="17" fill="#576a80" font-weight="400" text-anchor="start" class="">launch / manage</text>
+<rect x="60" y="1020" width="1480" height="120" rx="12" fill="#fff8ef" stroke="#c99553" stroke-width="2"/>
+<text x="84" y="1054" font-size="17" fill="#956021" font-weight="700" text-anchor="start" class="">DELEGATED INFRASTRUCTURE &amp; RESILIENCE</text>
+<text x="84" y="1089" font-size="22" fill="#172d45" font-weight="700" text-anchor="start" class="">Local / PyTorch</text>
+<text x="84" y="1120" font-size="18" fill="#576a80" font-weight="400" text-anchor="start" class="">Subprocess · torchrun</text>
+<text x="430" y="1089" font-size="22" fill="#172d45" font-weight="700" text-anchor="start" class="">Ray</text>
+<text x="430" y="1120" font-size="18" fill="#576a80" font-weight="400" text-anchor="start" class="">Ray Train / Jobs</text>
+<text x="730" y="1089" font-size="22" fill="#172d45" font-weight="700" text-anchor="start" class="">Resilience provider</text>
+<text x="730" y="1120" font-size="18" fill="#576a80" font-weight="400" text-anchor="start" class="">TorchFT</text>
+<text x="1120" y="1089" font-size="22" fill="#172d45" font-weight="700" text-anchor="start" class="">Training Hub platform path</text>
+<text x="1120" y="1120" font-size="18" fill="#576a80" font-weight="400" text-anchor="start" class="">Kubeflow / KubeRay · Kueue</text>
+<rect x="60" y="1171" width="28" height="22" rx="4" fill="#e9f6ef" stroke="#198260" stroke-width="2"/>
+<text x="100" y="1188" font-size="17" fill="#172d45" font-weight="400" text-anchor="start" class="">Implemented foundation</text>
+<rect x="400" y="1171" width="28" height="22" rx="4" fill="#fff" stroke="#8393a6" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="440" y="1188" font-size="17" fill="#172d45" font-weight="400" text-anchor="start" class="">Planned component / integration</text>
+<path d="M 825 1182 L 877 1182" stroke="#34475d" stroke-width="2.5" fill="none" marker-end="url(#flow-arrow)"/>
+<text x="890" y="1188" font-size="17" fill="#172d45" font-weight="400" text-anchor="start" class="">Intent / execution</text>
+<path d="M 1150 1182 L 1202 1182" stroke="#187dc0" stroke-width="2.5" fill="none" marker-end="url(#feedback-arrow)" stroke-dasharray="8 6"/>
+<text x="1215" y="1188" font-size="17" fill="#172d45" font-weight="400" text-anchor="start" class="">Runtime feedback</text>
+<text x="60" y="1223" font-size="17" fill="#576a80" font-weight="400" text-anchor="start" class="">Repository recovery is implemented. End-to-end runtime and controller recovery are still planned.</text>
 </svg>

@@ -1,7 +1,7 @@
 {
   "name": "xaytune-training-harness-spec",
   "generated_at": "2026-09-21T00:00:00+00:00",
-  "file_count": 57,
+  "file_count": 58,
   "files": [
     "01-product-and-scope.md",
     "02-architecture.md",
@@ -44,6 +44,7 @@
     "adrs/ADR-014-worker-telemetry-protocol.md",
     "adrs/ADR-015-durable-evaluation-lifecycle.md",
     "adrs/ADR-016-specs-versus-implementations.md",
+    "adrs/ADR-017-reuse-policy.md",
     "agent-prompts/00-architecture-review-prompt.md",
     "agent-prompts/01-phase1-core-domain.md",
     "agent-prompts/02-sqlite-events.md",

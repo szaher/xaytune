@@ -81,9 +81,17 @@ CREATE TABLE run_attempts (
 -- ADR-013: intent is committed with the attempt before a runtime call.
 -- Repository APIs validate transitions and revision CAS; operation transition
 -- history is appended atomically to events/outbox, not a separate table.
+--
+-- The target is typed rather than a foreign key, because evaluation attempts use
+-- this same journal (ADR-015 section 4) and live in a different table. There is
+-- deliberately no generic Execution aggregate: what training and evaluation
+-- share is the external side effect, not the domain object. The repository
+-- enforces that target_id exists in the table named by target_kind.
 CREATE TABLE runtime_operations (
   id TEXT PRIMARY KEY NOT NULL,
-  attempt_id TEXT NOT NULL REFERENCES run_attempts(id),
+  target_kind TEXT NOT NULL
+    CHECK (target_kind IN ('training-attempt', 'evaluation-attempt')),
+  target_id TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('submit', 'cancel')),
   request_digest TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('intended', 'sent', 'confirmed', 'failed')),
@@ -93,8 +101,8 @@ CREATE TABLE runtime_operations (
   updated_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_runtime_operations_attempt
-  ON runtime_operations(attempt_id);
+CREATE INDEX idx_runtime_operations_target
+  ON runtime_operations(target_kind, target_id);
 
 CREATE INDEX idx_runtime_operations_unresolved
   ON runtime_operations(state, updated_at)

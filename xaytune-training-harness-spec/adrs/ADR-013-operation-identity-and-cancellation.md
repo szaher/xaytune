@@ -41,9 +41,14 @@ is a difference between desired and observed state, and it needs somewhere to li
 ### 1. Every external effect has a durable operation record
 
 ```python
+class RuntimeOperationTarget(FrozenDomainModel):
+    kind: Literal["training-attempt", "evaluation-attempt"]
+    id: str
+
+
 class RuntimeOperation(BaseModel):
     id: OperationId
-    attempt_id: RunAttemptId
+    target: RuntimeOperationTarget
 
     type: Literal["submit", "cancel"]
     request_digest: str
@@ -54,6 +59,35 @@ class RuntimeOperation(BaseModel):
     created_at: datetime
     updated_at: datetime
 ```
+
+#### The target is typed, not a `RunAttemptId`
+
+An earlier version of this record held `attempt_id: RunAttemptId`. That made the
+operation journal training-only, which contradicts ADR-015 §4 — evaluation
+submission is supposed to go through `submit_or_get` "exactly as training does",
+and an `EvaluationAttemptId` will not fit in a column that references
+`run_attempts(id)`.
+
+The fix is a typed target reference, **not** a generic `Execution` aggregate.
+ADR-015 §2 deliberately declines to unify training and evaluation as domain
+objects, and nothing here reverses that: what is shared is the *external side
+effect* — one submission, one cancellation, one idempotency key — not the
+domain meaning of the workload. A runtime does not care which aggregate asked.
+
+The cost is that the database loses a foreign key, because the target rows live
+in different tables. That is accepted, and the alternative was worse:
+
+```sql
+run_attempt_id        TEXT REFERENCES run_attempts(id),
+evaluation_attempt_id TEXT REFERENCES evaluation_attempts(id),
+CHECK ((run_attempt_id IS NULL) != (evaluation_attempt_id IS NULL))
+```
+
+which buys referential integrity and pays for it with a schema migration for
+every new workload kind — and ADR-015 §2 already names data preparation and
+reward-model scoring as the likely third and fourth. Referential integrity for
+the target is enforced by the repository instead, and `target_kind` is
+constrained by `CHECK` so an unknown kind cannot be written.
 
 The record is written **before** the call and updated after it:
 
@@ -87,10 +121,47 @@ def lookup_operation(operation_id: OperationId) -> OperationOutcome | None
   confused about what it asked for, and guessing would be worse than stopping.
 - **After a restart** — `lookup_operation` answers what became of it.
 
-`request_digest` covers what the runtime would actually execute: the
-`ExecutionFingerprint` plus the operation's own parameters. It must be produced by the
-canonical typed encoder from ADR-006, not by `hash()` or a naive JSON dump, or the same
-request will appear to differ between processes.
+#### `request_digest` hashes the external request, not the semantic fingerprint
+
+```text
+request_digest = hash(canonical(operation_type, ResolvedExecutionPlan))
+```
+
+covering everything that determines the side effect:
+
+```text
+entrypoint                  input refs
+arguments                   output refs
+candidate fingerprint       resource requirements
+compiler identity           checkpoint contract
+container digest            telemetry contract
+dependency lock             runtime options
+non-secret environment      secret *references* and version ids
+```
+
+Secrets are referenced, never hashed by value — a digest that changes when a
+credential rotates would turn a routine rotation into an `IdempotencyConflict`,
+and a digest computed *over* a secret leaks it into a durable record (ADR-016).
+
+An earlier version defined this as "the `ExecutionFingerprint` plus the
+operation's own parameters". That conflates two different questions:
+
+```text
+ExecutionFingerprint   are these executions scientifically/runtime equivalent?
+request_digest         is this literally the same external side-effect request?
+```
+
+`ExecutionFingerprint` covers compiler, framework, code, runtime, GPU type,
+world size and topology. Two submissions can agree on every one of those and
+still differ in entrypoint, arguments, dataset or output location — so deriving
+the idempotency key from it can return the *original* workload for a request
+that was not the same request. That is the one failure mode get-or-create exists
+to prevent, arriving through the key rather than through the call.
+
+It must be produced by the canonical typed encoder from ADR-006, not by `hash()`
+or a naive JSON dump, or the same request will appear to differ between
+processes. Using that encoder is all `ExecutionFingerprint` and `request_digest`
+share.
 
 ### 3. `lookup_operation` must be able to answer "it already finished"
 
@@ -236,6 +307,19 @@ makes the pair unique.
   alive, then it is adopted rather than relaunched — matched on PID **and** start time.
 - **AC-11.** Given a recorded PID that has been recycled by an unrelated process, when
   the daemon reconciles, then it does not adopt it.
+
+### 7. Sequencing: the Action substrate comes before cancellation
+
+Cancellation as defined above needs a durable `Action` to hold the intent while
+the `RuntimeOperation` carries the effect. `handle.cancel()` is public API from
+the compile/execute phase onwards, so the Action aggregate, its state machine
+and its repository are **band B work** (PR-006a), not part of the later policy
+phase.
+
+Only the substrate and the three cancellation action types are needed that
+early. `PolicyEngine`, approvals, budget authorization and every mutating action
+type stay where they were: those exist to answer *may this happen*, which
+cancellation does not ask.
 
 ## Consequences
 

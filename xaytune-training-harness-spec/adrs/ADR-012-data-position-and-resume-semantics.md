@@ -81,6 +81,29 @@ transformation and any distributed sharding. Two runs with the same
 `dataset_fingerprint` and different ordering consume different data in different order
 and must not be treated as resumable into one another.
 
+#### The cursor advances on consumption, not on prefetch
+
+A dataloader runs ahead of training. Sampled, prefetched and consumed are three
+different positions, and only the last one is true:
+
+```text
+sampled      1 2 3 4 5 6 7 8 9 10
+prefetched                   9 10      <- in a worker queue, never seen by the model
+consumed     1 2 3 4 5 6 7 8
+                              ↑
+                    cursor = 9
+```
+
+**The durable cursor is the next sample the training step has not yet consumed**,
+where consumed means it contributed to a gradient in a committed optimizer step.
+Advancing on the sampler or prefetch position would silently skip every in-flight
+sample on resume — data loss that looks exactly like a correct resume, since both
+the loss curve and the step count continue plausibly.
+
+This interacts with §3: at an optimizer-step boundary the accumulation window is
+closed, so "consumed" is unambiguous. Mid-window it is not, which is a second
+reason checkpoints are taken at boundaries.
+
 ### 2. Checkpoints capture the whole resumable state
 
 A checkpoint that omits any of these cannot support
@@ -103,13 +126,46 @@ RNG state, captured not re-seeded:
     Python random
     NumPy
     Torch CPU
-    Torch accelerator (CUDA / MPS)
+    per worker:
+        logical_worker_id
+        accelerator RNG state (CUDA / MPS)
+        dataloader worker RNG state
 
 applied intervention state (ADR-011)
 ```
 
 RNG **state** is captured and restored. Re-seeding from the original seed is not a
 resume; it restarts the stream.
+
+RNG state is **per worker**, not global. A distributed run has one accelerator
+stream per rank and one more per dataloader worker; capturing only the driver's
+leaves every other stream restarting from its seed. Each is keyed by a logical
+worker id rather than a physical rank, so the mapping survives a restart onto
+different hardware — and where it cannot be mapped, AC-10 applies and the resume
+is rejected rather than re-partitioned.
+
+```python
+class RNGState(FrozenDomainModel):
+    python: bytes
+    numpy: bytes
+    torch_cpu: bytes
+    workers: list[WorkerRNGState]     # logical_worker_id, accelerator, dataloader
+```
+
+#### `EXACT` is a claim about data, not about arithmetic
+
+> `DataResume.EXACT` guarantees exact data continuation: the next sample consumed
+> is the next unconsumed sample, with nothing replayed and nothing skipped. It
+> does **not** guarantee bitwise-identical numerics after a change of micro-batch
+> size, world size or topology.
+
+Reduction order changes with batch shape and device count, and floating-point
+addition is not associative, so a resumed run can diverge numerically from an
+uninterrupted one while consuming exactly the same data in exactly the same
+order. That is a property of the arithmetic, not a defect in the resume — but a
+provenance record that says `EXACT` without saying which kind of exactness
+invites the stronger reading. Open question #8 tracks bitwise reproducibility as
+a separate concern; it is named here because this is where the claim is made.
 
 ### 3. Checkpoints are taken at optimizer-step boundaries
 
@@ -212,6 +268,12 @@ provider-specific support. Absent it, those sources are ineligible for adaptive 
 - **AC-6.** Given a dataset that cannot express a sample offset, when a cursor is
   requested, then the capability is reported as absent — never defaulted to a batch
   index.
+- **AC-6a.** Given a dataloader with prefetch depth N, when a checkpoint is taken,
+  then the cursor names the next **unconsumed** sample, and the N prefetched but
+  unconsumed samples are consumed after resume rather than skipped.
+- **AC-6b.** Given a resume claiming `EXACT`, when the micro-batch size or world
+  size has changed, then the guarantee recorded is still `EXACT` for data and the
+  provenance record does **not** claim bitwise-identical numerics.
 
 ### Sampler, ordering and RNG
 
@@ -225,6 +287,9 @@ provider-specific support. Absent it, those sources are ineligible for adaptive 
 - **AC-9.** Given a distributed run, when it resumes with the same world size, then each
   rank resumes its own shard at the right offset and no sample is consumed twice across
   ranks.
+- **AC-9a.** Given a distributed run with dataloader workers, when it resumes, then
+  every accelerator and dataloader-worker RNG stream continues from its captured
+  state — verified per logical worker, not only for the driver.
 - **AC-10.** Given a resume with a **changed** world size, when the cursor cannot be
   re-sharded, then resume is rejected rather than silently re-partitioned.
 
@@ -266,8 +331,10 @@ provider-specific support. Absent it, those sources are ineligible for adaptive 
 ### The current trainer needs real work
 
 - `loop.py` must stop resuming on batch index and consume a cursor instead.
-- `save_checkpoint()` gains cursor, sampler, ordering and RNG state, plus the training
-  position and applied interventions.
+- `save_checkpoint()` gains cursor, sampler, ordering and per-worker RNG state, plus the
+  training position and applied interventions.
+- The dataloader must expose a consumption position distinct from its sampler
+  position, which most prefetching loaders do not do today.
 - `seed_all()` stays for run start, but resume must restore captured RNG state instead
   of re-seeding.
 - The dataloader must be constructed from an explicit, seeded generator so the ordering

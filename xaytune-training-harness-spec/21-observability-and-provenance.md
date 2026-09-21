@@ -135,7 +135,9 @@ xaytune.recovery_count
 Every promoted artifact should be able to export the following. Note the three
 separate identity documents: `candidate-spec.json` is what was *declared*,
 `run-realization.json` is what actually *happened* — the ordered intervention
-applications that ADR-011 hashes into `RunRealizationFingerprint` — and
+applications that ADR-011 hashes into `RunHistoryFingerprint`, with
+`ArtifactLineageFingerprint` covering only the trajectory the artifact descends
+from — and
 `execution-plan.json` is *how* it was run. A candidate spec alone no longer
 represents the scientific result, because two runs of the same candidate can
 have different realizations.

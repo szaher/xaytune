@@ -180,8 +180,11 @@ state (ADR-011). Three consequences for the schema:
 
 - `event.sequence` is the canonical order. `TrainingPosition` is recorded alongside it
   but is not monotonic, because a restore rewinds it.
-- `RunRealizationFingerprint` hashes the ordered applications, so a run that re-applied
+- `RunHistoryFingerprint` hashes the ordered applications, so a run that re-applied
   an intervention after a rollback is distinguishable from one that did not.
+  `ArtifactLineageFingerprint` hashes only the applications on the trajectory the
+  artifact actually descends from, so discarded work does not change the identity
+  used for trajectory reuse.
 - `RunRealization` is a projection over these events. The event log is authoritative and
   the projection must be recomputable from it; a stored projection that disagrees with a
   rebuild is a provenance bug.

@@ -5,8 +5,9 @@ Implement:
 - CandidateSpec, with TrainingSpec as its training component, and the SFT model
   (TrainingSpec holds the training program only -- model and data are siblings of
   it on CandidateSpec, and seed belongs to Run)
-- CandidateFingerprint and RunRealizationFingerprint (ADR-011; note seed belongs to
-  the realization, not the candidate)
+- CandidateFingerprint, RunHistoryFingerprint and ArtifactLineageFingerprint
+  (ADR-011; note seed belongs to the run, not the candidate, and that history
+  includes rolled-back work while artifact lineage does not)
 - TrainerCompiler protocol
 - TrainingExecutionSpec
 - RuntimeBackend protocol, with `submit_or_get(operation_id, plan)` and

@@ -117,15 +117,21 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     out; without it a node can sit in `EVALUATING` forever with nothing to observe
   - ADR-016 separates persisted `*Spec` objects from live implementations, which
     is what makes a controller restartable
+  - ADR-017 holds the reuse-policy question split out of ADR-006; it gates band G
+    and nothing earlier, because a reuse rule is a query over fingerprints that
+    already exist
 
   ADR status is **not** a single block. It is:
 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-011 – ADR-016 |
-  | Superseded in substance | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-001, ADR-004 – ADR-009 |
+  | Accepted by decision | ADR-001, ADR-006, ADR-007, ADR-011 – ADR-016 |
+  | Superseded | ADR-003 → ADR-011 (retained for its history) |
+  | Still `Proposed` | ADR-004, ADR-005, ADR-008, ADR-009, ADR-017 |
+
+  No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
+  was split into ADR-017 rather than leaving one document in two states.
 
   `15-implementation-plan.md` §Phase 0 holds the same table with the work each
   still-open ADR blocks. **ADR-005 is the live one** — band B cannot start until

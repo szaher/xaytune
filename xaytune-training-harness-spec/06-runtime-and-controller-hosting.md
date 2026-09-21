@@ -18,7 +18,9 @@ class RuntimeBackend(Protocol):
         # Get-or-create, never create (ADR-013). Re-submitting the same
         # operation_id returns the existing RuntimeRef; it never starts a
         # second workload. operation_id is the FIRST parameter because it is
-        # the identity of the operation, not a tag on it.
+        # the identity of the operation, not a tag on it. The same method
+        # submits an evaluation attempt: the operation's target is typed
+        # (ADR-013), so the runtime needs no training-specific knowledge.
 
     async def lookup_operation(
         self,
@@ -38,15 +40,15 @@ class RuntimeBackend(Protocol):
         self,
         runtime_ref: RuntimeRef,
         cursor: StreamCursor | None = None,
-    ) -> AsyncIterator[WorkerEvent]: ...
-        # Yields canonical WorkerEvents per ADR-014
+    ) -> AsyncIterator[RuntimeEventEnvelope]: ...
+        # Yields canonical envelopes per ADR-014
         # (xaytune.telemetry/v1alpha1), in increasing (generation, sequence)
         # order. cursor is the last position the controller DURABLY RECORDED,
         # not the last it received -- an event received and then lost in a
         # crash must be redelivered. It is StreamCursor(generation, sequence):
         # two integers with defined meaning, never an opaque provider token.
         # Delivery is at-least-once; handlers must be idempotent on
-        # (attempt_id, stream_generation, sequence). A runtime that cannot
+        # (target, stream_generation, sequence). A runtime that cannot
         # replay declares supports_event_replay: false and reconnects are
         # treated as gaps.
 
@@ -267,7 +269,7 @@ The core must not assume Kubernetes identifiers.
 ## 8. Runtime events
 
 These are what the *backend* observes about the workload, and they are distinct
-from the `WorkerEvent` telemetry stream of ADR-014. They stay available through
+from the `RuntimeEventEnvelope` telemetry stream of ADR-014. They stay available through
 `get_status()` when telemetry is degraded, and that independence is what makes
 reconciliation possible at all.
 

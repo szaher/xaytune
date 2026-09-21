@@ -161,7 +161,7 @@ moving `seed` off the candidate fixed for training.
 
 The cache key additionally requires a **terminal** `EvaluationRun`. An in-flight
 run must not be matched against, for the same reason a
-`RunRealizationFingerprint` is provisional until terminal (ADR-011).
+a run's fingerprints are provisional until terminal (ADR-011).
 
 ### 4. Evaluation submission uses the operation journal
 
@@ -170,14 +170,49 @@ as training does (ADR-013). A controller crash between submitting an evaluation
 and persisting its `RuntimeRef` is the same problem with the same solution, and
 it would be strange to solve it twice.
 
+For that to be true rather than aspirational, the operation record must be able
+to *name* an evaluation attempt. ADR-013's `RuntimeOperation` therefore carries
+a typed target:
+
+```python
+RuntimeOperationTarget(kind="evaluation-attempt", id=evaluation_attempt_id)
+```
+
+This is not the generic `Execution` aggregate that §2 declines to build. The
+journal records external side effects — one submission, one cancellation, one
+idempotency key — and a runtime does not care which aggregate asked. Sharing
+the effect is not sharing the domain object.
+
 ### 5. A node blocked on evaluation is visible as such
 
-`ExperimentNode.EVALUATING` must correspond to at least one non-terminal
-`EvaluationRun`. If none exists, the node is stuck and the controller must
-raise an incident rather than wait.
+The obvious form of this invariant — `EVALUATING` implies at least one
+non-terminal `EvaluationRun`, else raise an incident — is too strict, because
+ordinary completion passes through a state that violates it:
 
-This invariant is the point of the whole ADR. It is checkable, and it converts
-the silent-stall failure into a detected one.
+```text
+EvaluationRun -> SUCCEEDED
+controller holds the result
+node still EVALUATING, not yet transitioned to DECIDING
+        ↑
+  zero non-terminal runs, and nothing is wrong
+```
+
+Raising an incident there would make every successful evaluation look like
+corruption for the width of one transaction. So it is a **reconciliation**
+invariant, evaluated as three cases rather than one:
+
+| At reconciliation, a node in `EVALUATING` | Meaning | Action |
+|---|---|---|
+| **A.** at least one required `EvaluationRun` is non-terminal | in progress | wait |
+| **B.** all required runs terminal, required results present | finished, node lagging | reconcile the node to `DECIDING` |
+| **C.** neither | stalled — runs missing, or terminal without results | raise `EvaluationStalled` |
+
+Case B is the one that makes this work: the reconciler *repairs* the lag instead
+of reporting it, so a controller that died between the run's terminal
+transition and the node's cannot leave the node stuck.
+
+Case C is still the point of the whole ADR. It is checkable, and it converts the
+silent-stall failure into a detected one.
 
 ## Consequences
 
@@ -196,8 +231,10 @@ the silent-stall failure into a detected one.
    `CHECKPOINTING` or `RECOVERING` state.
 2. `EvaluationAttemptStatus` includes `PREEMPTED`, reachable from `QUEUED`
    onwards.
-3. `ExperimentNode.EVALUATING` implies a non-terminal `EvaluationRun`; the
-   absence of one raises an incident.
+3. Reconciling a node in `EVALUATING` resolves to exactly one of: wait (a
+   required run is non-terminal), advance it to `DECIDING` (all required runs
+   terminal with results), or raise `EvaluationStalled`. A successful evaluation
+   awaiting its node transition never raises an incident.
 4. Every evaluator declares an `EvaluatorDeterminism` class. A `DETERMINISTIC`
    result is reused on `(artifact digest, EvaluationFingerprint)`; a
    `STOCHASTIC` one is reused only where `EvaluationReusePolicy` permits it;

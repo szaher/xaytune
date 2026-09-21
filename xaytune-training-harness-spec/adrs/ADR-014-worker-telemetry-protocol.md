@@ -13,7 +13,7 @@ schema) and PR-011 (`LocalRuntime`).
 `xaytune.telemetry/v1alpha1`, and `RuntimeBackend.watch()` returned an
 undefined `AsyncIterator[RuntimeEvent]`. Neither the event type nor the
 stream's semantics were defined anywhere. This ADR defines them, and
-`watch()` now returns `AsyncIterator[WorkerEvent]`.
+`watch()` now returns `AsyncIterator[RuntimeEventEnvelope]`.
 
 This is not a gap in documentation. It is a gap in the contract that everything
 downstream depends on:
@@ -37,24 +37,48 @@ that knows what happened.
 
 ### 1. The event envelope
 
+The envelope is workload-neutral; the payload is not.
+
 ```python
-class WorkerEvent(FrozenDomainModel):
+class RuntimeEventEnvelope(FrozenDomainModel):
     protocol_version: str        # "xaytune.telemetry/v1alpha1"
     event_id: str                # ULID-shaped, unique per stream position
-    run_id: RunId
-    attempt_id: AttemptId
-    stream_generation: int       # which telemetry stream of this attempt (see 1a)
+
+    target: RuntimeOperationTarget   # ADR-013: training-attempt | evaluation-attempt
+
+    stream_generation: int       # which telemetry stream of this target (see 1a)
     sequence: int                # monotonic within the generation, from 0, no gaps
     emitted_at: datetime         # worker clock, advisory only
-    type: WorkerEventType
-    payload: FrozenDict
+
+    payload: RuntimeEventPayload
 ```
+
+```python
+RuntimeEventPayload = TrainingEventPayload | EvaluationEventPayload
+```
+
+An earlier version of this envelope carried `run_id` and `attempt_id` directly
+and a training-shaped `type`. That made the protocol training-only, while
+ADR-015 claimed it applied to evaluation unchanged — which it could not, because
+an `EvaluationAttempt` has no `run_id`, produces no checkpoints and never emits
+`TrainingStarted`.
+
+The split is the point: **sharing an execution transport does not require
+sharing a domain aggregate.** Delivery, ordering, deduplication, cursors,
+generations and gap detection are properties of a stream and are identical for
+both. What differs is what the events *say*, and that lives in the payload. This
+keeps ADR-015 §2's refusal to introduce `Execution`/`ExecutionAttempt` intact:
+there is a shared envelope, not a shared aggregate.
+
+`target` is the same typed reference ADR-013 uses for the operation journal, so
+an event stream and the operation that started it name their subject the same
+way.
 
 `sequence` is the contract, not `emitted_at`. Worker clocks are not
 trustworthy — they skew, they jump, and under a distributed launcher there are
 several of them. Ordering, deduplication and gap detection all key on
-`(attempt_id, stream_generation, sequence)`, ordered lexicographically: a
-higher generation is always later than any sequence of a lower one.
+`(target, stream_generation, sequence)`, ordered lexicographically: a higher
+generation is always later than any sequence of a lower one.
 
 ### 1a. Exactly one process assigns `sequence`
 
@@ -64,18 +88,18 @@ coordinate before every event, telemetry has put a distributed sequencer on the
 training hot path. Neither is acceptable, so the ownership is stated rather than
 left to the implementer.
 
-**One telemetry supervisor per attempt assigns the sequence.** In a distributed
+**One telemetry supervisor per target assigns the sequence.** In a distributed
 launcher that is the driver — rank 0 or the equivalent coordinator:
 
 ```text
-rank workers          raw local signals (not WorkerEvents)
+rank workers          raw local signals (not envelopes)
       ↓
-telemetry supervisor  assigns attempt-scoped sequence, emits WorkerEvent
+telemetry supervisor  assigns target-scoped sequence, emits the envelope
       ↓
-controller            dedups on (attempt_id, stream_generation, sequence)
+controller            dedups on (target, stream_generation, sequence)
 ```
 
-Only the supervisor emits canonical `WorkerEvent`s. Ranks report to it in
+Only the supervisor emits canonical envelopes. Ranks report to it in
 whatever form the runtime finds convenient; that channel is **not** part of this
 protocol and runtimes may implement it differently.
 
@@ -95,7 +119,7 @@ Consequences worth stating plainly:
 A replacement supervisor that continues the same stream **must recover the next
 sequence from durable or runtime-retained state.** Restarting at 0 within the
 same generation would re-issue keys the controller has already applied, and
-since deduplication is on `(attempt_id, stream_generation, sequence)`, the
+since deduplication is on `(target, stream_generation, sequence)`, the
 controller would silently discard the new events as duplicates — the worst
 available outcome, because it looks like silence rather than an error.
 
@@ -170,7 +194,7 @@ Before starting or attaching a replacement telemetry supervisor, the
 controller/runtime adapter durably allocates the next generation if continuity
 was lost, or reuses the current generation if complete replay is available. It
 passes that assigned generation in the startup/attachment contract. The
-supervisor includes it unchanged in every `WorkerEvent` and allocates only the
+supervisor includes it unchanged in every envelope and allocates only the
 sequence within that generation.
 
 ```text
@@ -194,15 +218,36 @@ that a generation counter resolves for free.
 
 ### 2. Event families
 
+Some families are properties of any workload, so they live on the envelope side
+and are emitted by both:
+
 ```text
-lifecycle     WorkerReady, TrainingStarted, TrainingCompleted, TrainingFailed
-progress      StepCompleted, MetricObserved, Heartbeat
-checkpoint    CheckpointStarted, CheckpointCommitted
+stream        WorkerReady, Heartbeat
 incident      IncidentObserved
 artifact      ArtifactProduced
 ```
 
-`CheckpointCommitted` is the load-bearing one. It must carry the full
+`TrainingEventPayload`:
+
+```text
+lifecycle     TrainingStarted, TrainingCompleted, TrainingFailed
+progress      StepCompleted, MetricObserved
+checkpoint    CheckpointStarted, CheckpointCommitted
+```
+
+`EvaluationEventPayload`:
+
+```text
+lifecycle     EvaluationStarted, EvaluationCompleted, EvaluationFailed
+progress      EvaluationProgress, MetricObserved
+```
+
+Evaluation has no checkpoint family because it produces no checkpoints — the
+same reason its state machine has no `CHECKPOINTING` (ADR-015 §1). A payload
+union rather than one flat enum is what makes that absence a type error instead
+of a convention.
+
+`CheckpointCommitted` is the load-bearing training payload. It must carry the full
 `DataCursor` and `ResumeGuarantee` of ADR-012, because it is the only point at
 which the controller learns a resumable position exists. A checkpoint the
 controller does not know about cannot be resumed from, however valid it is on
@@ -216,7 +261,7 @@ how a recoverable condition becomes a lost run.
 ### 3. Delivery semantics
 
 **At-least-once, with the controller deduplicating on
-`(attempt_id, stream_generation, sequence)`.** Exactly-once delivery across a process boundary
+`(target, stream_generation, sequence)`.** Exactly-once delivery across a process boundary
 that can fail on either side is not available, and pretending otherwise puts
 the burden in the wrong place. The worker may re-emit after a reconnect; the
 controller must be idempotent.
@@ -254,7 +299,7 @@ silently assuming nothing happened while it was away.
 
 Gap detection rests on an ordering guarantee, so state it first:
 
-> `RuntimeBackend.watch()` MUST yield canonical `WorkerEvent`s in increasing
+> `RuntimeBackend.watch()` MUST yield canonical envelopes in increasing
 > `(stream_generation, sequence)` order. The runtime adapter buffers out-of-order transport delivery
 > until the missing sequence arrives, or until the replay/gap policy determines
 > it is unavailable.
@@ -318,10 +363,12 @@ orders them through the RunAttempt state machine.
 
 ## Acceptance criteria
 
-1. Every `WorkerEvent` carries `protocol_version`, `event_id`, `run_id`,
-   `attempt_id`, `stream_generation`, `sequence` and `type`.
+1. Every `RuntimeEventEnvelope` carries `protocol_version`, `event_id`,
+   `target`, `stream_generation`, `sequence` and a typed `payload`.
+1e. The envelope is workload-neutral: an evaluation attempt streams through it
+   without a `run_id`, a checkpoint family or a training lifecycle event.
 1a. Exactly one telemetry supervisor per attempt assigns `sequence`; individual
-   ranks never emit `WorkerEvent`s directly.
+   ranks never emit envelopes directly.
 1b. A replacement supervisor continues the current generation only if it resumes
    the sequence from durable state **and** can replay every event after the
    controller's durable cursor. If it cannot do both, the controller advances
@@ -337,7 +384,7 @@ orders them through the RunAttempt state machine.
    supervisor, which emits it unchanged on every event.
 2. `sequence` is monotonic and gapless within a generation, starting at 0;
    `stream_generation` is monotonic within an attempt, starting at 0.
-3. Duplicate `(attempt_id, stream_generation, sequence)` is a no-op in every
+3. Duplicate `(target, stream_generation, sequence)` is a no-op in every
    handler.
 4. `CheckpointCommitted` carries a complete `DataCursor` and `ResumeGuarantee`
    per ADR-012.

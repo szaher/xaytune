@@ -80,9 +80,21 @@ CandidateSpec                     Run
 Initial `TrainingKind`:
 
 - SFT
-- PRETRAIN
+- CONTINUED_PRETRAIN
 - DPO
 - GRPO
+
+`CONTINUED_PRETRAIN`, not `PRETRAIN`. The README is explicit that Xaytune is not
+a frontier-scale pretraining runtime, and an enum member reading `PRETRAIN` in
+the control-plane API invites exactly the opposite conclusion — an agent
+choosing a training kind sees it as a first-class supported workload. The name
+that matches the product boundary is continued pretraining, also called domain-
+adaptive pretraining: adapting an existing base model on new corpora, which is
+post-training in everything but loss function.
+
+The legacy `xaytune.pretrain(...)` entry point keeps its name (ADR-016 and
+`19-backward-compatibility.md`); this is the new control-plane vocabulary, not a
+rename of the existing API.
 
 ## 3. TrainerCompiler
 
@@ -159,7 +171,7 @@ class TrainingExecutionSpec(BaseModel):
 
 The plan carries `candidate_fingerprint`, **not** a realization fingerprint.
 At compile time no trajectory exists yet: the run has not started, no
-intervention has been applied, and `RunRealizationFingerprint` is provisional
+intervention has been applied, and both run fingerprints are provisional
 until the run reaches a terminal state (ADR-011). The execution plan can only
 record which candidate it was compiled from.
 
@@ -236,13 +248,28 @@ What was declared — the scientific identity of the candidate (ADR-011):
 two replicates differing only by seed are the same scientific candidate run twice, and
 folding seed into candidate identity would make the replicate concept meaningless.
 
-### RunRealizationFingerprint
+### RunHistoryFingerprint and ArtifactLineageFingerprint
 
-What actually happened — the identity of one realized trajectory:
+What actually happened, in two senses that a single hash cannot carry (ADR-011):
+
+`RunHistoryFingerprint` — the full durable history, for audit:
 
 - `CandidateFingerprint`
 - seed / replicate identity
-- the ordered sequence of `InterventionApplication` records
+- the ordered sequence of *every* `InterventionApplication`, including any whose
+  work was later rolled back and discarded
+
+`ArtifactLineageFingerprint` — the trajectory that produced the artifact, for reuse:
+
+- `CandidateFingerprint`
+- seed / replicate identity
+- the causal checkpoint ancestry of the artifact
+- only the applications on the retained trajectory
+
+A run that applied an intervention, rolled back past it and applied it again has
+two different histories and, potentially, the same artifact lineage as a run that
+applied it once. Asking "has this trajectory been run?" with the history hash
+would answer no.
 
 A reactive intervention changes this and leaves `CandidateFingerprint` untouched. This
 is what stops reuse confusing "the same candidate, run clean" with "the same candidate,
@@ -285,7 +312,8 @@ Reuse asks four different questions and they take different keys (ADR-011):
 |---|---|
 | Has this hypothesis been explored? | `CandidateFingerprint` |
 | Do we have *any* artifact from this candidate? | `CandidateFingerprint`, any terminal realization |
-| Do we have *this exact* trajectory's artifact? | `RunRealizationFingerprint` |
+| Do we have the artifact from this exact training trajectory? | `ArtifactLineageFingerprint` |
+| What did this run actually do, rollbacks included? | `RunHistoryFingerprint` |
 | Has this artifact been scored by this evaluator? | artifact digest + `EvaluationFingerprint` |
 
 
@@ -337,5 +365,5 @@ operational adjustment preserving intent  -> ExecutionOverride on the attempt
 ```
 
 An intervention leaves the node's `CandidateSpec` and `CandidateFingerprint` untouched —
-they record what was declared — and changes the run's `RunRealizationFingerprint`, which
-records what actually happened.
+they record what was declared — and changes the run's `RunHistoryFingerprint` and, if it
+lands on the retained trajectory, its `ArtifactLineageFingerprint`.

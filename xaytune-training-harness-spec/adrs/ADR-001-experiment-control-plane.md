@@ -1,7 +1,12 @@
 # ADR-001 — Xaytune is an experiment control plane
 
 ## Status
-Proposed
+Accepted — 2026-09-21.
+
+Every accepted ADR from ADR-011 onwards assumes the experiment control plane this
+ADR proposes, and the repository is being built to it. "Proposed but ratified in
+effect" was not a status a coding agent could act on — status is used as a gate,
+so a premise the whole package depends on has to read as settled.
 
 ## Context
 

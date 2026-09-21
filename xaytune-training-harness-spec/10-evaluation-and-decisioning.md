@@ -16,10 +16,14 @@
 > class, not on the fingerprint alone — a stochastic evaluator's result is a
 > sample, not the answer (ADR-015 §3).
 >
-> The invariant that makes this worth having: `ExperimentNode.EVALUATING` must
-> correspond to at least one non-terminal `EvaluationRun`. Without it a node
+> The invariant that makes this worth having is a **reconciliation** rule, not a
+> point-in-time assertion: a node in `EVALUATING` either has a non-terminal
+> required run (wait), or has all required results and is reconciled forward to
+> `DECIDING`, or is stalled and raises `EvaluationStalled`. Without it a node
 > sits in `EVALUATING` forever when the evaluation process dies, because there
-> is nothing to time out.
+> is nothing to time out — and stating it as a bare assertion would flag every
+> successful evaluation during the instant between the run finishing and the
+> node advancing (ADR-015 §5).
 
 ## 1. Evaluation is independent from training
 

@@ -36,12 +36,13 @@ In brief:
 
 > A `TrainingIntervention` persists both the condition that justified it
 > (`InterventionTrigger`) and an explicit `InterventionReplayPolicy`. Replay policy is
-> never inferred from origin. `REEVALUATE_TRIGGER` is valid only when the persisted
-> trigger is evaluable from restored state *and* can become false again.
+> never inferred from origin. `REARM_TRIGGER` is valid only when the persisted
+> trigger is reconstructible from restored state *and* can become false again.
 > `InterventionApplication` records each concrete application separately; rollback does
 > not delete previous applications, and re-application produces a new application event.
-> `RunRealizationFingerprint` hashes the ordered sequence of applications, not only
-> decisions.
+> `RunHistoryFingerprint` hashes the ordered sequence of applications, not only
+> decisions, and `ArtifactLineageFingerprint` hashes only the applications on the
+> trajectory that actually produced the artifact.
 
 ### 1. Lineage has four levels, not two
 
@@ -105,8 +106,13 @@ CandidateFingerprint
     ModelSpec + DataSpec + TrainingSpec + RewardSpec + EnvironmentSpec
   + pre-registered intervention schedule
 
-RunRealizationFingerprint
-    CandidateFingerprint + seed/replicate + ordered applied interventions
+RunHistoryFingerprint
+    CandidateFingerprint + seed/replicate + ordered applied interventions,
+    including rolled-back work
+
+ArtifactLineageFingerprint
+    CandidateFingerprint + seed/replicate + causal checkpoint ancestry
+    + applications on the retained trajectory only
 
 ExecutionFingerprint
     software / runtime / hardware / topology + execution overrides
@@ -118,7 +124,7 @@ CheckpointCompatibilityKey     (unchanged, ADR-009)
 A scheduled LR decay belongs to `CandidateFingerprint`, because it was declared before
 training: two runs executing the same declared schedule remain replicates of one
 candidate. A reactive LR drop was not declared, so it changes
-`RunRealizationFingerprint` while leaving the node and candidate intact.
+both run fingerprints while leaving the node and candidate intact.
 
 ### 6. Evaluation is not part of candidate identity
 
@@ -227,7 +233,14 @@ class TokenCountTrigger(BaseModel):
 
 class MetricTrigger(BaseModel):
     type: Literal["metric"]
-    metric: str
+
+    # Identity of the quantity, not just its display name. A re-armed trigger
+    # must resolve to the same series months later.
+    metric_ref: str
+    metric_schema_version: str
+    source: MetricSource                 # training stream | evaluator | derived
+    aggregation: MetricAggregation       # last | mean | median | max | min
+
     operator: Literal[">", ">=", "<", "<=", "=="]
     threshold: float
     window: int | None = None
@@ -245,7 +258,10 @@ class ManualTrigger(BaseModel):
 
 class PolicyTrigger(BaseModel):
     type: Literal["policy"]
+
     policy_rule_id: str
+    policy_version: str
+    policy_digest: str                   # canonical hash of the rule as evaluated
 
 
 InterventionTrigger = (
@@ -260,7 +276,37 @@ InterventionTrigger = (
 class InterventionReplayPolicy(str, Enum):
     REAPPLY_AFTER_ROLLBACK = "reapply-after-rollback"
     APPLY_ONCE = "apply-once"
-    REEVALUATE_TRIGGER = "reevaluate-trigger"
+    REARM_TRIGGER = "rearm-trigger"
+```
+
+`REARM_TRIGGER` was called `REEVALUATE_TRIGGER`, and the rename fixes a real
+bug rather than a word. "Re-evaluate" implies a single test at restore time, so
+a condition that is false at the restored position simply drops the intervention
+— permanently:
+
+```text
+step 14,000   loss > threshold     -> LR reduction applied
+failure       rollback to 12,000
+step 12,000   loss < threshold     -> evaluates false
+                                   -> intervention silently gone forever
+```
+
+The run then continues past 14,000 with nothing watching, even though the
+condition that justified the intervention is exactly the kind that recurs. A
+reactive trigger is a standing condition, not a one-shot test.
+
+Re-arming is the correct semantics:
+
+```text
+restore to a position before the application
+        ↓
+reconstruct the trigger's evaluation state
+        ↓
+evaluate immediately
+        ├── true  -> apply now
+        └── false -> ARM it and keep observing
+        ↓
+it may fire again later in the run
 ```
 
 The field has **no default**. An intervention created without choosing replay semantics
@@ -278,15 +324,15 @@ become permanent automation because a worker died.
 | Origin | Recommended policy | Reason |
 |---|---|---|
 | `SCHEDULED` | `REAPPLY_AFTER_ROLLBACK` | It was part of the declared training program |
-| `REACTIVE_AGENT` | `REEVALUATE_TRIGGER` | Re-run the condition that justified it |
-| `REACTIVE_POLICY` | `REEVALUATE_TRIGGER` | Evaluate the policy condition against restored state |
+| `REACTIVE_AGENT` | `REARM_TRIGGER` | The condition stands; keep watching for it |
+| `REACTIVE_POLICY` | `REARM_TRIGGER` | Re-arm the policy condition against restored state |
 | `REACTIVE_HUMAN` | `APPLY_ONCE` | Do not convert a one-off human judgement into automation |
 
 These are **recommendations for the proposer, not implicit defaults**. Recording the
 policy explicitly is what stops a later change of origin — say `REACTIVE_HUMAN` to
 `REACTIVE_AGENT` — from quietly changing rollback behaviour.
 
-#### `REEVALUATE_TRIGGER` requires a non-monotone trigger
+#### `REARM_TRIGGER` requires a non-monotone trigger
 
 A trigger is only re-evaluable if its condition can become **false** again.
 
@@ -296,9 +342,9 @@ intervention re-applies even when its effect is already present in the restored 
 state — a silent double-application. The positional guard in `REAPPLY_AFTER_ROLLBACK`
 exists precisely to handle those correctly.
 
-| Trigger | Valid with `REEVALUATE_TRIGGER` | Why |
+| Trigger | Valid with `REARM_TRIGGER` | Why |
 |---|---|---|
-| `MetricTrigger` | yes | The metric can fall back below threshold |
+| `MetricTrigger` | yes | The metric can fall back below threshold, and rise again |
 | `PolicyTrigger` | yes, if the rule is state-dependent | Re-evaluable against restored state |
 | `StepTrigger`, `OptimizerStepTrigger`, `TokenCountTrigger` | **no** | Monotone — always re-matches, double-applies |
 | `IncidentTrigger` | **no** | An incident is a past occurrence, not a standing condition |
@@ -306,6 +352,32 @@ exists precisely to handle those correctly.
 
 Rejected at Action validation time, not at replay time, so the failure surfaces when the
 intervention is proposed rather than during a recovery.
+
+#### Re-arming requires reconstructible trigger state
+
+Arming a condition is more demanding than testing one, because the trigger must
+be evaluable against a *restored* position rather than against whatever the
+controller happens to hold in memory. A trigger recorded as
+
+```python
+metric="loss", threshold=0.5, window=100
+```
+
+cannot be reconstructed: "loss" does not say which series, from which source,
+aggregated how, under which schema. Two months later it may not even name the
+same quantity.
+
+So a re-armable trigger persists its full evaluation contract — for metrics the
+`metric_ref`, schema version, source and aggregation alongside the comparator,
+window and `consecutive` count; for policy rules the `policy_version` and
+`policy_digest` as well as the rule id. Without the digest a replay evaluates
+whatever the rule means *now*, silently answering a different question than the
+one that justified the original intervention, and the provenance record would
+claim otherwise.
+
+Where the state cannot be reconstructed, the intervention is not eligible for
+`REARM_TRIGGER` and validation rejects it — the same rule as monotone triggers,
+for the same reason: fail at proposal time, not during a recovery.
 
 #### Rollback logic
 
@@ -318,11 +390,23 @@ for intervention in run.interventions:
         if applied_after(intervention, restored_position):
             schedule_reapplication(intervention)
 
-    elif intervention.replay_policy is REEVALUATE_TRIGGER:
-        evaluation = evaluate(intervention.trigger, restored_state)
+    elif intervention.replay_policy is REARM_TRIGGER:
+        if not applied_after(intervention, restored_position):
+            continue                      # its effect survives in restored state
+
+        state = reconstruct_trigger_state(intervention.trigger, restored_position)
+        evaluation = evaluate(intervention.trigger, state)
+
         if evaluation.matched:
             schedule_reapplication(intervention, evaluation)
+        else:
+            arm(intervention.trigger)     # keep observing; it may fire again
 ```
+
+The `else` branch is the whole fix. Dropping the intervention there is what made
+the old name wrong, and the positional guard on the first line is what stops a
+re-arm from double-applying an effect that is already baked into the restored
+optimizer state.
 
 Both identifiers are load-bearing: `event.sequence` orders history, while
 `TrainingPosition` decides whether the restored model state predates an application.
@@ -338,23 +422,66 @@ it took effect) carries that distinction without a further abstraction. A separa
 `effective_from` or `ApplicationCondition` is deferred until a case needs it. Recorded
 here so it is a known deferral rather than an oversight.
 
-#### The realization fingerprint hashes applications, not decisions
+#### Two histories, two fingerprints
+
+An earlier version had one `RunRealizationFingerprint` hashing
+`CandidateFingerprint + seed/replicate + ordered InterventionApplication[]`, and
+used it to answer both "what happened during this run?" and "what trajectory
+produced this artifact?". Those are different questions, and one hash cannot
+answer both:
 
 ```text
-RunRealizationFingerprint =
-    CandidateFingerprint + seed/replicate + ordered InterventionApplication[]
+checkpoint C
+    ↓ intervention A applied
+    ↓ 5,000 steps
+  failure
+    ↓ rollback to C          <- those 5,000 steps are discarded
+    ↓ intervention A applied again
+    ↓ train to completion
 ```
 
-This is what distinguishes a run where an LR change applied once from a run where it
-applied, rolled back, and applied again. Those are different realized trajectories even
-though they share one intervention decision, and the artifacts differ.
+The first application and its 5,000 steps are part of the run's history and
+**did not causally contribute to the artifact**. Including them in the identity
+used for trajectory reuse means two runs that produced the same trajectory look
+different because one of them had a bad afternoon. Excluding them from the audit
+record means the rollback disappears. Both are wrong, which is the signal that
+there are two identities.
 
-Two consequences worth stating:
+```text
+RunHistoryFingerprint
+    all durable history: every attempt, every application, every rollback,
+    every discarded span
+    -> audit, debugging, "what did this run actually do?"
 
-- The fingerprint is **provisional until the run reaches a terminal state**. Reuse
-  lookups must not match against an in-flight run's realization.
+ArtifactLineageFingerprint
+    CandidateFingerprint + seed/replicate
+    + the causal checkpoint ancestry of the artifact
+    + only the applications on the retained trajectory
+    + effective execution lineage
+    -> scientific trajectory reuse, "was this the same training path?"
+
+ArtifactDigest
+    the bytes
+    -> byte-identical artifact identity
+```
+
+`RunRealizationFingerprint` is **retired as a single name**, because every use
+of it had to mean one or the other. Call sites say which they want.
+
+This also repairs a claim made elsewhere in this ADR: "the exact trajectory's
+artifact" was never true of a fingerprint that included rolled-back work.
+
+Two consequences carry over to both:
+
+- They are **provisional until the run reaches a terminal state**. Reuse lookups
+  must not match against an in-flight run.
 - `event_sequence` is assigned by the repository inside the transaction, so an
   application record cannot be fully constructed by the caller beforehand.
+
+And one is specific to `ArtifactLineageFingerprint`: computing it requires the
+checkpoint ancestry, so a checkpoint must record the position and applications
+it embodies. ADR-012 §4 already requires exactly that, which is what makes the
+causal trajectory recoverable rather than inferred.
 
 #### Reproduction is a distinct provenance claim
 
@@ -372,7 +499,7 @@ reproduction  origin = SCHEDULED,       schedule_ref = reproduction-plan,
 
 ### A fingerprint is an identity, not a reproduction recipe
 
-`RunRealizationFingerprint` answers "was this the same trajectory?" It does **not**
+`ArtifactLineageFingerprint` answers "was this the same trajectory?" It does **not**
 answer "can I reproduce this?" A reactive intervention was triggered by a stochastic
 event — a loss spike at a particular step — so rerunning the candidate with the same
 seed will not reproduce it.
@@ -410,7 +537,7 @@ step 23,000
 ```
 
 `event.sequence` is authoritative for ordering, and for the canonical sequence of
-`InterventionApplication` records that `RunRealizationFingerprint` hashes.
+`InterventionApplication` records that the run fingerprints hash.
 
 ## Reuse modes
 
@@ -421,7 +548,8 @@ they take different keys:
 |---|---|
 | **Candidate reuse** — has this hypothesis been explored before? | `CandidateFingerprint` |
 | **Artifact reuse** — give me any acceptable completed artifact from this candidate | `CandidateFingerprint`, any terminal realization |
-| **Realization reuse** — do we have the artifact from this exact trajectory? | `RunRealizationFingerprint` |
+| **Trajectory reuse** — do we have the artifact from this exact trajectory? | `ArtifactLineageFingerprint` |
+| **Audit** — what did this run actually do? | `RunHistoryFingerprint` |
 | **Evaluation reuse** — has this artifact been scored with this evaluator? | artifact digest + `EvaluationFingerprint` |
 | **Resume** — can we restart from this checkpoint? | `CheckpointCompatibilityKey` |
 

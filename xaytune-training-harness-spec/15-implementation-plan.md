@@ -43,12 +43,14 @@ A  domain contract hardening     state machines, ADR-011 identity,
                                  deep immutability, data cursor (012),
                                  operation identity (013)
 B  transactional persistence     events, outbox, operation journal, projections,
-                                 repository recovery after process restart
+                                 repository recovery after process restart,
+                                 minimal Action substrate (cancellation only)
 C  compile boundary              NativeCompiler, restart-safe LocalRuntime,
                                  embedded controller, runtime-operation
                                  reconciliation and attempt reattachment
 D  durable evaluation lifecycle  ADR-015
-E  minimal Action/Policy/Budget  approvals -- prerequisite for F
+E  policy and budget             approvals over the band B Action substrate --
+                                 prerequisite for F
 F  checkpoint, recovery, interventions
 G  planner and branching
 H  daemon, kill/restart MVP      host leases, whole-controller startup
@@ -67,7 +69,7 @@ a note about which wins:
 | B transactional persistence | 1 |
 | C compile boundary, runtime, reconciliation | 2 |
 | D durable evaluation | 3 |
-| E Action / Policy / Budget | 4 |
+| E Policy and Budget over the band B Actions | 4 |
 | F checkpoint, recovery, interventions | 5 |
 | G planner and branching | 6 |
 | H daemon, kill/restart MVP | 7 |
@@ -98,6 +100,9 @@ matter of record rather than of review:
 
 | ADR | Gates |
 |---|---|
+| ADR-001 — experiment control plane | the premise every later ADR assumes |
+| ADR-006 — fingerprints (identity model) | PR-007 fingerprint framework; reuse policy split out to ADR-017 |
+| ADR-007 — evaluation independence | band D; extended by ADR-015 |
 | ADR-011 — candidates, interventions, overrides | PR-005 event schema; supersedes ADR-003's two-level lineage and extends ADR-006 |
 | ADR-012 — data position and resume semantics | PR-005 checkpoint schema; all adaptive recovery |
 | ADR-013 — operation identity and cancellation | the first runtime implementation |
@@ -112,14 +117,23 @@ that does not depend on it:
 
 | ADR | Blocks |
 |---|---|
-| ADR-001 — experiment control plane | nothing yet; it is the premise the rest assumes and is ratified in effect by ADR-011's acceptance |
-| ADR-003 — scientific vs execution lineage | superseded in substance by ADR-011; retained for its history |
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
 | ADR-005 — transactional persistence | **must be accepted before band B starts, including PR-004** |
-| ADR-006 — fingerprints and reuse | extended by ADR-011; the reuse-policy half is still open and blocks band G (planner reuse decisions) |
-| ADR-007 — evaluation independence | extended by ADR-015; blocks band D |
-| ADR-008 — versioned plugin ABI | blocks band C (compiler/runtime plugin loading) |
-| ADR-009 — checkpoint layers | blocks band F |
+| ADR-008 — versioned plugin ABI | band C (compiler/runtime plugin loading) |
+| ADR-009 — checkpoint layers | band F |
+| ADR-017 — reuse policy | band G (planner reuse decisions); split out of ADR-006 |
+
+### Superseded
+
+| ADR | By |
+|---|---|
+| ADR-003 — scientific vs execution lineage | ADR-011; retained for the reasoning that led there |
+
+No ADR is half-accepted any more. Status is used as a gate, so an ADR that was
+`Proposed — partially superseded` or `proposed but ratified in effect` could not
+be acted on: ADR-001 is now `Accepted` because everything after it assumes it,
+ADR-007 because ADR-015 depends on it, and ADR-006's genuinely open half became
+ADR-017 rather than a second status on one document.
 
 **ADR-005 is the live one.** It is the next ADR that must be accepted, and the
 gate is **before PR-004**, not before PR-005.
@@ -205,6 +219,34 @@ intent survives reopen; duplicate/conflicting operation IDs; legal/illegal and
 stale-revision transitions; unresolved-operation queries; cancellation intent
 survives restart. No runtime is required for these persistence tests.
 
+### PR-006a — minimal durable Action substrate
+
+ADR-013 defines cancellation as `CancelExperiment → CancelRun → runtime cancel`,
+with the Action holding the *intent* while the operation holds the effect. Phase
+2 exposes `handle.cancel()`. So the Action aggregate is required two phases
+before the `PolicyEngine` that was originally bundled with it, and splitting the
+two is cheaper than dragging policy forward.
+
+This PR is the substrate only:
+
+- `Action`, `ActionId`, `ActionStatus` and the Action state machine
+- `ActionRepository`, committed in the same transaction as its events
+- linkage from an `Action` to the `RuntimeOperation`s it causes
+- exactly three action types: `CancelAttempt`, `CancelRun`, `CancelExperiment`
+
+Explicitly **not** here: `PolicyEngine`, approval rules, budget authorization,
+or any mutating action type. Those stay in Phase 4, where the interesting
+question is authorization rather than durability. An action in this PR is
+proposed and executed by the controller itself.
+
+The dependency chain this creates:
+
+```text
+minimal durable Action  →  runtime cancellation  →  evaluation
+                        →  policy/budget enrichment
+                        →  recovery and interventions
+```
+
 ### PR-006 — experiment graph
 
 Implement:
@@ -253,7 +295,8 @@ Implement:
 
 - CandidateSpec with the composition above
 - TrainingSpec: SFT, pretrain, DPO, GRPO schema skeletons
-- fingerprint framework: `CandidateFingerprint` and `RunRealizationFingerprint`
+- fingerprint framework: `CandidateFingerprint`, `RunHistoryFingerprint` and
+  `ArtifactLineageFingerprint`
   (seed belongs to `Run`, so it feeds the realization and never the candidate)
 
 ### PR-008 — compiler/runtime protocols
@@ -374,7 +417,7 @@ Phase exit:
 
 ---
 
-## Phase 4 — Actions, policy, budget
+## Phase 4 — Policy, budget and mutating actions
 
 > **Reordered.** Resilience was Phase 4 and the Action substrate Phase 5. ADR-011
 > makes a `TrainingIntervention` the outcome of an **approved Action**, so an OOM
@@ -382,9 +425,18 @@ Phase exit:
 > deterministic authorization. Recovery cannot precede the thing that authorizes
 > it. The PR numbers below keep their original identities so cross-references
 > elsewhere still resolve; only the phase order changed.
+>
+> **The Action aggregate itself is no longer here.** PR-006a builds the durable
+> substrate and the cancellation actions in band B, because ADR-013 cancellation
+> needs them by Phase 2. What remains in this phase is authorization and the
+> mutating action types — the part that genuinely depends on policy and budget.
 
 
-### PR-022 — typed actions
+### PR-022 — mutating action types
+
+The substrate exists from PR-006a; this adds the types that change training:
+`ChangeLearningRate`, `ResizeMicrobatch`, `ChangeRewardCoefficient` and the rest,
+each with its validation rules.
 
 ### PR-023 — PolicyEngine
 

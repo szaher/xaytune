@@ -60,9 +60,13 @@ must be settled before the work that depends on it, not before all implementatio
 | Status | ADRs |
 |---|---|
 | Ratified by merged implementation | ADR-002, ADR-010 |
-| Accepted | ADR-011 through ADR-016 |
-| Superseded in substance | ADR-003 by ADR-011 |
-| Proposed | ADR-001, ADR-004 through ADR-009 |
+| Accepted | ADR-001, ADR-006, ADR-007, ADR-011 through ADR-016 |
+| Superseded | ADR-003 by ADR-011 |
+| Proposed | ADR-004, ADR-005, ADR-008, ADR-009, ADR-017 |
+
+Half-accepted statuses were removed: ADR-006's open reuse half is now ADR-017,
+and ADR-001 and ADR-007 are accepted because accepted ADRs already depend on
+them. An ADR status is a gate, so it has to be one value.
 
 The next blocking governance decision is **ADR-005**, which must be accepted
 before **Band B starts, including PR-004**. The remaining proposed ADRs retain

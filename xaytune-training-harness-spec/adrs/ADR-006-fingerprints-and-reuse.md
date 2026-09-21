@@ -1,25 +1,36 @@
 # ADR-006 — Identity is split across training, execution, evaluation, and checkpoint compatibility
 
 ## Status
-Proposed — partially superseded by ADR-011.
+Accepted — 2026-09-21, for the identity model. **Reuse policy is deferred to
+ADR-017 (`Proposed`)** and still gates band G.
+
+Split because half-accepted was unusable as a gate: Phase 2 implements the
+fingerprints from this ADR while the planner's reuse decisions genuinely are
+undecided. Those are separable, so they are now separate documents rather than
+one document in two states. The identity half is additionally superseded in
+detail by ADR-011, which replaces `TrainingSpecFingerprint` with the layered
+model below.
 
 `TrainingSpecFingerprint` is replaced by the layered identity model in ADR-011
-(`CandidateFingerprint`, `RunRealizationFingerprint`, `ExecutionFingerprint`,
+(`CandidateFingerprint`, `RunHistoryFingerprint`, `ArtifactLineageFingerprint`,
+`ExecutionFingerprint`,
 `EvaluationFingerprint`, `CheckpointCompatibilityKey`). **The reuse-policy half
 of this ADR is still open** and gates band G — planner reuse decisions.
 
 A single training fingerprint cannot describe a run whose training semantics changed
 partway through. ADR-011 splits it into `CandidateFingerprint` (what was declared,
-including any pre-registered schedule) and `RunRealizationFingerprint` (what actually
-happened, including reactive interventions), and adds the reuse mode this ADR is
-missing: "do we already have *any* artifact from this candidate?"
+including any pre-registered schedule) and two run-level identities —
+`RunHistoryFingerprint` (everything that happened, including rolled-back work) and
+`ArtifactLineageFingerprint` (only the trajectory the artifact descends from) — and
+adds the reuse mode this ADR is missing: "do we already have *any* artifact from this candidate?"
 
 ## Decision
 
 Use:
 
 - CandidateFingerprint         (ADR-011; replaces TrainingSpecFingerprint)
-- RunRealizationFingerprint    (ADR-011)
+- RunHistoryFingerprint        (ADR-011; audit)
+- ArtifactLineageFingerprint   (ADR-011; trajectory reuse)
 - ExecutionFingerprint
 - EvaluationFingerprint
 - CheckpointCompatibilityKey
@@ -35,7 +46,8 @@ distinct questions (ADR-011):
 |---|---|
 | Has this hypothesis been explored? | `CandidateFingerprint` |
 | Do we have *any* artifact from this candidate? | `CandidateFingerprint`, any terminal realization |
-| Do we have *this exact* trajectory's artifact? | `RunRealizationFingerprint` |
+| Do we have the artifact from this exact training trajectory? | `ArtifactLineageFingerprint` |
+| What did this run actually do, rollbacks included? | `RunHistoryFingerprint` |
 | Has this artifact been scored by this evaluator? | artifact digest + `EvaluationFingerprint` |
 
 Seed belongs to the realization, not the candidate: two replicates differing only by

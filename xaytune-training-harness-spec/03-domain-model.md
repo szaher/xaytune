@@ -247,9 +247,11 @@ class InterventionApplication(BaseModel):
 
 Restoring a checkpoint never deletes prior applications. After a restore the controller
 re-applies only interventions whose position is ahead of the restored position *and*
-whose replay policy calls for it. `REEVALUATE_TRIGGER` is valid only for conditions that
+whose replay policy calls for it. `REARM_TRIGGER` is valid only for conditions that
 can become false again — pairing it with a step or token trigger would re-match on every
-restore and double-apply a change already present in the restored optimizer state.
+restore and double-apply a change already present in the restored optimizer state. A
+re-armed trigger that evaluates false at the restored position is **armed, not
+discarded**: the condition stands and may fire again later in the run.
 
 ### TrainingPosition
 
@@ -275,7 +277,8 @@ class RunRealization(BaseModel):
     run_id: RunId
 
     candidate_fingerprint: str
-    realization_fingerprint: str
+    history_fingerprint: str            # everything, rolled-back work included
+    artifact_lineage_fingerprint: str   # only the trajectory behind the artifact
 
     initial_spec: CandidateSpecSnapshot
 
@@ -289,7 +292,7 @@ class RunRealization(BaseModel):
 `applied_interventions` holds **applications, not interventions**, and the
 distinction is load-bearing. One intervention can be applied more than once —
 apply, roll back to an earlier checkpoint, apply again — and ADR-011 hashes the
-ordered `InterventionApplication` records into `RunRealizationFingerprint`. With
+ordered `InterventionApplication` records into `RunHistoryFingerprint`. With
 only intervention references these two histories are indistinguishable:
 
 ```text
@@ -316,7 +319,11 @@ A failure there is a provenance bug, not a caching bug. Materialising
 divergence that atomic state-and-event commits exist to prevent.
 
 `node.candidate` answers "what did we intend to test?"; `run.realization()` answers
-"what actually trained this?"
+"what actually trained this?" — and it answers it twice, because those are two
+questions. `history_fingerprint` covers everything the run did, including work
+that was rolled back and discarded. `artifact_lineage_fingerprint` covers only
+the trajectory the artifact descends from. A rollback changes the first and not
+the second, which is what makes trajectory reuse possible at all (ADR-011).
 
 
 ## 5a. EvaluationRun and EvaluationAttempt
@@ -369,9 +376,14 @@ lookup key instead (ADR-015 §3).
 subject — replicates of a stochastic evaluation — it is the only thing that
 answers which execution produced a given sample.
 
-**Invariant.** `ExperimentNode.EVALUATING` implies at least one non-terminal
-`EvaluationRun`. Without it a node sits in `EVALUATING` forever when the
-evaluation process dies, because there is no attempt to time out.
+**Invariant (reconciliation, not point-in-time).** A node in `EVALUATING`
+resolves to exactly one of: a required `EvaluationRun` is non-terminal, so wait;
+all required runs are terminal with results, so reconcile the node forward to
+`DECIDING`; or neither, which raises `EvaluationStalled`. Without it a node sits
+in `EVALUATING` forever when the evaluation process dies. Asserting it
+point-in-time instead would fire on every successful evaluation, in the gap
+between the run reaching `SUCCEEDED` and the node leaving `EVALUATING`
+(ADR-015 §5).
 
 ## 7. Objective
 

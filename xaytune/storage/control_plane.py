@@ -6,7 +6,8 @@ other half: every operation here is one transaction, and the units are the ones
 the ADR names.
 
 ```text
-transition(aggregate, ...)                  state + event + outbox        §3
+transition_experiment / _node / _run / _attempt
+                                            state + event + outbox        §3
 create_attempt_with_submit_intent(...)      attempt + INTENDED operation  §4
 confirm_operation / mark_operation_sent / fail_operation
 request_cancellation(...)                   Action + cancel operation     §5
@@ -248,6 +249,8 @@ class ControlPlaneRepository:
         Raises:
             LineageError: If the node's parents would make the graph unsound.
         """
+        _require_pristine(node, ExperimentNodeStatus.CREATED)
+
         with write_transaction(self._connection):
             self.graph.validate_parents(node)
             self.aggregates._insert_node(node)
@@ -259,6 +262,7 @@ class ControlPlaneRepository:
         _require_pristine(run, RunStatus.CREATED)
 
         with write_transaction(self._connection):
+            self._require_consistent_run(run)
             self.aggregates._insert_run(run)
             self._emit(run, "RunCreated", str(run.experiment_id), actor, destinations)
         return run
@@ -423,7 +427,9 @@ class ControlPlaneRepository:
             self.aggregates._insert_attempt(attempt)
             stored = self.operations._insert(operation)
             self._emit(attempt, "RunAttemptCreated", experiment_id, actor, destinations)
-            self._emit_operation(stored, "RuntimeOperationIntended", experiment_id, actor)
+            self._emit_operation(
+                stored, "RuntimeOperationIntended", experiment_id, actor, destinations
+            )
 
         return attempt, stored
 
@@ -434,6 +440,7 @@ class ControlPlaneRepository:
         expected_revision: int,
         actor: Actor,
         runtime_ref: RuntimeRef | None = None,
+        destinations: tuple[str, ...] = (),
     ) -> RuntimeOperation:
         """Record that an operation took effect, with the runtime's reference.
 
@@ -447,17 +454,34 @@ class ControlPlaneRepository:
             StorageError: If a submit operation is confirmed with no reference.
         """
         return self._settle(
-            operation_id, "confirmed", expected_revision, actor, runtime_ref=runtime_ref
+            operation_id,
+            "confirmed",
+            expected_revision,
+            actor,
+            runtime_ref=runtime_ref,
+            destinations=destinations,
         )
 
     def mark_operation_sent(
-        self, operation_id: OperationId, *, expected_revision: int, actor: Actor
+        self,
+        operation_id: OperationId,
+        *,
+        expected_revision: int,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
     ) -> RuntimeOperation:
         """Record that the request was issued but its outcome is not yet known."""
-        return self._settle(operation_id, "sent", expected_revision, actor)
+        return self._settle(
+            operation_id, "sent", expected_revision, actor, destinations=destinations
+        )
 
     def fail_operation(
-        self, operation_id: OperationId, *, expected_revision: int, actor: Actor
+        self,
+        operation_id: OperationId,
+        *,
+        expected_revision: int,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
     ) -> RuntimeOperation:
         """Record that the request definitively did not take effect.
 
@@ -466,7 +490,9 @@ class ControlPlaneRepository:
         is the difference between "it did not happen" and "we do not know"
         (ADR-005 §6).
         """
-        return self._settle(operation_id, "failed", expected_revision, actor)
+        return self._settle(
+            operation_id, "failed", expected_revision, actor, destinations=destinations
+        )
 
     # ---- ADR-005 §5 ----------------------------------------------------
 
@@ -546,13 +572,17 @@ class ControlPlaneRepository:
 
             # Validation happens before any effect is requested, so an action
             # that cannot be carried out never mints an operation.
-            validating = self._advance(proposed, ActionStatus.VALIDATING, "ActionValidating", actor)
-            validated = self._advance(validating, ActionStatus.VALIDATED, "ActionValidated", actor)
+            validating = self._advance(
+                proposed, ActionStatus.VALIDATING, "ActionValidating", actor, destinations
+            )
+            validated = self._advance(
+                validating, ActionStatus.VALIDATED, "ActionValidated", actor, destinations
+            )
 
             settled_outcome = self._terminal_outcome(target)
             if settled_outcome is not None:
                 executing = self._advance(
-                    validated, ActionStatus.EXECUTING, "ActionExecuting", actor
+                    validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
                 )
                 settled = executing.with_status(ActionStatus.SUCCEEDED, outcome=settled_outcome)
                 self.actions._update(settled)
@@ -564,7 +594,9 @@ class ControlPlaneRepository:
                 )
                 return settled, None
 
-            executing = self._advance(validated, ActionStatus.EXECUTING, "ActionExecuting", actor)
+            executing = self._advance(
+                validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
+            )
 
             operation = RuntimeOperation(
                 id=operation_id,
@@ -578,7 +610,9 @@ class ControlPlaneRepository:
             stored = self.operations._insert(operation)
 
             self._emit_action(executing, "CancellationRequested", actor, destinations)
-            self._emit_operation(stored, "RuntimeOperationIntended", experiment_id, actor)
+            self._emit_operation(
+                stored, "RuntimeOperationIntended", experiment_id, actor, destinations
+            )
 
         return executing, stored
 
@@ -704,6 +738,7 @@ class ControlPlaneRepository:
         actor: Actor,
         *,
         runtime_ref: RuntimeRef | None = None,
+        destinations: tuple[str, ...] = (),
     ) -> RuntimeOperation:
         with write_transaction(self._connection):
             current = self.operations.get(str(operation_id))
@@ -729,9 +764,50 @@ class ControlPlaneRepository:
             experiment_id = self._experiment_of_operation(moved)
             self.operations._update(moved)
             self._emit_operation(
-                moved, f"RuntimeOperation{state.capitalize()}", experiment_id, actor
+                moved,
+                f"RuntimeOperation{state.capitalize()}",
+                experiment_id,
+                actor,
+                destinations,
             )
         return moved
+
+    def _require_consistent_run(self, run: Run) -> None:
+        """Refuse a run whose ownership contradicts its node's.
+
+        Both foreign keys pass independently: the experiment exists and the
+        node exists. Neither establishes that the node belongs to *that*
+        experiment, so a run could sit under one candidate's node while its
+        payload and events named another experiment -- the same provenance
+        split as a caller-supplied aggregate, arriving through creation.
+
+        The fingerprint is checked for the same reason. A `Run` is a
+        realization of its node's candidate, so a run claiming a different
+        fingerprint is claiming to realize something the node never proposed.
+
+        Raises:
+            AggregateNotFoundError: If the node does not exist.
+            StorageError: If the node's experiment or fingerprint disagrees.
+        """
+        node = self.aggregates.get_node(str(run.node_id))
+        if node is None:
+            raise AggregateNotFoundError("ExperimentNode", str(run.node_id))
+
+        if node.experiment_id != run.experiment_id:
+            raise StorageError(
+                f"run {run.id} claims experiment {run.experiment_id} but its "
+                f"node {node.id} belongs to {node.experiment_id}: lineage and "
+                f"provenance would disagree about which experiment owns it"
+            )
+
+        # PR-007 renames both fields to candidate_fingerprint; the rule is the
+        # same either way, and pinning it here keeps the rename honest.
+        if node.training_fingerprint != run.training_fingerprint:
+            raise StorageError(
+                f"run {run.id} carries fingerprint {run.training_fingerprint!r} "
+                f"but its node proposes {node.training_fingerprint!r}: a run "
+                f"realizes its node's candidate, not a different one"
+            )
 
     def _experiment_of_action_target(self, target: ActionTarget) -> str:
         """Resolve the experiment an action's target belongs to."""
@@ -891,12 +967,23 @@ class ControlPlaneRepository:
         return None
 
     def _advance(
-        self, action: Action, new_status: ActionStatus, event_type: str, actor: Actor
+        self,
+        action: Action,
+        new_status: ActionStatus,
+        event_type: str,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
     ) -> Action:
-        """Move an action one step, persisting the transition with its event."""
+        """Move an action one step, persisting the transition with its event.
+
+        *destinations* reaches here too. ADR-005 §3 pairs every event with its
+        outbox records, so an event a sink never hears about is a hole in the
+        contract rather than a detail -- and the intermediate lifecycle steps
+        are exactly the ones most easily forgotten.
+        """
         moved = action.with_status(new_status)
         self.actions._update(moved)
-        self._emit_action(moved, event_type, actor)
+        self._emit_action(moved, event_type, actor, destinations)
         return moved
 
     def _emit_action(

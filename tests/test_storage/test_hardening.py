@@ -323,3 +323,140 @@ def test_each_action_lifecycle_step_is_recorded(repo: ControlPlaneRepository, ru
     # One revision per transition, and the latest matches the stored aggregate.
     assert [e.aggregate_revision for e in events] == [0, 1, 2, 3, 3]
     assert repo.actions.get(str(action.id)).revision == action.revision
+
+
+# ---- creation guards, across every aggregate -----------------------------
+
+
+def _pristine_cases(repo: ControlPlaneRepository) -> list[tuple[str, Any, Any, Any]]:
+    """One case per creation path, so a sibling cannot be missed again."""
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = repo.create_node(make_node(experiment), actor=ACTOR)
+    created_run = repo.create_run(make_run(node), actor=ACTOR)
+
+    from xaytune.core import ExperimentNodeStatus, RunStatus
+
+    return [
+        ("Experiment", make_experiment("fresh"), ExperimentStatus.ACTIVE, repo.create_experiment),
+        ("ExperimentNode", make_node(experiment), ExperimentNodeStatus.ACTIVE, repo.create_node),
+        ("Run", make_run(node), RunStatus.ACTIVE, repo.create_run),
+        (
+            "RunAttempt",
+            make_attempt(created_run),
+            RunAttemptStatus.RUNNING,
+            lambda a, *, actor: repo.create_attempt_with_submit_intent(
+                a, request_digest=DIGEST, actor=actor
+            ),
+        ),
+    ]
+
+
+def test_no_creation_path_accepts_a_non_pristine_aggregate(
+    repo: ControlPlaneRepository,
+) -> None:
+    """Table-driven on purpose.
+
+    ``create_node`` was the one path this guard did not reach -- added to three
+    siblings and silently skipped on the fourth. Enumerating them means the
+    next creation method is either in this list or visibly absent from it.
+    """
+    for name, fresh, started, create in _pristine_cases(repo):
+        advanced = type(fresh).model_validate(
+            {**fresh.model_dump(mode="python"), "status": started, "revision": 7}
+        )
+        with pytest.raises(ValueError, match="must start"):
+            create(advanced, actor=ACTOR)
+        assert name  # names the failing case in the assertion output
+
+
+# ---- a run belongs to its node's experiment ------------------------------
+
+
+def test_a_run_cannot_claim_a_different_experiment_than_its_node(
+    repo: ControlPlaneRepository,
+) -> None:
+    """Both foreign keys pass; neither ties the node to that experiment.
+
+    The run would sit under one candidate's node while its payload and events
+    named another experiment.
+    """
+    owning = repo.create_experiment(make_experiment("owning"), actor=ACTOR)
+    other = repo.create_experiment(make_experiment("other"), actor=ACTOR)
+    node = repo.create_node(make_node(owning), actor=ACTOR)
+
+    run = make_run(node)
+    mismatched = type(run).model_validate(
+        {**run.model_dump(mode="python"), "experiment_id": other.id}
+    )
+
+    with pytest.raises(StorageError, match="belongs to"):
+        repo.create_run(mismatched, actor=ACTOR)
+
+    assert repo.aggregates.get_run(str(run.id)) is None
+
+
+def test_a_run_must_realize_its_node_s_candidate(
+    repo: ControlPlaneRepository,
+) -> None:
+    """A run claiming another fingerprint realizes something never proposed."""
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = repo.create_node(make_node(experiment), actor=ACTOR)
+
+    run = make_run(node)
+    divergent = type(run).model_validate(
+        {**run.model_dump(mode="python"), "training_fingerprint": "sha256:something-else"}
+    )
+
+    with pytest.raises(StorageError, match="realizes its node"):
+        repo.create_run(divergent, actor=ACTOR)
+
+
+# ---- every event of a compound operation reaches the outbox --------------
+
+
+def test_every_event_of_a_cancellation_gets_its_outbox_records(
+    repo: ControlPlaneRepository, run: Any
+) -> None:
+    """ADR-005 §3 pairs each event with its outbox records.
+
+    The intermediate lifecycle steps are the ones most easily dropped, and
+    making Action transitions explicit is what exposed that they were.
+    """
+    attempt, _ = repo.create_attempt_with_submit_intent(
+        make_attempt(run), request_digest=DIGEST, actor=ACTOR
+    )
+    action, _ = repo.request_cancellation(
+        ActionTarget(kind="training-attempt", id=str(attempt.id)),
+        reason="user asked",
+        actor=ACTOR,
+        request_digest="sha256:cancel",
+        destinations=("mlflow",),
+    )
+
+    action_events = repo.events.events_for_aggregate(str(action.id))
+    assert len(action_events) == 5
+
+    delivered = {record.event_id for record in repo.events.pending_outbox()}
+    for event in action_events:
+        assert event.id in delivered, f"{event.event_type} has no outbox record"
+
+
+def test_operation_settlement_reaches_the_outbox(repo: ControlPlaneRepository, run: Any) -> None:
+    """ADR-013 puts operation transitions in the log atomically with the outbox."""
+    _, operation = repo.create_attempt_with_submit_intent(
+        make_attempt(run), request_digest=DIGEST, actor=ACTOR
+    )
+    confirmed = repo.confirm_operation(
+        operation.id,
+        expected_revision=operation.revision,
+        actor=ACTOR,
+        runtime_ref=REF,
+        destinations=("webhook",),
+    )
+
+    events = repo.events.events_for_aggregate(str(confirmed.id))
+    settled = [e for e in events if e.event_type == "RuntimeOperationConfirmed"]
+    assert len(settled) == 1
+
+    delivered = {record.event_id for record in repo.events.pending_outbox()}
+    assert settled[0].id in delivered

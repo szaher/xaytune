@@ -7,7 +7,7 @@
 -- because an operation record is only meaningful once intent can be committed
 -- atomically with its events (ADR-005 §4).
 --
--- Two adaptations from the spec file, both deliberate:
+-- Three adaptations from the spec file, all deliberate:
 --
 --   * `runs.candidate_fingerprint` is added. The spec's Run carries the
 --     fingerprint but its table did not expose it, and a fingerprint that can
@@ -16,8 +16,26 @@
 --
 --   * The `candidate_fingerprint` columns keep the spec's name while the Python
 --     field is still `training_fingerprint`. PR-007 renames the field when
---     CandidateSpec lands; the column already has its final name, so that
---     rename costs nothing here.
+--     CandidateSpec lands, and naming the column for the destination rather
+--     than the temporary spelling avoids a pointless migration then.
+--
+--     !! PR-007 MUST READ THIS. The column is free to rename; `payload_json`
+--     is not. Aggregate bodies are serialised with the CURRENT field name, and
+--     the domain models set `extra="forbid"`, so a naive rename cannot load a
+--     payload written here -- it fails with two errors at once, the old key
+--     being unexpected and the new one missing. The rename must accept both
+--     keys on the way in and write only the new one on the way out:
+--
+--         candidate_fingerprint: str = Field(
+--             validation_alias=AliasChoices(
+--                 "candidate_fingerprint", "training_fingerprint"
+--             ),
+--             serialization_alias="candidate_fingerprint",
+--         )
+--
+--     A database then converges on the new spelling as rows are next written,
+--     with no backfill. `tests/test_storage/test_payload_compatibility.py`
+--     crosses that boundary and fails on the naive version.
 --
 --   * `run_attempts.attempt_number` is promoted to a column so that "attempt 2
 --     of this run" can be constrained to one row. Two rows claiming to be the
@@ -103,9 +121,11 @@ CREATE TABLE run_attempts (
   updated_at TEXT NOT NULL
 );
 
--- Attempt numbers are dense and unique within a run: attempt 2 of a run is one
--- thing, and two rows claiming to be it is a provenance failure rather than a
--- duplicate to deduplicate later.
+-- Attempt numbers are unique within a run: attempt 2 of a run is one thing, and
+-- two rows claiming to be it is a provenance failure rather than a duplicate to
+-- deduplicate later. Sequential assignment (1, 2, 3 with no holes) is a
+-- repository invariant rather than a schema one -- nothing here prevents
+-- 1, 2, 4, and a CHECK cannot express "one more than the last".
 CREATE UNIQUE INDEX idx_run_attempts_number
   ON run_attempts(run_id, attempt_number);
 

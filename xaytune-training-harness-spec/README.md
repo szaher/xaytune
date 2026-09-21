@@ -77,49 +77,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 
 ## Architecture at a glance
 
-```text
-                    Xaytune
-             Experiment Control Plane
-                      │
-      ┌───────────────┼────────────────┐
-      │               │                │
- Scientific       Adaptive          Agentic
- lineage          resilience        decisions
-      │               │                │
-      └───────────────┼────────────────┘
-                      │
-               Policies / Budget
-                      │
-                  Planner
-        ┌─────────────┼─────────────┐
-        │             │             │
-      Rules         LLM        SearchProvider
-                                  │
-                         Ray Tune / Katib /
-                              Optuna
-                      │
-                CandidateSpec
-                      │
-              TrainerCompiler
-        ┌─────────────┼──────────────┐
-        │             │              │
-       TRL        torchtune         verl
-        │             │              │
-        └─────────────┼──────────────┘
-                      │
-            TrainingExecutionSpec
-                      │
-             Capability Resolver
-                      │
-             RuntimeBackend.submit_or_get
-        ┌─────────────┼──────────────┐
-        │             │              │
-      Local       Ray Train     Training Hub
-                                    │
-                           Kubeflow / KubeRay
-                                    │
-                                  Kueue
-```
+![Xaytune target architecture: experiment control plane, trainer compilers, capability resolution, runtime backends and infrastructure.](assets/diagrams/architecture-overview.svg)
 
 ## Package contents
 
@@ -187,25 +145,7 @@ persistence cannot start without it.
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:
 
-```text
-domain + IDs
-→ state machines
-→ SQLite repository / outbox / operation journal
-→ event model
-→ experiment graph
-→ CandidateSpec / compiler contracts
-→ LocalRuntime (restart-safe)
-→ current trainer as NativeCompiler
-→ TRLCompiler
-→ durable evaluation lifecycle
-→ action / policy / budget
-→ incidents, recovery and interventions
-→ rule-based planner
-→ end-to-end MVP
-→ LLM planner
-→ Ray / TorchFT
-→ Training Hub
-```
+![Implementation bands A–J: domain, persistence, compile/runtime, evaluation, policy, recovery, planning, daemon MVP, LLM and platform integrations.](assets/diagrams/implementation-order.svg)
 
 Note **action / policy / budget precedes incidents and recovery**. ADR-011 makes
 an intervention the outcome of an approved Action, so recovery cannot come

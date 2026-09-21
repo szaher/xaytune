@@ -2,56 +2,7 @@
 
 ## 1. Top-level layers
 
-```text
-┌──────────────────────────────────────────────────────────────┐
-│ User / SDK / CLI / Studio / Coding Agent                    │
-└─────────────────────────────┬────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Experiment Control Plane                                    │
-│                                                              │
-│ ExperimentController                                        │
-│ ExperimentGraph                                             │
-│ Planner / SearchProvider                                    │
-│ PolicyEngine                                                │
-│ BudgetLedger                                                │
-│ EvaluationCoordinator                                       │
-│ DecisionEngine                                              │
-│ Incident / RecoveryCoordinator                              │
-│ Provenance / Memory                                         │
-└─────────────────────────────┬────────────────────────────────┘
-                              │
-                         CandidateSpec
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Trainer Compilers                                           │
-│ TRLCompiler | TorchtuneCompiler | VerlCompiler | Native     │
-└─────────────────────────────┬────────────────────────────────┘
-                              │
-                    TrainingExecutionSpec
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Capability + Resilience Resolution                          │
-│ Resolver | ResilienceProvider | Checkpoint Contract         │
-└─────────────────────────────┬────────────────────────────────┘
-                              │
-                    ResolvedExecutionPlan
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Runtime Backends                                            │
-│ LocalRuntime | RayTrainRuntime | TrainingHubRuntime          │
-└─────────────────────────────┬────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Platform / Infrastructure                                   │
-│ torchrun | Ray | Training Hub | Kubeflow Trainer | Kueue    │
-└──────────────────────────────────────────────────────────────┘
-```
+![Xaytune layers and the CandidateSpec, TrainingExecutionSpec and ResolvedExecutionPlan boundaries.](assets/diagrams/architecture-overview.svg)
 
 ## 2. Control-plane components
 
@@ -145,25 +96,7 @@ Determines whether an incident should:
 
 ## 3. Execution path
 
-```text
-ExperimentNode
-  ↓
-CandidateSpecSnapshot
-  ↓
-TrainerCompiler.compile()
-  ↓
-TrainingExecutionSpec
-  ↓
-CapabilityResolver.resolve()
-  ↓
-ResilienceProvider.augment()
-  ↓
-ResolvedExecutionPlan
-  ↓
-RuntimeBackend.submit_or_get(operation_id, plan)
-  ↓
-RuntimeRef
-```
+![Candidate compilation, capability resolution, atomic operation-intent persistence, submit_or_get and runtime reconciliation.](assets/diagrams/execution-path.svg)
 
 The controller observes the runtime using:
 
@@ -177,19 +110,7 @@ lookup_operation()
 
 ## 4. Evaluation path
 
-```text
-ModelArtifact
-  ↓
-EvaluationSpec
-  ↓
-EvaluatorCompiler / EvaluationRuntime
-  ↓
-MetricResult[]
-  ↓
-EvaluationResult
-  ↓
-DecisionEngine
-```
+![Independent evaluation: artifact and specification, durable run and attempt, metric results, evaluation result and decision engine.](assets/diagrams/evaluation-path.svg)
 
 Evaluation changes do not mutate `CandidateFingerprint` (ADR-006, ADR-011).
 
@@ -215,29 +136,7 @@ Xaytune creates nodes and records lineage.
 
 ## 6. Dependency direction
 
-Allowed:
-
-```text
-api -> experiment
-experiment -> domain
-experiment -> compiler protocols
-experiment -> runtime protocols
-experiment -> evaluation protocols
-experiment -> persistence protocols
-plugins -> protocols
-```
-
-Not allowed:
-
-```text
-domain -> torch
-domain -> trl
-domain -> ray
-policy -> trl
-recipe -> kubernetes
-experiment -> mlflow
-core -> training_hub implementation
-```
+![Allowed dependencies point toward domain and protocols; direct dependencies from core and orchestration to ML and platform implementations are forbidden.](assets/diagrams/dependency-boundaries.svg)
 
 ## 7. Core package boundary
 

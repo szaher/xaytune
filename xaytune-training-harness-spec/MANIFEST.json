@@ -1,7 +1,7 @@
 {
   "name": "xaytune-training-harness-spec",
   "generated_at": "2026-09-21T00:00:00+00:00",
-  "file_count": 50,
+  "file_count": 57,
   "files": [
     "01-product-and-scope.md",
     "02-architecture.md",
@@ -49,6 +49,13 @@
     "agent-prompts/02-sqlite-events.md",
     "agent-prompts/03-compile-execute-boundary.md",
     "agent-prompts/04-resilience-mvp.md",
+    "assets/diagrams/README.md",
+    "assets/diagrams/architecture-overview.svg",
+    "assets/diagrams/dependency-boundaries.svg",
+    "assets/diagrams/evaluation-path.svg",
+    "assets/diagrams/execution-path.svg",
+    "assets/diagrams/implementation-order.svg",
+    "assets/diagrams/render.py",
     "schemas/capabilities.example.yaml",
     "schemas/experiment.example.yaml",
     "schemas/sqlite-schema-migration-001.sql",

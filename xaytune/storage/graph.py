@@ -34,33 +34,52 @@ class LineageError(DomainError):
 class CandidateComparison:
     """What two candidates share and where they diverge.
 
-    The question a planner asks before deciding whether a result is evidence
-    about one hypothesis or two.
+    The question a planner asks before deciding whether two results are
+    evidence about one hypothesis or two.
+
+    Ancestry here is the **closure** — a node is in its own ancestry — because
+    the common case is comparing a candidate against the one it was derived
+    from. With strict ancestry, comparing a parent with its child finds nothing
+    in common, which is the opposite of the truth.
 
     Attributes:
-        common_ancestors: Nodes both descend from, nearest first. Empty for
-            candidates from independent roots, which is what makes them
-            independent.
-        same_candidate: Whether the two carry the same candidate fingerprint --
-            the same scientific proposition, possibly run twice.
+        common_ancestors: Every node both descend from, including either node
+            itself. Order is by id: this is a set, and any depth ordering would
+            have to pick one of the two nodes to measure from, which is what
+            made an earlier version asymmetric.
+        nearest_common_ancestors: The **lowest** common ancestors -- those with
+            no other common ancestor below them. Plural because a DAG can have
+            several incomparable ones, which a tree cannot.
+        same_candidate: Whether the two carry the same candidate fingerprint.
     """
 
     left: ExperimentNode
     right: ExperimentNode
     common_ancestors: tuple[ExperimentNode, ...]
+    nearest_common_ancestors: tuple[ExperimentNode, ...]
     same_candidate: bool
 
     @property
     def nearest_common_ancestor(self) -> ExperimentNode | None:
-        """The closest node both descend from, if any."""
-        return self.common_ancestors[0] if self.common_ancestors else None
+        """The single closest shared ancestor, when there is exactly one.
+
+        ``None`` when the candidates share nothing **or** when they share
+        several incomparable lowest ancestors. A DAG has no single answer in
+        that case, and returning an arbitrary one would read as certainty.
+        Callers that must handle it read :attr:`nearest_common_ancestors`.
+        """
+        if len(self.nearest_common_ancestors) == 1:
+            return self.nearest_common_ancestors[0]
+        return None
 
     @property
     def is_comparable(self) -> bool:
-        """Whether these are alternatives rather than the same thing twice.
+        """Whether these are alternatives rather than one candidate written twice.
 
-        Two nodes carrying the same fingerprint are replicates, and treating
-        them as competing candidates would count one hypothesis twice.
+        Two nodes carrying the same fingerprint are duplicate representations
+        of a single scientific candidate, so treating them as competing
+        alternatives would count one hypothesis twice. (Repeated *seeds* are
+        runs under one node, not separate nodes -- see ADR-011.)
         """
         return not self.same_candidate
 
@@ -129,23 +148,61 @@ class ExperimentGraph:
         """Return every node derived from this one, nearest first."""
         return self._traverse(node_id, up=False)
 
-    def lineage(self, node_id: str) -> tuple[ExperimentNode, ...]:
-        """Return the path from a root to this node, root first.
+    def lineage_paths(self, node_id: str) -> tuple[tuple[ExperimentNode, ...], ...]:
+        """Return every path from a root to this node, each root-first.
 
-        With several ancestral paths -- a candidate derived from two
-        predecessors has more than one -- this returns the longest, which is
-        the full derivation story rather than a shortcut through it.
+        **All** paths, not one. An earlier version returned the longest and
+        called it "the full derivation story", which is false for a DAG: a
+        candidate derived from two predecessors has two derivations, and
+        picking the longer silently dropped the other. The domain has no notion
+        of a primary parent, so there is no principled basis for choosing.
+
+        Paths are ordered longest-first, then by the ids along them, so the
+        result is deterministic.
+
+        Built iteratively rather than by recursing per parent: depth is
+        unbounded, and a recursive walk would both hit Python's limit on a deep
+        graph and re-traverse shared ancestry once per merge point.
         """
-        best: tuple[ExperimentNode, ...] = ()
         node = self._node(node_id)
         if node is None:
             return ()
 
-        for parent in self.parents(node_id):
-            path = self.lineage(str(parent.id))
-            if len(path) > len(best):
-                best = path
-        return (*best, node)
+        parents = {str(node.id): self.parents(str(node.id))}
+        for ancestor in self.ancestors(str(node.id)):
+            parents[str(ancestor.id)] = self.parents(str(ancestor.id))
+
+        # Depth-first from the node upwards, carrying the partial path. The
+        # visited set is per-path, so a diamond yields both routes while a
+        # cycle -- which validation forbids, but which a corrupted record could
+        # still contain -- cannot loop forever.
+        complete: list[tuple[ExperimentNode, ...]] = []
+        stack: list[tuple[tuple[ExperimentNode, ...], frozenset[str]]] = [
+            ((node,), frozenset({str(node.id)}))
+        ]
+        while stack:
+            path, seen = stack.pop()
+            above = parents.get(str(path[0].id), ())
+            unvisited = [p for p in above if str(p.id) not in seen]
+            if not unvisited:
+                complete.append(path)
+                continue
+            for parent in unvisited:
+                stack.append(((parent, *path), seen | {str(parent.id)}))
+
+        return tuple(sorted(complete, key=lambda p: (-len(p), tuple(str(n.id) for n in p))))
+
+    def lineage(self, node_id: str) -> tuple[ExperimentNode, ...]:
+        """Return the node's ancestry closure, roots first.
+
+        Every node this one derives from, plus the node itself -- the lineage
+        *subgraph* flattened, rather than any single path through it. Use
+        :meth:`lineage_paths` when the individual derivations matter.
+        """
+        node = self._node(node_id)
+        if node is None:
+            return ()
+        return (*reversed(self.ancestors(node_id)), node)
 
     def is_descendant_of(self, node_id: str, ancestor_id: str) -> bool:
         """Whether *node_id* derives from *ancestor_id*, at any depth."""
@@ -155,6 +212,11 @@ class ExperimentGraph:
 
     def compare(self, left_id: str, right_id: str) -> CandidateComparison:
         """Return what two candidates share and where they diverge.
+
+        Symmetric: ``compare(a, b)`` and ``compare(b, a)`` report the same
+        shared ancestry. An earlier version ordered the result by distance from
+        the left node alone, which made the "nearest" answer depend on argument
+        order in any DAG where two shared ancestors sit at different depths.
 
         Raises:
             LineageError: If either node does not exist, or they belong to
@@ -171,12 +233,25 @@ class ExperimentGraph:
                 f"experiments; lineage is meaningful only within one"
             )
 
-        right_ancestry = {str(n.id) for n in self.ancestors(right_id)}
-        common = tuple(node for node in self.ancestors(left_id) if str(node.id) in right_ancestry)
+        left_closure = self._closure(left)
+        right_closure = self._closure(right)
+        common_ids = set(left_closure) & set(right_closure)
+        common = tuple(left_closure[node_id] for node_id in sorted(common_ids))
+
+        # Lowest: a common ancestor with no other common ancestor below it.
+        # "Below" is the descendant direction, so an ancestor that has another
+        # common ancestor among its descendants is not the lowest.
+        lowest = tuple(
+            node
+            for node in common
+            if not ({str(d.id) for d in self.descendants(str(node.id))} & common_ids)
+        )
+
         return CandidateComparison(
             left=left,
             right=right,
             common_ancestors=common,
+            nearest_common_ancestors=lowest,
             same_candidate=left.training_fingerprint == right.training_fingerprint,
         )
 
@@ -195,10 +270,20 @@ class ExperimentGraph:
           question entirely.
         * **A cycle.** A node cannot descend from itself, directly or through
           any path, because then no node in the loop has a derivation.
+        * **The same parent twice.** The payload would hold it twice and the
+          edge table once, so the two records of one lineage would disagree.
 
         Raises:
             LineageError: With the specific parent and the reason.
         """
+        if len(set(node.parent_ids)) != len(node.parent_ids):
+            # The payload would record the parent twice while the edge table --
+            # keyed on (parent_id, child_id) -- records it once, leaving two
+            # representations of one lineage that disagree.
+            raise LineageError(
+                f"node {node.id} names a parent more than once: {[str(p) for p in node.parent_ids]}"
+            )
+
         for parent_id in node.parent_ids:
             # Structural first: a node being created does not exist yet, so a
             # self-edge would otherwise be reported as a missing parent, which
@@ -243,6 +328,18 @@ class ExperimentGraph:
             (node_id,),
         ).fetchall()
         return tuple(ExperimentNode.model_validate_json(row["payload_json"]) for row in rows)
+
+    def _closure(self, node: ExperimentNode) -> dict[str, ExperimentNode]:
+        """The node's ancestry *including itself*, keyed by id.
+
+        A node is its own ancestor here. Comparing a candidate with the one it
+        was derived from is the common case, and strict ancestry reports those
+        two as sharing nothing.
+        """
+        closure = {str(node.id): node}
+        for ancestor in self.ancestors(str(node.id)):
+            closure[str(ancestor.id)] = ancestor
+        return closure
 
     def _node(self, node_id: str) -> ExperimentNode | None:
         row = self._connection.execute(

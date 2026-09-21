@@ -175,7 +175,10 @@ class AggregateStore:
         )
         for parent_id in node.parent_ids:
             self._connection.execute(
-                "INSERT OR IGNORE INTO experiment_edges "
+                # Plain INSERT: duplicate parents are refused by
+                # ExperimentGraph.validate_parents, so OR IGNORE would only
+                # mask a lineage the payload and the edge table disagree about.
+                "INSERT INTO experiment_edges "
                 "(parent_id, child_id, reason, payload_json) VALUES (?, ?, ?, ?)",
                 (str(parent_id), str(node.id), node.reason, "{}"),
             )

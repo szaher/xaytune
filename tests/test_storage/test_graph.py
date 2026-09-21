@@ -112,18 +112,50 @@ def test_lineage_runs_root_first(repo: ControlPlaneRepository, chain: dict[str, 
     ]
 
 
-def test_lineage_of_a_merged_candidate_takes_the_longest_path(
+def test_lineage_paths_returns_every_derivation(
     repo: ControlPlaneRepository, experiment: Any, chain: dict[str, Any]
 ) -> None:
-    """A candidate derived from two predecessors has more than one path back.
+    """A candidate derived from two predecessors has two derivations.
 
-    The longest is the full derivation story rather than a shortcut through it.
+    An earlier version returned only the longest and called it the full
+    story, which silently dropped the other. The domain has no primary
+    parent, so there is no principled basis for choosing one.
     """
     shallow = _node(repo, experiment, "shallow")
     merged = _node(repo, experiment, "merged", chain["c"], shallow)
 
-    path = [n.id for n in repo.graph.lineage(str(merged.id))]
-    assert path == [chain["a"].id, chain["b"].id, chain["c"].id, merged.id]
+    paths = [[n.id for n in path] for path in repo.graph.lineage_paths(str(merged.id))]
+
+    assert paths == [
+        [chain["a"].id, chain["b"].id, chain["c"].id, merged.id],
+        [shallow.id, merged.id],
+    ]
+
+
+def test_lineage_is_the_ancestry_closure(
+    repo: ControlPlaneRepository, chain: dict[str, Any]
+) -> None:
+    assert [n.id for n in repo.graph.lineage(str(chain["c"].id))] == [
+        chain["a"].id,
+        chain["b"].id,
+        chain["c"].id,
+    ]
+
+
+def test_lineage_paths_through_a_diamond_are_both_reported(
+    repo: ControlPlaneRepository, experiment: Any
+) -> None:
+    root = _node(repo, experiment, "root")
+    left = _node(repo, experiment, "left", root)
+    right = _node(repo, experiment, "right", root)
+    bottom = _node(repo, experiment, "bottom", left, right)
+
+    paths = {tuple(n.id for n in path) for path in repo.graph.lineage_paths(str(bottom.id))}
+
+    assert paths == {
+        (root.id, left.id, bottom.id),
+        (root.id, right.id, bottom.id),
+    }
 
 
 def test_is_descendant_of(repo: ControlPlaneRepository, chain: dict[str, Any]) -> None:
@@ -305,3 +337,89 @@ def test_attempts_never_appear_in_the_graph(
         chain["d"].id,
     ]
     assert len(repo.aggregates.attempts_for_run(str(run.id))) == 3
+
+
+# ---- comparison is symmetric and includes the nodes themselves -----------
+
+
+def test_a_parent_is_the_nearest_common_ancestor_of_its_child(
+    repo: ControlPlaneRepository, chain: dict[str, Any]
+) -> None:
+    """The commonest comparison there is, and strict ancestry got it wrong.
+
+    Comparing a candidate with the one it was derived from must find that
+    predecessor, not report that they share nothing.
+    """
+    comparison = repo.graph.compare(str(chain["a"].id), str(chain["b"].id))
+
+    assert comparison.nearest_common_ancestor is not None
+    assert comparison.nearest_common_ancestor.id == chain["a"].id
+
+
+def test_comparison_is_symmetric(repo: ControlPlaneRepository, experiment: Any) -> None:
+    """Ordering by distance from the left node alone made this argument-dependent.
+
+    ```text
+    p ── q ── l
+    └────┴─── r
+    ```
+
+    Both `l` and `r` descend from `p` and `q`, at different depths from each.
+    """
+    p = _node(repo, experiment, "p")
+    q = _node(repo, experiment, "q", p)
+    left = _node(repo, experiment, "l", q)
+    right = _node(repo, experiment, "r", p, q)
+
+    forward = repo.graph.compare(str(left.id), str(right.id))
+    backward = repo.graph.compare(str(right.id), str(left.id))
+
+    assert {n.id for n in forward.common_ancestors} == {n.id for n in backward.common_ancestors}
+    assert [n.id for n in forward.nearest_common_ancestors] == [
+        n.id for n in backward.nearest_common_ancestors
+    ]
+    # q is below p, so p is not the lowest.
+    assert [n.id for n in forward.nearest_common_ancestors] == [q.id]
+
+
+def test_two_incomparable_lowest_ancestors_are_both_reported(
+    repo: ControlPlaneRepository, experiment: Any
+) -> None:
+    """A DAG can have several, which a tree cannot.
+
+    ```text
+    x ──┬── left
+    y ──┴── right
+    ```
+
+    Neither `x` nor `y` is below the other, so there is no single answer and
+    `nearest_common_ancestor` declines to invent one.
+    """
+    x = _node(repo, experiment, "x")
+    y = _node(repo, experiment, "y")
+    left = _node(repo, experiment, "left", x, y)
+    right = _node(repo, experiment, "right", x, y)
+
+    comparison = repo.graph.compare(str(left.id), str(right.id))
+
+    assert {n.id for n in comparison.nearest_common_ancestors} == {x.id, y.id}
+    assert comparison.nearest_common_ancestor is None
+
+
+# ---- duplicate parents -------------------------------------------------
+
+
+def test_the_same_parent_named_twice_is_refused(
+    repo: ControlPlaneRepository, experiment: Any, chain: dict[str, Any]
+) -> None:
+    """The payload would hold it twice and the edge table once.
+
+    Two representations of one lineage that disagree, which is worse than
+    either being wrong on its own.
+    """
+    duplicated = make_node(experiment, parents=(chain["a"].id, chain["a"].id))
+
+    with pytest.raises(LineageError, match="more than once"):
+        repo.create_node(duplicated, actor=ACTOR)
+
+    assert repo.aggregates.get_node(str(duplicated.id)) is None

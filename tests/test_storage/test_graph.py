@@ -423,3 +423,57 @@ def test_the_same_parent_named_twice_is_refused(
         repo.create_node(duplicated, actor=ACTOR)
 
     assert repo.aggregates.get_node(str(duplicated.id)) is None
+
+
+def test_lineage_closure_is_topologically_root_first(
+    repo: ControlPlaneRepository, experiment: Any
+) -> None:
+    """A shortcut edge makes distance ordering disagree with derivation order.
+
+    ```text
+    a ── b ── n
+    └─────────┘
+    ```
+
+    Both `a` and `b` are one hop from `n`, so ordering by minimum distance
+    could place `b` before its own ancestor `a`. The guarantee is topological:
+    for every edge X -> Y in the closure, X comes first.
+    """
+    a = _node(repo, experiment, "a")
+    b = _node(repo, experiment, "b", a)
+    n = _node(repo, experiment, "n", a, b)
+
+    assert [x.id for x in repo.graph.lineage(str(n.id))] == [a.id, b.id, n.id]
+
+
+def test_lineage_respects_every_edge_in_a_wide_graph(
+    repo: ControlPlaneRepository, experiment: Any
+) -> None:
+    """The contract, checked against the edges rather than an expected list."""
+    a = _node(repo, experiment, "a")
+    b = _node(repo, experiment, "b", a)
+    c = _node(repo, experiment, "c", a)
+    d = _node(repo, experiment, "d", b, c)
+    n = _node(repo, experiment, "n", a, d)
+
+    order = [str(x.id) for x in repo.graph.lineage(str(n.id))]
+    position = {node_id: index for index, node_id in enumerate(order)}
+
+    edges = [(a, b), (a, c), (b, d), (c, d), (a, n), (d, n)]
+    for parent, child in edges:
+        assert position[str(parent.id)] < position[str(child.id)], (
+            f"{parent.training_fingerprint} must precede {child.training_fingerprint}"
+        )
+    assert len(order) == 5
+
+
+def test_lineage_ordering_is_stable(repo: ControlPlaneRepository, experiment: Any) -> None:
+    """Ties break on creation time then id, not on dict iteration order."""
+    root = _node(repo, experiment, "root")
+    left = _node(repo, experiment, "left", root)
+    right = _node(repo, experiment, "right", root)
+    bottom = _node(repo, experiment, "bottom", left, right)
+
+    first = [x.id for x in repo.graph.lineage(str(bottom.id))]
+    assert first == [x.id for x in repo.graph.lineage(str(bottom.id))]
+    assert first == [root.id, left.id, right.id, bottom.id]

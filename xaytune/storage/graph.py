@@ -164,45 +164,84 @@ class ExperimentGraph:
         unbounded, and a recursive walk would both hit Python's limit on a deep
         graph and re-traverse shared ancestry once per merge point.
         """
-        node = self._node(node_id)
-        if node is None:
+        nodes, parents = self._closure(node_id)
+        if node_id not in nodes:
             return ()
-
-        parents = {str(node.id): self.parents(str(node.id))}
-        for ancestor in self.ancestors(str(node.id)):
-            parents[str(ancestor.id)] = self.parents(str(ancestor.id))
 
         # Depth-first from the node upwards, carrying the partial path. The
         # visited set is per-path, so a diamond yields both routes while a
         # cycle -- which validation forbids, but which a corrupted record could
         # still contain -- cannot loop forever.
         complete: list[tuple[ExperimentNode, ...]] = []
-        stack: list[tuple[tuple[ExperimentNode, ...], frozenset[str]]] = [
-            ((node,), frozenset({str(node.id)}))
-        ]
+        stack: list[tuple[tuple[str, ...], frozenset[str]]] = [((node_id,), frozenset({node_id}))]
         while stack:
             path, seen = stack.pop()
-            above = parents.get(str(path[0].id), ())
-            unvisited = [p for p in above if str(p.id) not in seen]
+            unvisited = [p for p in parents.get(path[0], ()) if p not in seen]
             if not unvisited:
-                complete.append(path)
+                complete.append(tuple(nodes[i] for i in path))
                 continue
             for parent in unvisited:
-                stack.append(((parent, *path), seen | {str(parent.id)}))
+                stack.append(((parent, *path), seen | {parent}))
 
         return tuple(sorted(complete, key=lambda p: (-len(p), tuple(str(n.id) for n in p))))
 
     def lineage(self, node_id: str) -> tuple[ExperimentNode, ...]:
-        """Return the node's ancestry closure, roots first.
+        """Return the node's ancestry closure in topological order, roots first.
 
         Every node this one derives from, plus the node itself -- the lineage
         *subgraph* flattened, rather than any single path through it. Use
         :meth:`lineage_paths` when the individual derivations matter.
+
+        The guarantee is topological, not by distance:
+
+        ```text
+        for every edge X -> Y within the closure, X appears before Y
+        ```
+
+        An earlier version reversed :meth:`ancestors`, which orders by *minimum*
+        distance from the target. Those differ whenever a shortcut edge exists:
+
+        ```text
+        A -> B -> N   and   A -> N
+        ```
+
+        gives A and B the same minimum distance from N, so reversing could
+        place B before its own ancestor A. Ties are broken by creation time
+        then id, so the order is stable across processes.
         """
-        node = self._node(node_id)
-        if node is None:
+        nodes, parents = self._closure(node_id)
+        if node_id not in nodes:
             return ()
-        return (*reversed(self.ancestors(node_id)), node)
+
+        # Kahn's algorithm. A node is ready once every parent inside the
+        # closure has been emitted; the ready set is kept sorted so equal
+        # candidates come out in a defined order rather than a dict's.
+        remaining = {
+            child: {p for p in parent_ids if p in nodes} for child, parent_ids in parents.items()
+        }
+        for node_key in nodes:
+            remaining.setdefault(node_key, set())
+
+        emitted: list[ExperimentNode] = []
+        ready = sorted(
+            (key for key, waiting in remaining.items() if not waiting),
+            key=lambda key: (nodes[key].created_at, key),
+        )
+        while ready:
+            key = ready.pop(0)
+            emitted.append(nodes[key])
+            del remaining[key]
+            freed = []
+            for child, waiting in remaining.items():
+                if key in waiting:
+                    waiting.discard(key)
+                    if not waiting:
+                        freed.append(child)
+            for child in freed:
+                ready.append(child)
+            ready.sort(key=lambda key: (nodes[key].created_at, key))
+
+        return tuple(emitted)
 
     def is_descendant_of(self, node_id: str, ancestor_id: str) -> bool:
         """Whether *node_id* derives from *ancestor_id*, at any depth."""
@@ -233,8 +272,8 @@ class ExperimentGraph:
                 f"experiments; lineage is meaningful only within one"
             )
 
-        left_closure = self._closure(left)
-        right_closure = self._closure(right)
+        left_closure = self._ancestry_closure(left)
+        right_closure = self._ancestry_closure(right)
         common_ids = set(left_closure) & set(right_closure)
         common = tuple(left_closure[node_id] for node_id in sorted(common_ids))
 
@@ -329,17 +368,60 @@ class ExperimentGraph:
         ).fetchall()
         return tuple(ExperimentNode.model_validate_json(row["payload_json"]) for row in rows)
 
-    def _closure(self, node: ExperimentNode) -> dict[str, ExperimentNode]:
-        """The node's ancestry *including itself*, keyed by id.
+    def _closure(
+        self, node_id: str
+    ) -> tuple[dict[str, ExperimentNode], dict[str, tuple[str, ...]]]:
+        """Load a node's ancestry closure and its internal edges.
+
+        Two queries regardless of depth. Reading the nodes and then asking for
+        each one's parents would be a query per ancestor -- the per-generation
+        round trip this module uses recursive CTEs to avoid, reintroduced one
+        level up.
+
+        Returns:
+            The closure's nodes keyed by id (including *node_id* itself), and
+            each node's parents **within the closure**.
+        """
+        walk = (
+            "WITH RECURSIVE closure(id) AS ("
+            "  SELECT ?"
+            "  UNION"
+            "  SELECT e.parent_id FROM experiment_edges e "
+            "  JOIN closure ON e.child_id = closure.id"
+            ")"
+        )
+        node_rows = self._connection.execute(
+            f"{walk} SELECT n.payload_json FROM experiment_nodes n "
+            f"WHERE n.id IN (SELECT id FROM closure)",
+            (node_id,),
+        ).fetchall()
+        nodes = {
+            str(n.id): n
+            for n in (ExperimentNode.model_validate_json(row["payload_json"]) for row in node_rows)
+        }
+
+        edge_rows = self._connection.execute(
+            f"{walk} SELECT e.parent_id, e.child_id FROM experiment_edges e "
+            f"WHERE e.child_id IN (SELECT id FROM closure) "
+            f"ORDER BY e.child_id, e.parent_id",
+            (node_id,),
+        ).fetchall()
+
+        parents: dict[str, list[str]] = {}
+        for row in edge_rows:
+            if str(row["parent_id"]) in nodes:
+                parents.setdefault(str(row["child_id"]), []).append(str(row["parent_id"]))
+
+        return nodes, {child: tuple(ps) for child, ps in parents.items()}
+
+    def _ancestry_closure(self, node: ExperimentNode) -> dict[str, ExperimentNode]:
+        """The node's ancestry including itself, for comparison.
 
         A node is its own ancestor here. Comparing a candidate with the one it
         was derived from is the common case, and strict ancestry reports those
         two as sharing nothing.
         """
-        closure = {str(node.id): node}
-        for ancestor in self.ancestors(str(node.id)):
-            closure[str(ancestor.id)] = ancestor
-        return closure
+        return self._closure(str(node.id))[0]
 
     def _node(self, node_id: str) -> ExperimentNode | None:
         row = self._connection.execute(

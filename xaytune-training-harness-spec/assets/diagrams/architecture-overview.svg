@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1390" viewBox="0 0 1200 1390" role="img" aria-labelledby="architecture-overview-title architecture-overview-desc">
+<title id="architecture-overview-title">One control plane. Multiple execution backends.</title>
+<desc id="architecture-overview-desc">Clients enter the experiment control plane. CandidateSpec passes to trainer compilers, TrainingExecutionSpec to capability and resilience resolution, and ResolvedExecutionPlan to runtime backends using submit_or_get. Runtime backends delegate to infrastructure. Training Hub is the preferred path to Kubeflow or KubeRay and Kueue.</desc>
+<defs><marker id="architecture-overview-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
+<rect width="1200" height="1390" fill="#f5f8fb"/>
+<text x="48" y="40" font-size="15" fill="#087f79" font-weight="700" text-anchor="start" class="">XAYTUNE  /  ARCHITECTURE SPECIFICATION</text>
+<text x="48" y="86" font-size="34" fill="#172b40" font-weight="700" text-anchor="start" class="">One control plane. Multiple execution backends.</text>
+<text x="48" y="119" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Experiment intent stays separate from trainer compilation and runtime execution.</text>
+<rect x="48" y="153" width="1104" height="94" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="177" width="5" height="46" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
+<text x="90" y="195" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">Interfaces</text>
+<text x="90" y="227" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Python SDK  ·  CLI  ·  Studio  ·  Coding agents</text>
+<path d="M 600 247 L 600 281" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
+<rect x="48" y="285" width="1104" height="266" rx="16" fill="#eaf6f3" stroke="#b7dcd5" stroke-width="1.5"/>
+<text x="76" y="324" font-size="27" fill="#087f79" font-weight="700" text-anchor="start" class="">Experiment control plane</text>
+<text x="76" y="354" font-size="20" fill="#52677b" font-weight="400" text-anchor="start" class="">ExperimentController coordinates durable, governed experiments</text>
+<text x="76" y="400" font-size="21" fill="#087f79" font-weight="700" text-anchor="start" class="">Scientific lineage</text>
+<text x="76" y="430" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">ExperimentGraph</text>
+<text x="76" y="459" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Provenance / Memory</text>
+<text x="438" y="400" font-size="21" fill="#087f79" font-weight="700" text-anchor="start" class="">Adaptive decisions</text>
+<text x="438" y="430" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Planner / SearchProvider</text>
+<text x="438" y="459" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Evaluation / DecisionEngine</text>
+<text x="800" y="400" font-size="21" fill="#087f79" font-weight="700" text-anchor="start" class="">Governance &amp; recovery</text>
+<text x="800" y="430" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">PolicyEngine / BudgetLedger</text>
+<text x="800" y="459" font-size="18" fill="#172b40" font-weight="400" text-anchor="start" class="">Incident / RecoveryCoordinator</text>
+<text x="76" y="520" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Planning: rules · LLM proposals · search adapters (Ray Tune / Katib / Optuna)</text>
+<path d="M 600 551 L 600 616" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
+<rect x="465.0" y="566.5" width="270" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
+<text x="600" y="589.5" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">CandidateSpec</text>
+<rect x="48" y="620" width="1104" height="102" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="644" width="5" height="54" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="90" y="662" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Trainer compilers</text>
+<text x="90" y="694" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">NativeCompiler  ·  TRLCompiler  ·  TorchtuneCompiler  ·  VerlCompiler</text>
+<path d="M 600 722 L 600 792" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
+<rect x="454.0" y="740.0" width="292" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
+<text x="600" y="763.0" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">TrainingExecutionSpec</text>
+<rect x="48" y="796" width="1104" height="102" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="820" width="5" height="54" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="90" y="838" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Capability &amp; resilience resolution</text>
+<text x="90" y="870" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">CapabilityResolver  ·  ResilienceProvider  ·  Checkpoint contract</text>
+<path d="M 600 898 L 600 968" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
+<rect x="454.0" y="916.0" width="292" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
+<text x="600" y="939.0" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">ResolvedExecutionPlan</text>
+<rect x="48" y="972" width="1104" height="120" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="996" width="5" height="72" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
+<text x="90" y="1014" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">Runtime backends</text>
+<text x="90" y="1046" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">LocalRuntime  ·  RayTrainRuntime  ·  TrainingHubRuntime</text>
+<text x="90" y="1075" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">RuntimeBackend.submit_or_get(operation_id, plan)</text>
+<path d="M 600 1092 L 600 1130" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
+<rect x="48" y="1134" width="1104" height="188" rx="16" fill="#fff6ed" stroke="#ecd8c5" stroke-width="1.5"/>
+<text x="76" y="1174" font-size="25" fill="#ad591f" font-weight="700" text-anchor="start" class="">Platform / infrastructure</text>
+<text x="76" y="1210" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Local: subprocess / torchrun  ·  Ray: Ray Train / Jobs</text>
+<text x="76" y="1247" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Training Hub path: Kubeflow Trainer / KubeRay → Kueue</text>
+<text x="76" y="1287" font-size="18" fill="#52677b" font-weight="400" text-anchor="start" class="">Integrations land incrementally; this diagram describes the target architecture.</text>
+<text x="48" y="1366" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>
+<text x="1152" y="1366" font-size="14" fill="#52677b" font-weight="400" text-anchor="end" class="">Contracts and rollout status: see linked specification</text>
+</svg>

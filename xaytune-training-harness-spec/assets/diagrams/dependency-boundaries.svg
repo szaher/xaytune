@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="930" viewBox="0 0 1200 930" role="img" aria-labelledby="dependency-boundaries-title dependency-boundaries-desc">
+<title id="dependency-boundaries-title">Dependencies point toward contracts</title>
+<desc id="dependency-boundaries-desc">API depends on experiment orchestration. Experiment orchestration depends on domain and compiler, runtime, evaluation and persistence protocols. Plugins depend on protocols. Core does not import ML runtimes. Direct domain-to-ML, policy-to-TRL, recipe-to-Kubernetes, experiment-to-MLflow and core-to-Training-Hub implementation dependencies are forbidden.</desc>
+<defs><marker id="dependency-boundaries-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
+<rect width="1200" height="930" fill="#f5f8fb"/>
+<text x="48" y="40" font-size="15" fill="#087f79" font-weight="700" text-anchor="start" class="">XAYTUNE  /  ARCHITECTURE SPECIFICATION</text>
+<text x="48" y="86" font-size="34" fill="#172b40" font-weight="700" text-anchor="start" class="">Dependencies point toward contracts</text>
+<text x="48" y="119" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Arrows mean imports / dependencies, not workload execution.</text>
+<rect x="48" y="164" width="340" height="100" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="188" width="5" height="52" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
+<text x="90" y="206" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">API</text>
+<text x="90" y="238" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">SDK · CLI · Studio</text>
+<rect x="48" y="334" width="340" height="115" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="358" width="5" height="67" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="90" y="376" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Experiment</text>
+<text x="90" y="408" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Control-plane orchestration</text>
+<path d="M 218 264 L 218 330" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#dependency-boundaries-arrow)"/>
+<rect x="720" y="270" width="432" height="105" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="740" y="294" width="5" height="57" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="762" y="312" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Domain</text>
+<text x="762" y="344" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Immutable values / aggregates</text>
+<rect x="720" y="424" width="432" height="177" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="740" y="448" width="5" height="129" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="762" y="466" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Protocols</text>
+<text x="762" y="498" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Compiler · runtime</text>
+<text x="762" y="527" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Evaluation · persistence</text>
+<text x="762" y="556" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Typed integration contracts</text>
+<path d="M 388 377 L 545 377 L 545 322 L 716 322" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#dependency-boundaries-arrow)"/>
+<path d="M 388 408 L 545 408 L 545 510 L 716 510" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#dependency-boundaries-arrow)"/>
+<rect x="48" y="516" width="340" height="100" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="540" width="5" height="52" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="90" y="558" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Plugins</text>
+<text x="90" y="590" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Implement protocol contracts</text>
+<path d="M 388 566 L 590 566 L 590 558 L 716 558" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#dependency-boundaries-arrow)"/>
+<rect x="48" y="677" width="1104" height="183" rx="16" fill="#fff4f1" stroke="#eccfc7" stroke-width="1.5"/>
+<text x="76" y="718" font-size="24" fill="#a14536" font-weight="700" text-anchor="start" class="">Forbidden dependency directions</text>
+<text x="76" y="757" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">domain → torch / TRL / Ray</text>
+<text x="622" y="757" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">policy → TRL</text>
+<text x="76" y="793" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">recipe → Kubernetes</text>
+<text x="622" y="793" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">experiment → MLflow</text>
+<text x="76" y="829" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">core → Training Hub implementation</text>
+<text x="48" y="906" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>
+<text x="1152" y="906" font-size="14" fill="#52677b" font-weight="400" text-anchor="end" class="">Contracts and rollout status: see linked specification</text>
+</svg>

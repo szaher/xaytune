@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1140" viewBox="0 0 1200 1140" role="img" aria-labelledby="evaluation-path-title evaluation-path-desc">
+<title id="evaluation-path-title">Evaluation has its own durable lifecycle</title>
+<desc id="evaluation-path-desc">ModelArtifact and EvaluationSpec feed evaluator preparation and execution. EvaluationRun owns seed and replicate; EvaluationAttempt records execution and retry. Versioned MetricResult values become EvaluationResult linked to EvaluationRun and the artifact, then DecisionEngine evaluates objective, constraints and uncertainty.</desc>
+<defs><marker id="evaluation-path-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
+<rect width="1200" height="1140" fill="#f5f8fb"/>
+<text x="48" y="40" font-size="15" fill="#087f79" font-weight="700" text-anchor="start" class="">XAYTUNE  /  ARCHITECTURE SPECIFICATION</text>
+<text x="48" y="86" font-size="34" fill="#172b40" font-weight="700" text-anchor="start" class="">Evaluation has its own durable lifecycle</text>
+<text x="48" y="119" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Changing the evaluator does not change candidate identity or require retraining.</text>
+<rect x="48" y="158" width="530" height="120" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="182" width="5" height="72" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="90" y="200" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">ModelArtifact</text>
+<text x="90" y="232" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Immutable artifact reference</text>
+<text x="90" y="261" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Subject being measured</text>
+<rect x="622" y="158" width="530" height="120" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="642" y="182" width="5" height="72" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="664" y="200" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">EvaluationSpec</text>
+<text x="664" y="232" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Evaluators · dataset · slices</text>
+<text x="664" y="261" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Independent EvaluationFingerprint</text>
+<path d="M 313 278 L 313 309 L 600 309 L 600 348" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#evaluation-path-arrow)"/>
+<path d="M 887 278 L 887 309 L 600 309 L 600 348" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#evaluation-path-arrow)"/>
+<rect x="100" y="352" width="1000" height="111" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="120" y="376" width="5" height="63" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="142" y="394" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Prepare evaluation</text>
+<text x="142" y="426" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Evaluator.prepare(artifact, spec) → EvaluationExecutionSpec</text>
+<path d="M 600 463 L 600 505" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#evaluation-path-arrow)"/>
+<rect x="100" y="509" width="1000" height="182" rx="16" fill="#eef5fc" stroke="#c7daec" stroke-width="1.5"/>
+<text x="128" y="550" font-size="25" fill="#2567ad" font-weight="700" text-anchor="start" class="">Execute through the evaluation coordinator</text>
+<text x="128" y="590" font-size="22" fill="#2567ad" font-weight="700" text-anchor="start" class="">EvaluationRun</text>
+<text x="128" y="620" font-size="20" fill="#172b40" font-weight="400" text-anchor="start" class="">Seed / replicate ownership</text>
+<text x="632" y="590" font-size="22" fill="#2567ad" font-weight="700" text-anchor="start" class="">EvaluationAttempt</text>
+<text x="632" y="620" font-size="20" fill="#172b40" font-weight="400" text-anchor="start" class="">Queue · execute · retry · reconcile</text>
+<text x="128" y="662" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Runtime-operation journal persists submission intent before execution.</text>
+<path d="M 600 691 L 600 751" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#evaluation-path-arrow)"/>
+<rect x="465.0" y="704.0" width="270" height="34" rx="4" fill="#f5f8fb" stroke="#f5f8fb" stroke-width="1.5"/>
+<text x="600" y="727.0" font-size="18" fill="#52677b" font-weight="400" text-anchor="middle" class="mono">MetricResult[]</text>
+<rect x="100" y="755" width="1000" height="106" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="120" y="779" width="5" height="58" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="142" y="797" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">EvaluationResult</text>
+<text x="142" y="829" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">evaluation_run_id · artifact_ref · versioned metrics · constraints</text>
+<path d="M 600 861 L 600 903" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#evaluation-path-arrow)"/>
+<rect x="100" y="907" width="1000" height="112" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="120" y="931" width="5" height="64" rx="2" fill="#ad591f" stroke="#ad591f" stroke-width="1.5"/>
+<text x="142" y="949" font-size="24" fill="#ad591f" font-weight="700" text-anchor="start" class="">DecisionEngine</text>
+<text x="142" y="981" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Objective + constraints + uncertainty + budget + policy</text>
+<text x="600" y="1070" font-size="22" fill="#ad591f" font-weight="700" text-anchor="middle" class="">Continue  ·  Evaluate more  ·  Branch  ·  Promote  ·  Stop</text>
+<text x="48" y="1116" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>
+<text x="1152" y="1116" font-size="14" fill="#52677b" font-weight="400" text-anchor="end" class="">Contracts and rollout status: see linked specification</text>
+</svg>

@@ -1,0 +1,103 @@
+apiVersion: xaytune.ai/v1alpha1
+kind: Experiment
+
+metadata:
+  name: support-qwen
+
+objective:
+  primary:
+    name: task_success
+    direction: maximize
+  target: 0.85
+  constraints:
+    - name: latency_ms
+      operator: <=
+      value: 120
+
+budget:
+  maxRuns: 8
+  maxParallelRuns: 2
+  maxGpuHours: 20
+
+# The scientific proposition. Mirrors CandidateSpec (ADR-011): model and data
+# are siblings of training, not fields inside it, and `seed` is absent because
+# it belongs to the Run, not the candidate.
+candidate:
+  model:
+    uri: Qwen/Qwen3-8B
+    revision: main
+
+  data:
+    uri: s3://datasets/support-v4
+    revision: sha256:replace-me
+    split: train
+
+  # The training program only.
+  training:
+    kind: sft
+
+    adapter:
+      type: lora
+      rank: 16
+      alpha: 32
+
+    optimization:
+      optimizer: adamw
+      learningRate: 2e-5
+      microBatchSize: 4
+      gradientAccumulation: 8
+      epochs: 3
+      scheduler: cosine
+      warmupRatio: 0.03
+
+    precision:
+      mode: bf16
+
+    checkpoint:
+      everySteps: 200
+      keepLast: 3
+
+  # Present for RL/agent candidates; null for SFT.
+  reward: null
+  environment: null
+
+  # Pre-registered interventions, part of candidate identity (ADR-011).
+  schedule: null
+
+# Replicates. Seed lives here, not on the candidate: two replicates differing
+# only by seed are the same candidate run twice.
+runs:
+  replicates: 1
+  seed: 1234
+
+evaluation:
+  evaluators:
+    - name: support-task
+      version: v2
+
+resilience:
+  maxRecoveries: 8
+
+  cudaOOM:
+    strategy: execution-override
+    preserveEffectiveBatch: true
+    minimumMicroBatchSize: 1
+
+  workerFailure:
+    strategy: runtime-recover
+
+  numericalFailure:
+    strategy: pause-for-approval
+
+planner:
+  type: rule-based
+
+policy:
+  approvalRequiredFor:
+    - change_dataset
+    - change_base_model
+    - increase_gpu_count
+
+runtime:
+  backend: training-hub
+  profile: torch-distributed

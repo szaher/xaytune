@@ -1,0 +1,52 @@
+{
+  "api_version": "xaytune.execution/v1alpha1",
+  "compiler": {
+    "name": "trl",
+    "plugin_version": "example"
+  },
+  "entrypoint": {
+    "kind": "python-module",
+    "value": "xaytune_runtime.trl_worker"
+  },
+  "arguments": [],
+  "config": {
+    "trainer": "sft"
+  },
+  "environment": {},
+  "dependencies": {
+    "extras": [
+      "trl"
+    ]
+  },
+  "container": null,
+  "inputs": [
+    {
+      "kind": "dataset",
+      "uri": "s3://datasets/support-v4"
+    }
+  ],
+  "outputs": [
+    {
+      "kind": "model",
+      "name": "final-model"
+    }
+  ],
+  "resources": {
+    "gpus": 8,
+    "gpu_type": null,
+    "cpu": null,
+    "memory": null
+  },
+  "checkpoint": {
+    "required": true,
+    "every_steps": 200
+  },
+  "telemetry": {
+    "event_protocol": "xaytune.telemetry/v1alpha1"
+  },
+  "required_capabilities": {
+    "precision": "bf16",
+    "distributed_strategy": "fsdp"
+  },
+  "candidate_fingerprint": "sha256:replace-me"
+}

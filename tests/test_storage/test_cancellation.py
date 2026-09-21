@@ -60,8 +60,12 @@ def _drive_to(repo: ControlPlaneRepository, attempt: Any, final: RunAttemptStatu
 
     current = attempt
     for status in path:
-        current = current.with_status(status)
-        repo.transition(current, actor=ACTOR)
+        current = repo.transition_attempt(
+            current.id,
+            expected_revision=current.revision,
+            new_status=status,
+            actor=ACTOR,
+        )
     return current
 
 
@@ -187,7 +191,7 @@ def test_a_cancellation_that_takes_effect_is_applied(
 
     # Both halves of the evidence: the effect is confirmed and the attempt
     # observed CANCELLED. Neither alone is enough.
-    repo.confirm_operation(operation, actor=ACTOR)
+    repo.confirm_operation(operation.id, expected_revision=operation.revision, actor=ACTOR)
     cancelled = _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
     assert cancelled.status is RunAttemptStatus.CANCELLED
 
@@ -609,7 +613,7 @@ def test_reconciliation_reads_the_durable_action(
         repo, live_attempt, ActionId.generate(), OperationId.generate()
     )
     assert operation is not None
-    repo.confirm_operation(operation, actor=ACTOR)
+    repo.confirm_operation(operation.id, expected_revision=operation.revision, actor=ACTOR)
     _drive_to(repo, live_attempt, RunAttemptStatus.CANCELLED)
 
     settled = repo.reconcile_cancellation(action.id, actor=ACTOR)

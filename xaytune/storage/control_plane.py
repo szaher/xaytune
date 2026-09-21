@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from typing import Literal
+from collections.abc import Callable
+from typing import Any, Literal, Protocol, TypeVar
 
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.action import (
@@ -44,10 +45,24 @@ from xaytune.core.domain.operation import (
     RuntimeOperationTarget,
 )
 from xaytune.core.domain.run import Run, RunAttempt
-from xaytune.core.ids import ActionId, EventId, ExperimentId, OperationId
-from xaytune.core.immutable import AggregateModel, FrozenDict
+from xaytune.core.errors import ConcurrentModificationError
+from xaytune.core.ids import (
+    ActionId,
+    EventId,
+    ExperimentId,
+    ExperimentNodeId,
+    OperationId,
+    RunAttemptId,
+    RunId,
+)
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, RuntimeRef
-from xaytune.core.state.status import RunAttemptStatus
+from xaytune.core.state.status import (
+    ExperimentNodeStatus,
+    ExperimentStatus,
+    RunAttemptStatus,
+    RunStatus,
+)
 from xaytune.storage.actions import ActionStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
@@ -60,6 +75,25 @@ from xaytune.storage.journal import (
 from xaytune.storage.repository import AggregateStore
 
 __all__ = ["ControlPlaneRepository", "UnknownOperationTargetError"]
+
+
+class _Transitionable(Protocol):
+    """What ``_transition`` needs of an aggregate.
+
+    Structural rather than a base class: the four aggregates already share
+    these through :class:`AggregateModel`, and naming the requirement here is
+    what lets the loader, the writer and the return type be one type.
+    """
+
+    revision: int
+
+    @property
+    def id(self) -> Any: ...
+
+    def with_status(self, new_status: Any) -> Any: ...
+
+
+AggregateT = TypeVar("AggregateT", bound=_Transitionable)
 
 _AGGREGATE_TABLES: dict[str, str] = {
     "Experiment": "experiments",
@@ -133,6 +167,43 @@ class UnknownOperationTargetError(StorageError):
         super().__init__(f"no {kind} exists with id {target_id}")
 
 
+def _require_pristine(aggregate: Any, initial: Any) -> None:
+    """Refuse a created aggregate that is not actually new.
+
+    Nothing stopped a caller passing ``Experiment(status=ACTIVE, revision=7)``
+    to a create method. The row would then start mid-lifecycle with a revision
+    no transition produced, and its creation event would claim a state it never
+    entered -- history beginning with a state that has no transition into it.
+    """
+    if aggregate.status is not initial:
+        raise ValueError(
+            f"a new {type(aggregate).__name__} must start in "
+            f"{initial.value!r}, not {aggregate.status.value!r}: a creation "
+            f"event cannot record a state the aggregate never transitioned into"
+        )
+    if aggregate.revision != 0:
+        raise ValueError(
+            f"a new {type(aggregate).__name__} must start at revision 0, not "
+            f"{aggregate.revision}: every later revision is produced by a "
+            f"transition that also wrote an event"
+        )
+
+
+def _assert_same_attempt(existing: RunAttempt, requested: RunAttempt) -> None:
+    """Refuse a replay whose attempt identity differs.
+
+    Raises:
+        IdempotencyConflictError: Naming each differing field.
+    """
+    differing = tuple(
+        field
+        for field in ("id", "run_id", "attempt_number")
+        if getattr(existing, field) != getattr(requested, field)
+    )
+    if differing:
+        raise IdempotencyConflictError(str(existing.id), differing, kind="attempt")
+
+
 class ControlPlaneRepository:
     """Atomic writes over the control-plane aggregates and their journals."""
 
@@ -154,6 +225,8 @@ class ControlPlaneRepository:
         destinations: tuple[str, ...] = (),
     ) -> Experiment:
         """Create an experiment, its creation event and any outbox records."""
+        _require_pristine(experiment, ExperimentStatus.CREATED)
+
         with write_transaction(self._connection):
             self.aggregates._insert_experiment(experiment)
             self._emit(experiment, "ExperimentCreated", str(experiment.id), actor, destinations)
@@ -183,47 +256,104 @@ class ControlPlaneRepository:
 
     def create_run(self, run: Run, *, actor: Actor, destinations: tuple[str, ...] = ()) -> Run:
         """Create a run, its creation event and any outbox records."""
+        _require_pristine(run, RunStatus.CREATED)
+
         with write_transaction(self._connection):
             self.aggregates._insert_run(run)
             self._emit(run, "RunCreated", str(run.experiment_id), actor, destinations)
         return run
 
-    def transition(
+    def transition_experiment(
         self,
-        aggregate: AggregateModel,
+        experiment_id: ExperimentId,
         *,
+        expected_revision: int,
+        new_status: ExperimentStatus,
         actor: Actor,
         event_type: str | None = None,
         destinations: tuple[str, ...] = (),
-    ) -> None:
-        """Persist a transitioned aggregate with its event, atomically.
+    ) -> Experiment:
+        """Move an experiment to *new_status*, with its event, atomically."""
+        return self._transition(
+            "Experiment",
+            str(experiment_id),
+            expected_revision,
+            new_status,
+            self.aggregates.get_experiment,
+            self.aggregates._update_experiment,
+            actor,
+            event_type,
+            destinations,
+        )
 
-        *aggregate* is the post-transition value, produced by the aggregate's
-        own ``with_status()`` -- so the state machine has already validated the
-        edge and bumped the revision. This writes it under a revision guard and
-        records what happened.
+    def transition_node(
+        self,
+        node_id: ExperimentNodeId,
+        *,
+        expected_revision: int,
+        new_status: ExperimentNodeStatus,
+        actor: Actor,
+        event_type: str | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> ExperimentNode:
+        """Move a node to *new_status*, with its event, atomically."""
+        return self._transition(
+            "ExperimentNode",
+            str(node_id),
+            expected_revision,
+            new_status,
+            self.aggregates.get_node,
+            self.aggregates._update_node,
+            actor,
+            event_type,
+            destinations,
+        )
 
-        The owning experiment is **derived**, never supplied. A caller-provided
-        id can disagree with the aggregate's own ownership, and the result is
-        silent: the state change lands on one experiment while its event is
-        filed under another's history. Nothing errors, and the provenance record
-        is wrong in a way no later query can detect.
+    def transition_run(
+        self,
+        run_id: RunId,
+        *,
+        expected_revision: int,
+        new_status: RunStatus,
+        actor: Actor,
+        event_type: str | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> Run:
+        """Move a run to *new_status*, with its event, atomically."""
+        return self._transition(
+            "Run",
+            str(run_id),
+            expected_revision,
+            new_status,
+            self.aggregates.get_run,
+            self.aggregates._update_run,
+            actor,
+            event_type,
+            destinations,
+        )
 
-        Raises:
-            ConcurrentModificationError: If another writer moved it first.
-            ValueError: If the aggregate is more than one transition ahead of
-                the stored row, which would leave the intervening transitions
-                with no events.
-        """
-        with write_transaction(self._connection):
-            self._update(aggregate)
-            self._emit(
-                aggregate,
-                event_type or f"{type(aggregate).__name__}StatusChanged",
-                self._owning_experiment(aggregate),
-                actor,
-                destinations,
-            )
+    def transition_attempt(
+        self,
+        attempt_id: RunAttemptId,
+        *,
+        expected_revision: int,
+        new_status: RunAttemptStatus,
+        actor: Actor,
+        event_type: str | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> RunAttempt:
+        """Move an attempt to *new_status*, with its event, atomically."""
+        return self._transition(
+            "RunAttempt",
+            str(attempt_id),
+            expected_revision,
+            new_status,
+            self.aggregates.get_attempt,
+            self.aggregates._update_attempt,
+            actor,
+            event_type,
+            destinations,
+        )
 
     # ---- ADR-005 §4 ----------------------------------------------------
 
@@ -256,8 +386,10 @@ class ControlPlaneRepository:
             ``submit_or_get``.
 
         Raises:
-            IdempotencyConflictError: If the operation id exists against a
-                different target, type or request digest.
+            IdempotencyConflictError: If either half exists against a different
+                request -- the operation's target, type or digest, or the
+                attempt's run or number.
+            ValueError: If *attempt* is not a freshly created aggregate.
         """
         operation = RuntimeOperation(
             id=operation_id or OperationId.generate(),
@@ -265,6 +397,8 @@ class ControlPlaneRepository:
             type="submit",
             request_digest=request_digest,
         )
+
+        _require_pristine(attempt, RunAttemptStatus.CREATED)
 
         with write_transaction(self._connection):
             existing = self.operations.get(str(operation.id))
@@ -278,6 +412,11 @@ class ControlPlaneRepository:
                         f"are written in one transaction, so this is a "
                         f"corrupted record rather than a retry"
                     )
+                # Both halves, not just the operation. The attempt half was
+                # unchecked, so a retry naming a different run or attempt
+                # number returned the original silently -- the same omission as
+                # the cancellation replay, on the creation path.
+                _assert_same_attempt(stored_attempt, attempt)
                 return stored_attempt, existing
 
             experiment_id = self._experiment_of_run(str(attempt.run_id))
@@ -290,19 +429,36 @@ class ControlPlaneRepository:
 
     def confirm_operation(
         self,
-        operation: RuntimeOperation,
+        operation_id: OperationId,
         *,
+        expected_revision: int,
         actor: Actor,
         runtime_ref: RuntimeRef | None = None,
     ) -> RuntimeOperation:
-        """Record that an operation took effect, with the runtime's reference."""
-        return self._settle(operation, "confirmed", actor, runtime_ref=runtime_ref)
+        """Record that an operation took effect, with the runtime's reference.
 
-    def mark_operation_sent(self, operation: RuntimeOperation, *, actor: Actor) -> RuntimeOperation:
+        A **submit** operation requires one. Confirming a submission without a
+        reference records that a workload exists and forgets where -- it leaves
+        the unresolved queue, so nothing looks for it again, which is the
+        orphaned workload ADR-013 was written to prevent. A cancel needs none:
+        it stops something already identified.
+
+        Raises:
+            StorageError: If a submit operation is confirmed with no reference.
+        """
+        return self._settle(
+            operation_id, "confirmed", expected_revision, actor, runtime_ref=runtime_ref
+        )
+
+    def mark_operation_sent(
+        self, operation_id: OperationId, *, expected_revision: int, actor: Actor
+    ) -> RuntimeOperation:
         """Record that the request was issued but its outcome is not yet known."""
-        return self._settle(operation, "sent", actor)
+        return self._settle(operation_id, "sent", expected_revision, actor)
 
-    def fail_operation(self, operation: RuntimeOperation, *, actor: Actor) -> RuntimeOperation:
+    def fail_operation(
+        self, operation_id: OperationId, *, expected_revision: int, actor: Actor
+    ) -> RuntimeOperation:
         """Record that the request definitively did not take effect.
 
         Only for a **known** negative outcome. A lost response is not a failure:
@@ -310,7 +466,7 @@ class ControlPlaneRepository:
         is the difference between "it did not happen" and "we do not know"
         (ADR-005 §6).
         """
-        return self._settle(operation, "failed", actor)
+        return self._settle(operation_id, "failed", expected_revision, actor)
 
     # ---- ADR-005 §5 ----------------------------------------------------
 
@@ -378,17 +534,28 @@ class ControlPlaneRepository:
                 self._assert_same_effect_request(replayed[1], request_digest)
                 return replayed
 
+            # Each lifecycle step is persisted with its own event, rather than
+            # folded into one write ending at EXECUTING. Batching is what the
+            # aggregate writers refuse everywhere else -- the intervening
+            # transitions would have no events -- and the aggregate whose whole
+            # purpose is recording intent is the wrong place to make that
+            # exception. It all commits in this one transaction, so the
+            # atomicity ADR-005 section 5 requires is unchanged.
+            self.actions._insert(proposed)
+            self._emit_action(proposed, "ActionProposed", actor, destinations)
+
             # Validation happens before any effect is requested, so an action
             # that cannot be carried out never mints an operation.
-            validated = proposed.with_status(ActionStatus.VALIDATING).with_status(
-                ActionStatus.VALIDATED
-            )
+            validating = self._advance(proposed, ActionStatus.VALIDATING, "ActionValidating", actor)
+            validated = self._advance(validating, ActionStatus.VALIDATED, "ActionValidated", actor)
 
             settled_outcome = self._terminal_outcome(target)
             if settled_outcome is not None:
-                executing = validated.with_status(ActionStatus.EXECUTING)
+                executing = self._advance(
+                    validated, ActionStatus.EXECUTING, "ActionExecuting", actor
+                )
                 settled = executing.with_status(ActionStatus.SUCCEEDED, outcome=settled_outcome)
-                self.actions._insert(settled)
+                self.actions._update(settled)
                 self._emit_action(
                     settled,
                     f"Cancellation{settled_outcome.value.capitalize()}",
@@ -397,8 +564,7 @@ class ControlPlaneRepository:
                 )
                 return settled, None
 
-            executing = validated.with_status(ActionStatus.EXECUTING)
-            self.actions._insert(executing)
+            executing = self._advance(validated, ActionStatus.EXECUTING, "ActionExecuting", actor)
 
             operation = RuntimeOperation(
                 id=operation_id,
@@ -433,10 +599,17 @@ class ControlPlaneRepository:
         to manufacture provenance, so the repository owns the rule:
 
         ```text
-        target CANCELLED and its cancel operation CONFIRMED  -> APPLIED
-        target terminal for some other reason                -> SUPERSEDED
-        target still live, or the effect unconfirmed         -> unchanged
+        target CANCELLED and its cancel operation CONFIRMED  -> SUCCEEDED/APPLIED
+        target terminal for some other reason                -> SUCCEEDED/SUPERSEDED
+        cancel effect definitively FAILED, target still live -> FAILED
+        otherwise                                            -> unchanged
         ```
+
+        A failed effect has to settle the action. It is not unresolved, so
+        nothing would revisit it, and the action would hold durable intent
+        against an effect known not to have happened for the life of the
+        record. Retrying is a **new** effect under an explicit policy, not a
+        silent resurrection of this one.
 
         ``APPLIED`` requires both halves. A target that reached ``CANCELLED``
         while the operation is unresolved may have been stopped by something
@@ -461,48 +634,104 @@ class ControlPlaneRepository:
         if action.is_terminal:
             return action
 
-        outcome = self._observed_outcome(action)
-        if outcome is None:
+        resolution = self._observed_outcome(action)
+        if resolution is None:
             return action
+        status, outcome = resolution
 
-        settled = action.with_status(ActionStatus.SUCCEEDED, outcome=outcome)
+        settled = action.with_status(status, outcome=outcome)
         with write_transaction(self._connection):
             self.actions._update(settled)
-            self._emit_action(
-                settled, f"Cancellation{outcome.value.capitalize()}", actor, destinations
-            )
+            label = outcome.value if outcome else "failed"
+            self._emit_action(settled, f"Cancellation{label.capitalize()}", actor, destinations)
         return settled
 
     # ---- machinery ------------------------------------------------------
 
+    def _transition(
+        self,
+        kind: str,
+        aggregate_id: str,
+        expected_revision: int,
+        new_status: Any,
+        loader: Callable[[str], AggregateT | None],
+        writer: Callable[[AggregateT], None],
+        actor: Actor,
+        event_type: str | None,
+        destinations: tuple[str, ...],
+    ) -> AggregateT:
+        """Load, transition and persist an aggregate, with its event.
+
+        The aggregate is **loaded inside the transaction**, never accepted from
+        the caller. A caller-supplied object can carry a real id and revision
+        alongside different identity fields -- a `RunAttempt` naming a
+        different `run_id`, say -- and the row's indexed columns, its payload
+        and the event's experiment would then disagree, each silently. Loading
+        it here means the only thing the caller chooses is the transition.
+
+        ``expected_revision`` is what the caller last saw. It is checked before
+        the state machine runs, so a lost race fails as contention rather than
+        as an invalid transition computed from stale state.
+
+        Raises:
+            AggregateNotFoundError: If no such aggregate exists.
+            ConcurrentModificationError: If it has moved since the caller read it.
+            InvalidTransitionError: If the state machine forbids the edge.
+        """
+        with write_transaction(self._connection):
+            current = loader(aggregate_id)
+            if current is None:
+                raise AggregateNotFoundError(kind, aggregate_id)
+            if current.revision != expected_revision:
+                raise ConcurrentModificationError(kind, aggregate_id, expected_revision)
+
+            moved: AggregateT = current.with_status(new_status)
+            writer(moved)
+            self._emit(
+                moved,
+                event_type or f"{kind}StatusChanged",
+                self._owning_experiment(moved),
+                actor,
+                destinations,
+            )
+        return moved
+
     def _settle(
         self,
-        operation: RuntimeOperation,
+        operation_id: OperationId,
         state: Literal["sent", "confirmed", "failed"],
+        expected_revision: int,
         actor: Actor,
         *,
         runtime_ref: RuntimeRef | None = None,
     ) -> RuntimeOperation:
-        moved = operation.with_state(state, runtime_ref=runtime_ref)
         with write_transaction(self._connection):
+            current = self.operations.get(str(operation_id))
+            if current is None:
+                raise AggregateNotFoundError("RuntimeOperation", str(operation_id))
+            if current.revision != expected_revision:
+                raise ConcurrentModificationError(
+                    "RuntimeOperation", str(operation_id), expected_revision
+                )
+
+            if state == "confirmed" and current.type == "submit":
+                reference = runtime_ref or current.runtime_ref
+                if reference is None:
+                    raise StorageError(
+                        f"submit operation {operation_id} cannot be confirmed "
+                        f"without a RuntimeRef: it would leave the unresolved "
+                        f"queue, so nothing would look for the workload again, "
+                        f"and the record would say one exists without saying "
+                        f"where (ADR-013)"
+                    )
+
+            moved = current.with_state(state, runtime_ref=runtime_ref)
             experiment_id = self._experiment_of_operation(moved)
             self.operations._update(moved)
             self._emit_operation(
                 moved, f"RuntimeOperation{state.capitalize()}", experiment_id, actor
             )
         return moved
-
-    def _update(self, aggregate: AggregateModel) -> None:
-        name = type(aggregate).__name__
-        if name not in _AGGREGATE_TABLES:
-            raise StorageError(f"{name} has no persistence mapping")
-        writer = {
-            "Experiment": self.aggregates._update_experiment,
-            "ExperimentNode": self.aggregates._update_node,
-            "Run": self.aggregates._update_run,
-            "RunAttempt": self.aggregates._update_attempt,
-        }[name]
-        writer(aggregate)  # type: ignore[operator, arg-type]
 
     def _experiment_of_action_target(self, target: ActionTarget) -> str:
         """Resolve the experiment an action's target belongs to."""
@@ -617,31 +846,58 @@ class ControlPlaneRepository:
             return ActionOutcome.NOOP
         return ActionOutcome.SUPERSEDED
 
-    def _observed_outcome(self, action: Action) -> ActionOutcome | None:
-        """Derive a cancellation's outcome from what is actually recorded.
+    def _observed_outcome(self, action: Action) -> tuple[ActionStatus, ActionOutcome | None] | None:
+        """Derive a cancellation's resolution from what is actually recorded.
 
         ``None`` when the evidence does not yet support a conclusion, so the
         action stays `EXECUTING` rather than being resolved on a guess.
+
+        ```text
+        effect CONFIRMED and target CANCELLED   -> SUCCEEDED / APPLIED
+        target terminal by another path         -> SUCCEEDED / SUPERSEDED
+        effect definitively FAILED, target live -> FAILED, no outcome
+        effect INTENDED or SENT                 -> unresolved, wait
+        ```
+
+        Returns a status rather than an outcome alone because of the third
+        row. A failed effect is not unresolved, so nothing would ever revisit
+        it: the action would sit in `EXECUTING` for the life of the record,
+        holding durable intent against an effect known not to have happened.
+        Retrying is a **new** effect under an explicit policy, not a silent
+        resurrection of this one.
         """
         if action.target.kind != "training-attempt":
             raise UnknownOperationTargetError(action.target.kind, action.target.id)
 
-        attempt = self.aggregates.load_attempt(action.target.id)
-        if not attempt.is_terminal:
-            return None
-
-        if attempt.status is not RunAttemptStatus.CANCELLED:
-            return ActionOutcome.SUPERSEDED
-
-        # Cancelled -- but only claim credit if our effect was confirmed.
         caused = [
             op
             for op in self.operations.for_target(action.target.kind, action.target.id)
             if op.caused_by_action_id == action.id
         ]
-        if any(op.state == "confirmed" for op in caused):
-            return ActionOutcome.APPLIED
+        attempt = self.aggregates.load_attempt(action.target.id)
+
+        if attempt.is_terminal:
+            if attempt.status is not RunAttemptStatus.CANCELLED:
+                return ActionStatus.SUCCEEDED, ActionOutcome.SUPERSEDED
+            # Cancelled -- but only claim credit if our effect was confirmed.
+            if any(op.state == "confirmed" for op in caused):
+                return ActionStatus.SUCCEEDED, ActionOutcome.APPLIED
+            return None
+
+        # The target is still live. A definitively failed effect settles the
+        # action; anything unresolved leaves it in flight.
+        if caused and all(op.state == "failed" for op in caused):
+            return ActionStatus.FAILED, None
         return None
+
+    def _advance(
+        self, action: Action, new_status: ActionStatus, event_type: str, actor: Actor
+    ) -> Action:
+        """Move an action one step, persisting the transition with its event."""
+        moved = action.with_status(new_status)
+        self.actions._update(moved)
+        self._emit_action(moved, event_type, actor)
+        return moved
 
     def _emit_action(
         self,
@@ -670,7 +926,7 @@ class ControlPlaneRepository:
         )
         return self._write_event(event, destinations)
 
-    def _owning_experiment(self, aggregate: AggregateModel) -> str:
+    def _owning_experiment(self, aggregate: _Transitionable) -> str:
         """Return the experiment an aggregate belongs to, from the record itself.
 
         Derived rather than accepted from the caller, so an event cannot be
@@ -721,7 +977,7 @@ class ControlPlaneRepository:
 
     def _emit(
         self,
-        aggregate: AggregateModel,
+        aggregate: _Transitionable,
         event_type: str,
         experiment_id: str,
         actor: Actor,

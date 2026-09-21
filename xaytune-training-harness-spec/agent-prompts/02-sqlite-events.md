@@ -11,7 +11,9 @@ Implement:
   `RunAttemptId` column, because evaluation attempts use this same journal),
   submit/cancel type, canonical request digest, state, runtime reference and
   revision persistence
-- atomic attempt + INTENDED submit operation + events/outbox creation
+- atomic attempt + INTENDED submit operation + events/outbox creation (ADR-005 §4)
+- `BEGIN IMMEDIATE` for every write transaction, WAL, `synchronous=FULL`,
+  explicit busy timeout, single writer per database (ADR-005 §8)
 - journal APIs: create, get by operation ID, list by target, list unresolved,
   and revision-checked transition; indexes for these lookups
 - event sequence
@@ -21,6 +23,12 @@ Use `schemas/sqlite-schema-migration-001.sql` as a starting point, adapting as
 needed. It is migration 001 only — an initial subset, not the target schema.
 Its header lists the tables still to come and the ADR that defines each. Do not
 read the absence of a table there as a decision that it is not needed.
+`schemas/sqlite-schema-migration-002.sql` adds `actions` and belongs to PR-006a,
+not this PR; both must land before Phase 2.
+
+**ADR-005 is the contract this PR implements.** Read it in full before starting:
+§3 through §10 define every transaction boundary and repository invariant below,
+and §11 is the required test list.
 
 Requirements:
 

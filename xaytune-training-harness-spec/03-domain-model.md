@@ -354,8 +354,14 @@ class EvaluationAttempt(AggregateModel):
     attempt_number: int
 
     runtime_ref: RuntimeRef | None
+    telemetry_generation: int         # ADR-014; same rule as RunAttempt
     status: EvaluationAttemptStatus
 ```
+
+`telemetry_generation` is present for the same reason it is on `RunAttempt`: an
+evaluation streams through the same `RuntimeEventEnvelope`, so a supervisor that
+dies over a live evaluation needs somewhere durable to allocate its next
+generation (ADR-014 §1a). A lost stream never creates a new attempt here either.
 
 The state machines are **not** copies of `Run`/`RunAttempt`. Evaluation produces
 no checkpoints, so there is no `CHECKPOINTING` and nothing to recover into, so

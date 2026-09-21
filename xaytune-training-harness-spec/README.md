@@ -136,9 +136,14 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   `15-implementation-plan.md` §Phase 0 holds the same table with the work each
   still-open ADR blocks. **ADR-005 is the live one** — band B cannot start until
   it is accepted, and that gate is before **PR-004**, not PR-005: PR-004 is
-  where persistence assumptions freeze.
+  where persistence assumptions freeze. It was expanded on 2026-09-21 from a
+  single transaction rule into the full persistence transaction contract,
+  because band B now owns the operation journal, the Action substrate and the
+  projections as well as the experiment aggregates.
 - `schemas/` — proposed YAML and JSON/Python schema examples. The SQLite file is
-  **migration 001 only**, not the target schema; its header lists what is still to come
+  **migrations 001 and 002 only**, not the target schema — 001 is the core
+  aggregates plus the operation journal, 002 the minimal Action substrate, and
+  both are required before Phase 2. The 001 header lists what is still to come
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases
 
 ## Implementation order

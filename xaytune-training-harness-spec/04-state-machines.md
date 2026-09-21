@@ -157,21 +157,47 @@ PROPOSED
 VALIDATING
   ├── REJECTED
   └── VALIDATED
-         ↓
-      APPROVAL_PENDING
-         ├── REJECTED
-         └── APPROVED
-                 ↓
-             EXECUTING
-              ├── SUCCEEDED
-              └── FAILED
+         ├── EXECUTING                 # no approval required
+         └── APPROVAL_PENDING
+                ├── REJECTED
+                └── APPROVED
+                       ↓
+                   EXECUTING
+                    ├── SUCCEEDED
+                    └── FAILED
 ```
 
-For actions not requiring human approval:
+| From | To |
+|---|---|
+| PROPOSED | VALIDATING, REJECTED |
+| VALIDATING | VALIDATED, REJECTED |
+| VALIDATED | EXECUTING, APPROVAL_PENDING, REJECTED |
+| APPROVAL_PENDING | APPROVED, REJECTED |
+| APPROVED | EXECUTING, REJECTED |
+| EXECUTING | SUCCEEDED, FAILED |
+| SUCCEEDED, FAILED, REJECTED | *(terminal)* |
+
+**Approval is conditional, not a stage every action passes through.** An earlier
+version routed everything through `APPROVAL_PENDING → APPROVED`, so an action
+needing no approval had to be marked `APPROVED` by nobody. That is a fiction in
+the audit record, and it becomes load-bearing in band B: PR-006a builds the
+cancellation actions before the `PolicyEngine` exists, and those actions are
+proposed and executed by the controller itself. Inventing a synthetic approval
+for them would mean the provenance record cannot distinguish "no approval was
+required" from "approval was granted".
+
+The three concepts stay separate:
 
 ```text
-VALIDATED → APPROVED → EXECUTING
+validation      is this action well-formed and applicable?    always
+authorization   is this action permitted by policy?           when a policy applies
+approval        does a human have to say yes?                 when policy says so
 ```
+
+`VALIDATED → EXECUTING` is the path for a controller-owned action with no policy
+attached. Once `PolicyEngine` lands (PR-023), a policy can route an action
+through `APPROVAL_PENDING` without the state machine changing — which is the
+point of making the branch conditional rather than adding a second machine.
 
 ## 6. Incident
 

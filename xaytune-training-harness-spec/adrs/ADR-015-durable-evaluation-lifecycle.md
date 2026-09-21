@@ -55,6 +55,7 @@ class EvaluationAttempt(AggregateModel):
     evaluation_run_id: EvaluationRunId
     attempt_number: int
     runtime_ref: RuntimeRef | None
+    telemetry_generation: int         # ADR-014, same contract as RunAttempt
     status: EvaluationAttemptStatus
 ```
 
@@ -218,6 +219,9 @@ silent-stall failure into a detected one.
 
 - The persistence schema gains `evaluation_runs` and `evaluation_attempts`, and
   PR-005 can define them now rather than discovering the need later.
+  `evaluation_attempts` carries `telemetry_generation`, because ADR-014's
+  envelope targets evaluation attempts and a generation counter that exists only
+  on `run_attempts` cannot serve them.
 - Evaluation retry, cancellation and preemption are expressible.
 - Evaluation reuse is available and safe, and it is the cheapest optimisation
   in the system.

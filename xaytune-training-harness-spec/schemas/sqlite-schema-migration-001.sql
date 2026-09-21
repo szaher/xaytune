@@ -1,17 +1,23 @@
 -- Migration 001 — INITIAL SUBSET, NOT THE TARGET SCHEMA.
 --
--- This file covers only the aggregates Phase 1-2 needs: experiments, nodes,
--- edges, runs, attempts, runtime operations, events and the outbox. PR-005
--- implements the operation journal before PR-009 can submit. This is not the
--- schema the spec as a whole calls for.
+-- This file covers the core aggregates: experiments, nodes, edges, runs,
+-- attempts, runtime operations, events and the outbox. PR-005 implements the
+-- operation journal before PR-009 can submit. This is not the schema the spec
+-- as a whole calls for.
 --
--- Still to come, each in its own migration, and each gated on the ADR that
--- defines its shape:
+-- Migration 002 adds `actions` (PR-006a), and BOTH are required before Phase 2:
+-- ADR-013 cancellation needs a durable Action to hold the intent while the
+-- operation carries the effect, and `handle.cancel()` is public API from Phase 2
+-- onwards. The split is sequencing, not optionality -- 001 is written by PR-005
+-- and 002 by PR-006a, which is the order those PRs land in.
 --
---   actions, decisions          09-agent-planner-policy-budget.md
+-- Still to come after that, each in its own migration, and each gated on the ADR
+-- that defines its shape:
+--
+--   decisions                   09-agent-planner-policy-budget.md
 --   incidents                   08-resilience-and-recovery.md
 --   evaluation_runs             ADR-015
---   evaluation_attempts         ADR-015
+--   evaluation_attempts         ADR-015 (carries telemetry_generation, per ADR-014)
 --   evaluations (results)       ADR-007, ADR-015 cache key
 --   checkpoints                 ADR-009, ADR-012 (carries the DataCursor)
 --   artifacts                   ADR-006

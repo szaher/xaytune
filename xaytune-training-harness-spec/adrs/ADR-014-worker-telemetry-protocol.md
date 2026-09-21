@@ -187,8 +187,28 @@ worker.** This is deliberate: worker-side durable state is precisely what could
 not be guaranteed, so requiring the replacement supervisor to remember its
 generation would reintroduce the problem one level down. The controller knows
 how many streams it has attached to this attempt because it is the thing that
-attaches, so `RunAttempt.telemetry_generation` is durable controller state and
-a fresh supervisor may safely start at sequence 0.
+attaches, so the generation is durable controller state and a fresh supervisor
+may safely start at sequence 0.
+
+**Every attempt type owns its own generation counter**, because the envelope's
+target is typed and evaluation attempts stream through the same protocol:
+
+```text
+RunAttempt.telemetry_generation
+EvaluationAttempt.telemetry_generation
+```
+
+An earlier version named only `RunAttempt.telemetry_generation`, which left an
+evaluation telemetry supervisor with nowhere durable to allocate a new
+generation after a restart — the same mismatch as `RuntimeOperation.attempt_id`,
+one layer later.
+
+The generation is a property of the **target**, so the conceptual field is
+`target.telemetry_generation` and each attempt aggregate stores it. A separate
+`TelemetryStreamState` table keyed by target would also work and is cleaner if
+more workload types arrive soon, but it adds a table and a join to buy
+generality that ADR-015 §2 says we do not yet need. Revisit it with the same
+trigger: a third workload type.
 
 Before starting or attaching a replacement telemetry supervisor, the
 controller/runtime adapter durably allocates the next generation if continuity
@@ -284,7 +304,7 @@ received. The distinction is the entire point: an event that was received and
 then lost in a crash must be redelivered.
 
 The cursor carries the generation because the sequence alone stopped being
-unique within an attempt once generations existed. It remains a pair of
+unique within a target once generations existed. It remains a pair of
 integers with defined meaning rather than an opaque provider token: a runtime
 cannot smuggle its own pagination state through it, which is what a `str`
 cursor invited.
@@ -348,11 +368,12 @@ orders them through the RunAttempt state machine.
   it will agree.
 - The controller's event handlers must all be idempotent. This is a real
   constraint on PR-005 and is easy to violate.
-- `RunAttempt` gains `telemetry_generation` — a column in migration 001, not a
-  payload field, because the controller assigns it and reconciliation queries
-  it — and the worker-event schema gains `stream_generation`. Both are frozen by
-  the persistence band, which is why this belongs here rather than in the first
-  runtime PR.
+- Every attempt aggregate gains `telemetry_generation` — a column, not a payload
+  field, because the controller assigns it and reconciliation queries it. It is
+  in migration 001 for `run_attempts` and must be present on
+  `evaluation_attempts` when ADR-015's tables land. The worker-event schema gains
+  `stream_generation`. Both are frozen by the persistence band, which is why this
+  belongs here rather than in the first runtime PR.
 - A run's provenance can now say *we were not observing between here and here*,
   which it previously could only express by fabricating an attempt or by saying
   nothing at all.
@@ -367,23 +388,24 @@ orders them through the RunAttempt state machine.
    `target`, `stream_generation`, `sequence` and a typed `payload`.
 1e. The envelope is workload-neutral: an evaluation attempt streams through it
    without a `run_id`, a checkpoint family or a training lifecycle event.
-1a. Exactly one telemetry supervisor per attempt assigns `sequence`; individual
+1a. Exactly one telemetry supervisor per target assigns `sequence`; individual
    ranks never emit envelopes directly.
 1b. A replacement supervisor continues the current generation only if it resumes
    the sequence from durable state **and** can replay every event after the
    controller's durable cursor. If it cannot do both, the controller advances
    `stream_generation` and the sequence restarts at 0.
-1c. A lost telemetry stream **never** creates a `RunAttempt` on its own. Given a
+1c. A lost telemetry stream **never** creates an attempt of any kind on its own. Given a
    dead supervisor and a `get_status()` confirming the same workload is still
    executing, the attempt id is unchanged, the generation advances, and the
    interval is recorded as observability-degraded. A new `RunAttempt` is created
    only when the runtime restarts or replaces the workload.
-1d. `stream_generation` is assigned from durable controller-side state
-   (`RunAttempt.telemetry_generation`); a supervisor never has to remember it.
+1d. `stream_generation` is assigned from durable controller-side state — the
+   `telemetry_generation` of the targeted attempt, whichever attempt type it is;
+   a supervisor never has to remember it.
    The startup/attachment contract passes this assigned generation to the
    supervisor, which emits it unchanged on every event.
 2. `sequence` is monotonic and gapless within a generation, starting at 0;
-   `stream_generation` is monotonic within an attempt, starting at 0.
+   `stream_generation` is monotonic within a target, starting at 0.
 3. Duplicate `(target, stream_generation, sequence)` is a no-op in every
    handler.
 4. `CheckpointCommitted` carries a complete `DataCursor` and `ResumeGuarantee`

@@ -4,7 +4,7 @@
 Accepted — 2026-09-20.
 
 Supersedes the two-level lineage model in ADR-003 and extends the identity model in
-ADR-006. ADR-001 through ADR-010 remain `Proposed`; this one was accepted ahead of them
+ADR-006. It was accepted ahead of several earlier ADRs
 because PR-005 cannot define its event schema without it.
 
 The rollback question raised in the first draft is decided below rather than deferred:

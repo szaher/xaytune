@@ -118,7 +118,7 @@ that does not depend on it:
 | ADR | Blocks |
 |---|---|
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
-| ADR-005 — transactional persistence | **must be accepted before band B starts, including PR-004** |
+| ADR-005 — the persistence transaction contract | **must be accepted before band B starts, including PR-004**; expanded 2026-09-21 to cover the operation journal, Action–effect atomicity, projection consistency, isolation and crash semantics that band B now owns |
 | ADR-008 — versioned plugin ABI | band C (compiler/runtime plugin loading) |
 | ADR-009 — checkpoint layers | band F |
 | ADR-017 — reuse policy | band G (planner reuse decisions); split out of ADR-006 |
@@ -143,6 +143,14 @@ freezes what" principle. ADR-005 decides transaction boundaries, revision
 semantics and state/event/outbox consistency; PR-004 is where the tables and
 revision-based persistence are written. A repository built against assumptions
 ADR-005 then contradicts has to be rewritten — or, more likely, kept.
+
+It was expanded on 2026-09-21 rather than accepted as written. The original
+fifteen lines covered one transaction, which was adequate when band B owned the
+experiment aggregates and the outbox. Band B now also owns `RuntimeOperation`,
+the Action substrate and its linkage, operation and cancellation intent,
+`RunRealization` projections and telemetry generation durability — so accepting
+the short version would have frozen the schema while leaving the transaction
+boundaries that matter unstated.
 
 Exit criteria, per band rather than globally:
 
@@ -197,16 +205,19 @@ Implement tables and revision-based persistence.
 Implement:
 
 - atomic aggregate transition + event + outbox persistence
-- `runtime_operations` in migration 001, with operation ID, attempt ID, type,
-  canonical `request_digest`, state, runtime reference and revision (ADR-013)
+- `runtime_operations` in migration 001, with operation ID, typed target
+  (`training-attempt` | `evaluation-attempt`), type, canonical `request_digest`,
+  state, runtime reference and revision (ADR-013)
 - `RuntimeOperation` repository APIs to create, get by operation ID, list by
-  attempt ID, list unresolved operations, and transition with revision checks
+  target, list unresolved operations, and transition with revision checks
 - operation transitions: INTENDED → SENT / CONFIRMED / FAILED;
   SENT → CONFIRMED / FAILED; CONFIRMED and FAILED are terminal
 - atomic creation of a `RunAttempt` and its INTENDED submit operation, including
   the request digest and their events/outbox records, before any runtime call
 - durable cancellation intent for an existing attempt through the same journal
-- primary-key operation lookup and indexes for attempt and unresolved-state queries
+- primary-key operation lookup and indexes for target and unresolved-state queries
+- every transaction boundary and repository invariant in ADR-005 §3-§10, with
+  the crash and concurrency tests of §11
 
 An unknown submission outcome stays unresolved, not FAILED; reconcile it using
 ADR-013. Reusing an operation ID with the same request returns the existing
@@ -221,6 +232,13 @@ survives restart. No runtime is required for these persistence tests.
 
 ### PR-006a — minimal durable Action substrate
 
+Ships **migration 002** (`actions`, plus `runtime_operations.caused_by_action_id`).
+Both 001 and 002 must land before Phase 2, because `handle.cancel()` is public
+API there and ADR-013 cancellation needs a durable Action to hold the intent
+while the operation carries the effect. The split is sequencing, not
+optionality: 001 belongs to PR-005 and 002 to this PR, which is the order they
+land in.
+
 ADR-013 defines cancellation as `CancelExperiment → CancelRun → runtime cancel`,
 with the Action holding the *intent* while the operation holds the effect. Phase
 2 exposes `handle.cancel()`. So the Action aggregate is required two phases
@@ -233,6 +251,11 @@ This PR is the substrate only:
 - `ActionRepository`, committed in the same transaction as its events
 - linkage from an `Action` to the `RuntimeOperation`s it causes
 - exactly three action types: `CancelAttempt`, `CancelRun`, `CancelExperiment`
+- the Action state machine from `04-state-machines.md` §5, using the
+  `VALIDATED → EXECUTING` path: a controller-owned cancellation is never marked
+  `APPROVED` by nobody, and `APPROVAL_PENDING` stays reachable but unused until
+  PR-023
+- Action + caused `RuntimeOperation` committed in one transaction (ADR-005 §5)
 
 Explicitly **not** here: `PolicyEngine`, approval rules, budget authorization,
 or any mutating action type. Those stay in Phase 4, where the interesting

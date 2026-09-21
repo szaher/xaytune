@@ -16,16 +16,20 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
-def test_migrate_creates_the_core_aggregate_tables(db_path: Path) -> None:
+def test_migrate_creates_every_shipped_table(db_path: Path) -> None:
     connection = connect(db_path)
-    assert migrate(connection) == (1,)
+    applied = migrate(connection)
 
+    assert applied == tuple(m.version for m in available_migrations())
     assert {
         "experiments",
         "experiment_nodes",
         "experiment_edges",
         "runs",
         "run_attempts",
+        "events",
+        "outbox",
+        "runtime_operations",
     } <= _tables(connection)
 
 
@@ -34,7 +38,7 @@ def test_migrate_is_idempotent(db_path: Path) -> None:
     migrate(connection)
 
     assert migrate(connection) == ()
-    assert applied_versions(connection) == (1,)
+    assert applied_versions(connection) == tuple(m.version for m in available_migrations())
 
 
 def test_migrate_resumes_on_a_fresh_connection(db_path: Path) -> None:
@@ -45,7 +49,7 @@ def test_migrate_resumes_on_a_fresh_connection(db_path: Path) -> None:
 
     second = connect(db_path)
     assert migrate(second) == ()
-    assert applied_versions(second) == (1,)
+    assert applied_versions(second) == tuple(m.version for m in available_migrations())
 
 
 def test_every_shipped_migration_is_well_named() -> None:

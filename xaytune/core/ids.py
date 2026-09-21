@@ -35,6 +35,7 @@ __all__ = [
     "ExperimentId",
     "ExperimentNodeId",
     "IncidentId",
+    "OperationId",
     "RunAttemptId",
     "RunId",
     "TypedId",
@@ -222,3 +223,16 @@ class EventId(TypedId):
 
     __slots__ = ()
     prefix = "event_"
+
+
+class OperationId(TypedId):
+    """Identifies one external runtime side effect (ADR-013).
+
+    The idempotency key for ``submit_or_get``: re-submitting the same
+    ``OperationId`` returns the original workload rather than starting a second
+    one, so this id is minted once, persisted before the call, and reused for
+    every retry of it.
+    """
+
+    __slots__ = ()
+    prefix = "op_"

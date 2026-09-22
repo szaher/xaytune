@@ -32,6 +32,7 @@ from xaytune.core.capabilities import CapabilityRequirements, PluginDescriptor
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.observability import ObservabilitySpec
 
 __all__ = [
     "ArtifactInput",
@@ -201,7 +202,7 @@ class TelemetryContract(FrozenDomainModel):
     disagree fail at submission instead of halfway through a run.
     """
 
-    protocol_version: str = "xaytune.telemetry/v1alpha1"
+    protocol_version: str = "xaytune.telemetry/v1alpha2"
     heartbeat_seconds: int | None = None
     endpoint: str | None = None
 
@@ -250,6 +251,7 @@ class TrainingExecutionSpec(FrozenDomainModel):
 
     checkpoint: CheckpointExecutionContract = Field(default_factory=CheckpointExecutionContract)
     telemetry: TelemetryContract = Field(default_factory=TelemetryContract)
+    observability: ObservabilitySpec = Field(default_factory=ObservabilitySpec)
 
     required_capabilities: CapabilityRequirements = Field(default_factory=CapabilityRequirements)
 

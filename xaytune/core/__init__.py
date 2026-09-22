@@ -91,6 +91,14 @@ from xaytune.core.ids import (
     RunId,
     TypedId,
 )
+from xaytune.core.observability import (
+    CorrelationContext,
+    ObservabilitySpec,
+    ProfilerSpec,
+    RedactionPolicy,
+    TraceContext,
+    TracingSpec,
+)
 from xaytune.core.refs import (
     Actor,
     ArtifactRef,
@@ -100,6 +108,20 @@ from xaytune.core.refs import (
     ModelRef,
     ResourceUsage,
     RuntimeRef,
+)
+from xaytune.core.resume import (
+    CheckpointBoundary,
+    CheckpointStateManifest,
+    DataCursor,
+    DataResume,
+    ResumeGuarantee,
+    RNGState,
+    SamplerState,
+    StateRestore,
+    WorkerRNGState,
+)
+from xaytune.core.sinks import (
+    EventSink,
 )
 from xaytune.core.state import (
     ACTION_MACHINE,
@@ -116,6 +138,22 @@ from xaytune.core.state import (
 )
 
 __all__ = [
+    "CorrelationContext",
+    "ObservabilitySpec",
+    "ProfilerSpec",
+    "RedactionPolicy",
+    "TraceContext",
+    "TracingSpec",
+    "CheckpointBoundary",
+    "CheckpointStateManifest",
+    "DataCursor",
+    "DataResume",
+    "ResumeGuarantee",
+    "RNGState",
+    "SamplerState",
+    "StateRestore",
+    "WorkerRNGState",
+    "EventSink",
     "Action",
     "ACTION_MACHINE",
     "ActionId",

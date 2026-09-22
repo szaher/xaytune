@@ -24,7 +24,9 @@ from xaytune.core.domain.operation import OperationTargetKind, RuntimeOperationT
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import OperationId
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.observability import CorrelationContext, Counter, TraceContext
 from xaytune.core.refs import RuntimeRef
+from xaytune.core.telemetry import EvaluationObservation, TrainingObservation
 
 __all__ = [
     "EvaluationEventPayload",
@@ -192,54 +194,26 @@ class StreamCursor(FrozenDomainModel):
     """
 
 
-TrainingEventType = Literal[
-    "WorkerReady",
-    "Heartbeat",
-    "IncidentObserved",
-    "ArtifactProduced",
-    "TrainingStarted",
-    "TrainingCompleted",
-    "TrainingFailed",
-    "StepCompleted",
-    "MetricObserved",
-    "CheckpointStarted",
-    "CheckpointCommitted",
-]
-
-EvaluationEventType = Literal[
-    "WorkerReady",
-    "Heartbeat",
-    "IncidentObserved",
-    "ArtifactProduced",
-    "EvaluationStarted",
-    "EvaluationCompleted",
-    "EvaluationFailed",
-    "EvaluationProgress",
-    "MetricObserved",
-]
-"""No checkpoint family.
-
-Evaluation produces no checkpoints, which is the same reason its state machine
-has neither ``CHECKPOINTING`` nor ``RECOVERING`` (ADR-015 §1). Splitting the
-payload by workload makes that a **type error** rather than a convention
-someone has to remember.
-"""
-
-
 class TrainingEventPayload(FrozenDomainModel):
-    """What a training worker reports."""
+    """A training-only discriminated observation body."""
 
     workload: Literal["training"] = "training"
-    type: TrainingEventType
-    data: FrozenDict = Field(default_factory=FrozenDict)
+    data: TrainingObservation
+
+    @property
+    def type(self) -> str:
+        return self.data.type
 
 
 class EvaluationEventPayload(FrozenDomainModel):
-    """What an evaluation worker reports."""
+    """Evaluation observations cannot contain checkpoints or training lifecycle."""
 
     workload: Literal["evaluation"] = "evaluation"
-    type: EvaluationEventType
-    data: FrozenDict = Field(default_factory=FrozenDict)
+    data: EvaluationObservation
+
+    @property
+    def type(self) -> str:
+        return self.data.type
 
 
 RuntimeEventPayload = Annotated[
@@ -289,7 +263,7 @@ class RuntimeEventEnvelope(FrozenDomainModel):
     target with the payload to prevent.
     """
 
-    protocol_version: str = "xaytune.telemetry/v1alpha1"
+    protocol_version: Literal["xaytune.telemetry/v1alpha2"] = "xaytune.telemetry/v1alpha2"
     event_id: str
 
     target: RuntimeOperationTarget
@@ -304,6 +278,8 @@ class RuntimeEventEnvelope(FrozenDomainModel):
 
     emitted_at: datetime | None = None
     payload: RuntimeEventPayload
+    context: CorrelationContext | None = None
+    trace_context: TraceContext | None = None
 
     @model_validator(mode="after")
     def _payload_family_matches_target(self) -> RuntimeEventEnvelope:
@@ -315,16 +291,42 @@ class RuntimeEventEnvelope(FrozenDomainModel):
                 f"are two statements about the same workload, and a consumer "
                 f"that trusted either one would be wrong about the other"
             )
+        if self.context is not None:
+            context = self.context
+            if (
+                context.stream_generation is not None
+                and context.stream_generation != self.stream_generation
+            ):
+                raise ValueError("context and envelope generations disagree")
+            if self.target.kind == "training-attempt":
+                if (
+                    context.evaluation_attempt_id is not None
+                    or context.evaluation_run_id is not None
+                ):
+                    raise ValueError("training telemetry cannot claim evaluation context")
+                context_id: str | None = context.attempt_id
+            else:
+                if context.attempt_id is not None or context.run_id is not None:
+                    raise ValueError("evaluation telemetry cannot claim training context")
+                context_id = context.evaluation_attempt_id
+            if context_id is not None and context_id != self.target.id:
+                raise ValueError("context attempt and envelope target disagree")
         return self
 
 
 class RuntimeLog(FrozenDomainModel):
-    """A line of worker output."""
+    """Human/debugging output. Never infer state transitions from log lines."""
 
     stream: Literal["stdout", "stderr"] = "stdout"
     line: str
     emitted_at: datetime | None = None
     worker: str | None = None
+    level: Literal["trace", "debug", "info", "warning", "error", "critical"] | None = None
+    logger: str | None = None
+    rank: Counter | None = None
+    trace_context: TraceContext | None = None
+    context: CorrelationContext | None = None
+    attributes: FrozenDict = Field(default_factory=FrozenDict)
 
 
 @runtime_checkable

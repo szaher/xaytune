@@ -43,6 +43,8 @@ ArtifactKind = Literal[
     "logs",
     "execution_manifest",
     "provenance_bundle",
+    "profile",
+    "checkpoint_state",
 ]
 
 

@@ -21,7 +21,12 @@ from xaytune.storage.control_plane import (
     UnknownOperationTargetError,
 )
 from xaytune.storage.database import connect, write_transaction
-from xaytune.storage.errors import AggregateNotFoundError, MigrationError, StorageError
+from xaytune.storage.errors import (
+    AggregateNotFoundError,
+    IncompatiblePayloadError,
+    MigrationError,
+    StorageError,
+)
 from xaytune.storage.graph import CandidateComparison, ExperimentGraph, LineageError
 from xaytune.storage.journal import IdempotencyConflictError
 from xaytune.storage.migrations import applied_versions, available_migrations, migrate
@@ -34,6 +39,7 @@ __all__ = [
     "CandidateComparison",
     "ControlPlaneRepository",
     "ExperimentGraph",
+    "IncompatiblePayloadError",
     "LineageError",
     "IdempotencyConflictError",
     "UnknownOperationTargetError",

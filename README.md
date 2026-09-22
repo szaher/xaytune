@@ -67,9 +67,14 @@ policy/budget enforcement, and daemon restart reconciliation are later work.
 
 ### Current work: Band C — compile/execute boundary
 
-The next contracts are `CandidateSpec`, `TrainingSpec`, `CandidateFingerprint`,
-`RunHistoryFingerprint`, and `ArtifactLineageFingerprint`, followed by
-`TrainerCompiler`, `TrainingExecutionSpec`, and capability resolution.
+`CandidateSpec`, `TrainingSpec` and the identity framework have landed:
+`CandidateFingerprint` is a versioned projection rather than a hash of the
+current schema, so adding a field later cannot silently change the identity of
+candidates already recorded. `RunHistoryFingerprint` and
+`ArtifactLineageFingerprint` separate what a run *did* from what produced its
+artifact.
+
+Next is `TrainerCompiler`, `TrainingExecutionSpec` and capability resolution.
 Restart-safe LocalRuntime, Native/TRL compiler adapters, the embedded controller,
 and runtime-operation reconciliation follow within this band.
 

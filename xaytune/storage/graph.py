@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from xaytune.core.domain.experiment import ExperimentNode
 from xaytune.core.errors import DomainError
+from xaytune.storage.payloads import decode_node_payload
 
 __all__ = ["CandidateComparison", "ExperimentGraph", "LineageError"]
 
@@ -291,7 +292,7 @@ class ExperimentGraph:
             right=right,
             common_ancestors=common,
             nearest_common_ancestors=lowest,
-            same_candidate=left.training_fingerprint == right.training_fingerprint,
+            same_candidate=left.candidate_fingerprint == right.candidate_fingerprint,
         )
 
     # ---- validation ------------------------------------------------------
@@ -366,7 +367,7 @@ class ExperimentGraph:
             """,  # noqa: S608 - both interpolations come from the literal pair above
             (node_id,),
         ).fetchall()
-        return tuple(ExperimentNode.model_validate_json(row["payload_json"]) for row in rows)
+        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)
 
     def _closure(
         self, node_id: str
@@ -397,7 +398,7 @@ class ExperimentGraph:
         ).fetchall()
         nodes = {
             str(n.id): n
-            for n in (ExperimentNode.model_validate_json(row["payload_json"]) for row in node_rows)
+            for n in (decode_node_payload(row["payload_json"], ExperimentNode) for row in node_rows)
         }
 
         edge_rows = self._connection.execute(
@@ -427,8 +428,8 @@ class ExperimentGraph:
         row = self._connection.execute(
             "SELECT payload_json FROM experiment_nodes WHERE id = ?", (node_id,)
         ).fetchone()
-        return None if row is None else ExperimentNode.model_validate_json(row["payload_json"])
+        return None if row is None else decode_node_payload(row["payload_json"], ExperimentNode)
 
     def _nodes(self, sql: str, params: tuple[str, ...]) -> tuple[ExperimentNode, ...]:
         rows = self._connection.execute(sql, params).fetchall()
-        return tuple(ExperimentNode.model_validate_json(row["payload_json"]) for row in rows)
+        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)

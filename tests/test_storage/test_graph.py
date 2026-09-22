@@ -27,7 +27,7 @@ def experiment(repo: ControlPlaneRepository) -> Any:
 
 def _node(repo: ControlPlaneRepository, experiment: Any, name: str, *parents: Any) -> Any:
     return repo.create_node(
-        make_node(experiment, fingerprint=f"sha256:{name}", parents=tuple(p.id for p in parents)),
+        make_node(experiment, fingerprint=name, parents=tuple(p.id for p in parents)),
         actor=ACTOR,
     )
 
@@ -206,16 +206,20 @@ def test_independent_roots_share_nothing(
     assert comparison.nearest_common_ancestor is None
 
 
-def test_two_nodes_with_one_fingerprint_are_replicates_not_alternatives(
+def test_two_nodes_with_one_fingerprint_are_duplicates_not_alternatives(
     repo: ControlPlaneRepository, experiment: Any, chain: dict[str, Any]
 ) -> None:
-    """Treating them as competing candidates would count one hypothesis twice."""
+    """Treating them as competing candidates would count one hypothesis twice.
+
+    Built from the same candidate rather than by copying a digest: the
+    repository derives the fingerprint, so two nodes share one only by
+    genuinely proposing the same thing.
+    """
     twin = repo.create_node(
-        make_node(
-            experiment, fingerprint=chain["c"].training_fingerprint, parents=(chain["b"].id,)
-        ),
+        make_node(experiment, fingerprint="c", parents=(chain["b"].id,)),
         actor=ACTOR,
     )
+    assert twin.candidate_fingerprint == chain["c"].candidate_fingerprint
 
     comparison = repo.graph.compare(str(chain["c"].id), str(twin.id))
 
@@ -462,7 +466,7 @@ def test_lineage_respects_every_edge_in_a_wide_graph(
     edges = [(a, b), (a, c), (b, d), (c, d), (a, n), (d, n)]
     for parent, child in edges:
         assert position[str(parent.id)] < position[str(child.id)], (
-            f"{parent.training_fingerprint} must precede {child.training_fingerprint}"
+            f"{parent.id} must precede {child.id}"
         )
     assert len(order) == 5
 

@@ -48,6 +48,7 @@ from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.immutable import AggregateModel
 from xaytune.storage.errors import AggregateNotFoundError
+from xaytune.storage.payloads import decode_node_payload, decode_payload
 
 __all__ = ["AggregateStore"]
 
@@ -120,7 +121,7 @@ class AggregateStore:
             "WHERE experiment_id = ? ORDER BY created_at, id",
             (experiment_id,),
         ).fetchall()
-        return tuple(ExperimentNode.model_validate_json(row["payload_json"]) for row in rows)
+        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)
 
     def runs_for_node(self, node_id: str) -> tuple[Run, ...]:
         """Return the node's runs in creation order."""
@@ -168,9 +169,7 @@ class AggregateStore:
             {
                 "experiment_id": str(node.experiment_id),
                 "status": node.status.value,
-                # PR-007 renames the field to candidate_fingerprint; the column
-                # already carries the final name.
-                "candidate_fingerprint": node.training_fingerprint,
+                "candidate_fingerprint": node.candidate_fingerprint,
             },
         )
         for parent_id in node.parent_ids:
@@ -191,7 +190,7 @@ class AggregateStore:
                 "experiment_id": str(run.experiment_id),
                 "node_id": str(run.node_id),
                 "status": run.status.value,
-                "candidate_fingerprint": run.training_fingerprint,
+                "candidate_fingerprint": run.candidate_fingerprint,
             },
         )
 
@@ -225,7 +224,7 @@ class AggregateStore:
             node,
             {
                 "status": node.status.value,
-                "candidate_fingerprint": node.training_fingerprint,
+                "candidate_fingerprint": node.candidate_fingerprint,
             },
         )
 
@@ -235,7 +234,7 @@ class AggregateStore:
             run,
             {
                 "status": run.status.value,
-                "candidate_fingerprint": run.training_fingerprint,
+                "candidate_fingerprint": run.candidate_fingerprint,
             },
         )
 
@@ -256,7 +255,7 @@ class AggregateStore:
         ).fetchone()
         if row is None:
             return None
-        return model.model_validate_json(row["payload_json"])
+        return decode_payload(row["payload_json"], model, aggregate_id)
 
     @staticmethod
     def _require(aggregate: AggregateT | None, name: str, aggregate_id: str) -> AggregateT:
@@ -378,7 +377,14 @@ def _dump(aggregate: AggregateModel) -> str:
     Sorted keys so that two processes writing the same aggregate produce the
     same bytes, which keeps payloads diffable and comparable.
     """
-    return json.dumps(aggregate.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        # by_alias so a renamed field persists under the name the column uses.
+        # Without it, PR-007's rename would write training_fingerprint into a
+        # payload whose column says candidate_fingerprint.
+        aggregate.model_dump(mode="json", by_alias=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _stamp(value: datetime | None) -> str:

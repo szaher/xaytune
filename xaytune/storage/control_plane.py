@@ -168,6 +168,28 @@ class UnknownOperationTargetError(StorageError):
         super().__init__(f"no {kind} exists with id {target_id}")
 
 
+def _require_consistent_candidate(node: ExperimentNode) -> None:
+    """Refuse a node whose stored fingerprint does not describe its candidate.
+
+    The fingerprint is derived, so trusting a supplied one lets the indexed
+    identity disagree with the body it indexes -- the same class as a
+    caller-supplied aggregate. Every consumer downstream believes the
+    fingerprint: graph comparison calls two nodes the same candidate, reuse
+    lookups match the wrong hypothesis, and the run consistency check compares
+    against a value that describes nothing.
+
+    Raises:
+        StorageError: If the fingerprint does not match the candidate.
+    """
+    expected = node.candidate.candidate.candidate_fingerprint()
+    if node.candidate_fingerprint != expected:
+        raise StorageError(
+            f"node {node.id} carries fingerprint {node.candidate_fingerprint!r} "
+            f"but its candidate fingerprints as {expected!r}: the stored "
+            f"identity would not describe the proposition it indexes"
+        )
+
+
 def _require_pristine(aggregate: Any, initial: Any) -> None:
     """Refuse a created aggregate that is not actually new.
 
@@ -250,6 +272,8 @@ class ControlPlaneRepository:
             LineageError: If the node's parents would make the graph unsound.
         """
         _require_pristine(node, ExperimentNodeStatus.CREATED)
+
+        _require_consistent_candidate(node)
 
         with write_transaction(self._connection):
             self.graph.validate_parents(node)
@@ -802,10 +826,10 @@ class ControlPlaneRepository:
 
         # PR-007 renames both fields to candidate_fingerprint; the rule is the
         # same either way, and pinning it here keeps the rename honest.
-        if node.training_fingerprint != run.training_fingerprint:
+        if node.candidate_fingerprint != run.candidate_fingerprint:
             raise StorageError(
-                f"run {run.id} carries fingerprint {run.training_fingerprint!r} "
-                f"but its node proposes {node.training_fingerprint!r}: a run "
+                f"run {run.id} carries fingerprint {run.candidate_fingerprint!r} "
+                f"but its node proposes {node.candidate_fingerprint!r}: a run "
                 f"realizes its node's candidate, not a different one"
             )
 

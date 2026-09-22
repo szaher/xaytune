@@ -8,6 +8,7 @@ or leaving an action holding intent against an effect known to have failed.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -26,7 +27,12 @@ from xaytune.core import (
 )
 from xaytune.core.domain.action import ActionStatus, ActionTarget
 from xaytune.core.errors import ConcurrentModificationError
-from xaytune.storage import AggregateNotFoundError, ControlPlaneRepository, StorageError
+from xaytune.storage import (
+    AggregateNotFoundError,
+    ControlPlaneRepository,
+    StorageError,
+    write_transaction,
+)
 from xaytune.storage.journal import IdempotencyConflictError
 
 from .conftest import make_attempt, make_experiment, make_node, make_run
@@ -404,7 +410,7 @@ def test_a_run_must_realize_its_node_s_candidate(
 
     run = make_run(node)
     divergent = type(run).model_validate(
-        {**run.model_dump(mode="python"), "training_fingerprint": "sha256:something-else"}
+        {**run.model_dump(mode="python"), "candidate_fingerprint": "sha256:something-else"}
     )
 
     with pytest.raises(StorageError, match="realizes its node"):
@@ -460,3 +466,117 @@ def test_operation_settlement_reaches_the_outbox(repo: ControlPlaneRepository, r
 
     delivered = {record.event_id for record in repo.events.pending_outbox()}
     assert settled[0].id in delivered
+
+
+# ---- a node's fingerprint must describe its candidate --------------------
+
+
+def test_a_node_whose_fingerprint_does_not_match_its_candidate_is_refused(
+    repo: ControlPlaneRepository,
+) -> None:
+    """The stored identity has to describe the body it indexes.
+
+    Every consumer downstream trusts it: graph comparison would call two
+    nodes the same candidate, reuse would match the wrong hypothesis, and the
+    run consistency check would compare against a value describing nothing.
+    """
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = make_node(experiment)
+    mismatched = type(node).model_validate(
+        {
+            **node.model_dump(mode="python"),
+            "candidate_fingerprint": "sha256:describes-something-else",
+        }
+    )
+
+    with pytest.raises(StorageError, match="would not describe"):
+        repo.create_node(mismatched, actor=ACTOR)
+
+    assert repo.aggregates.get_node(str(node.id)) is None
+
+
+def test_a_legacy_node_payload_reports_the_format_change(
+    repo: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    """A band B row is unreadable, and says so.
+
+    PR-007 restructured the node body -- an opaque ``training_spec`` became a
+    typed ``candidate`` -- which is a deliberate format change rather than a
+    compatibility bug. What it must not be is a ValidationError about missing
+    fields, which tells the reader nothing about why.
+    """
+    from xaytune.storage.errors import IncompatiblePayloadError
+
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = repo.create_node(make_node(experiment), actor=ACTOR)
+    # A child, so the traversals that walk *upwards* actually decode the
+    # legacy row. Asking for a root's parents reads no rows at all, which is
+    # correct behaviour and would prove nothing here.
+    child = repo.create_node(
+        make_node(experiment, fingerprint="child", parents=(node.id,)), actor=ACTOR
+    )
+
+    legacy = json.loads(
+        connection.execute(
+            "SELECT payload_json FROM experiment_nodes WHERE id = ?", (str(node.id),)
+        ).fetchone()["payload_json"]
+    )
+    legacy["training_spec"] = {"kind": "sft", "payload": {}}
+    del legacy["candidate"]
+
+    with write_transaction(connection):
+        connection.execute(
+            "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
+            (json.dumps(legacy), str(node.id)),
+        )
+
+    # Every path that reads a node, not just the one that happens to be
+    # centralised. Before this, get_node() reported the format change while
+    # nodes_for_experiment() and every graph traversal raised a Pydantic
+    # ValidationError about missing fields -- same database, same cause,
+    # three different stories.
+    readers = (
+        ("get_node", lambda: repo.aggregates.get_node(str(node.id))),
+        (
+            "nodes_for_experiment",
+            lambda: repo.aggregates.nodes_for_experiment(str(experiment.id)),
+        ),
+        ("graph.parents", lambda: repo.graph.parents(str(child.id))),
+        ("graph.ancestors", lambda: repo.graph.ancestors(str(child.id))),
+        ("graph.roots", lambda: repo.graph.roots(str(experiment.id))),
+        ("graph.lineage", lambda: repo.graph.lineage(str(child.id))),
+    )
+    for name, read in readers:
+        with pytest.raises(IncompatiblePayloadError, match="format"):
+            read()
+        assert name
+
+
+def test_a_genuinely_invalid_payload_is_not_blamed_on_the_format_change(
+    repo: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    """A schema error must still read as one.
+
+    Reporting every unreadable payload as a version problem would send the
+    reader to recreate a database over what is actually a bug.
+    """
+    from pydantic import ValidationError
+
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = repo.create_node(make_node(experiment), actor=ACTOR)
+
+    broken = json.loads(
+        connection.execute(
+            "SELECT payload_json FROM experiment_nodes WHERE id = ?", (str(node.id),)
+        ).fetchone()["payload_json"]
+    )
+    broken["revision"] = "not-a-number"
+
+    with write_transaction(connection):
+        connection.execute(
+            "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
+            (json.dumps(broken), str(node.id)),
+        )
+
+    with pytest.raises(ValidationError):
+        repo.aggregates.get_node(str(node.id))

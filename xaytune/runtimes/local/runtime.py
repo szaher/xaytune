@@ -263,9 +263,7 @@ class LocalRuntime:
 
         finished = read_json(paths.finished)
         if finished is not None:
-            return self._finished_status(
-                finished, cancelled=workload.cancel_requested_at is not None
-            )
+            return self._finished_status(finished)
 
         started = read_json(paths.started)
         supervisor = workload.launcher_pid or workload.spawned_pid
@@ -322,13 +320,25 @@ class LocalRuntime:
             observed_at=utc_now(),
         )
 
-    def _finished_status(self, finished: dict[str, object], *, cancelled: bool) -> RuntimeStatus:
-        """Read an exit code as a runtime state, and nothing more.
+    def _finished_status(self, finished: dict[str, object]) -> RuntimeStatus:
+        """Classify an ending from what the launcher observed.
 
-        A workload that exits cleanly after a cancellation request finished
-        before the signal reached it. That is a success, not a cancellation:
-        the work is done and its artifacts are real, and recording it as
-        cancelled would discard them (ADR-013 §5).
+        Entirely from the finished record, and deliberately **not** from the
+        registry's ``cancel_requested_at``. Those answer different questions --
+        whether a cancellation was ever wanted, and whether one reached this
+        execution before it ended -- and only the second describes what
+        happened. ADR-013 §5 puts the observed terminal state above pending
+        intent, and two races make the difference visible:
+
+        ```text
+        cancel requested, worker exits 3 first    -> FAILED, not cancelled
+        SIGTERM delivered, worker exits 0 cleanly -> CANCELLED, not succeeded
+        ```
+
+        The second is the one an exit code alone gets wrong. A worker that
+        handles SIGTERM and shuts down tidily did not finish its work, and
+        recording it as a success would put a partial run into the record as a
+        complete one.
         """
         raw = finished.get("exit_code")
         code = raw if isinstance(raw, int) else None
@@ -340,10 +350,10 @@ class LocalRuntime:
                 observed_at=utc_now(),
             )
 
-        if code == 0:
-            state: RuntimeState = "succeeded"
-        elif cancelled:
-            state = "cancelled"
+        if finished.get("cancelled") is True:
+            state: RuntimeState = "cancelled"
+        elif code == 0:
+            state = "succeeded"
         else:
             state = "failed"
 

@@ -223,6 +223,12 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
                 stderr=err,
                 env=_environment(plan),
                 cwd=str(plan.runtime_options.get("working_directory", directory)),
+                # Its own session, so the worker leads a process group that
+                # contains it and everything it starts. Cancelling a training
+                # job has to reach the dataloader workers and helpers it
+                # spawned, and signalling the worker alone would leave them
+                # running while the workload reported itself cancelled.
+                start_new_session=True,
             )
         except OSError as exc:
             # The worker never existed, so there is nothing to wait for and no
@@ -286,19 +292,27 @@ def _wait_honouring_cancellation(child: subprocess.Popen[bytes], paths: Workload
     signalling a number, and the operating system may have given that number to
     something else.
 
-    Signalled **once**. A worker that treats a second SIGTERM as "stop being
-    graceful" -- the common convention -- would be denied the shutdown the
-    first one asked for, so a retried cancellation must not become a second
-    signal.
+    Signalled **once**, and to the worker's whole process group. A training
+    worker starts dataloader workers and helpers, and terminating only the
+    process the launcher can see would leave those running while the workload
+    reported itself cancelled -- which is not what cancellation promises. One
+    signal, because a worker that treats a second SIGTERM as "stop being
+    graceful" would be denied the shutdown the first one asked for.
+
+    Returns whether a signal was actually delivered to a running worker, which
+    is a different question from whether one was ever requested, and it is what
+    the terminal state is later classified from.
     """
     signalled = False
     while child.poll() is None:
         if not signalled and paths.cancel.exists():
             signalled = True
             try:
-                child.terminate()
-            except ProcessLookupError:  # pragma: no cover - it finished first
-                pass
+                os.killpg(child.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):  # pragma: no cover
+                # It finished in the moment between the poll above and this
+                # line. Nothing was delivered, so nothing was cancelled.
+                signalled = False
         time.sleep(_CANCEL_POLL_SECONDS)
     return signalled
 

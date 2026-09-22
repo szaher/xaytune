@@ -415,7 +415,7 @@ def test_retrying_one_cancellation_does_not_signal_twice(
 
     A worker that counts the signals it receives is the only witness that
     cannot be satisfied by bookkeeping: the registry could look idempotent
-    while two signals still reached the process group.
+    while two signals still reached the worker's process group.
     """
     counter = tmp_path / "signals.txt"
     source = (
@@ -443,6 +443,107 @@ def test_retrying_one_cancellation_does_not_signal_twice(
 
     received = counter.read_text().count("term") if counter.exists() else 0
     assert received == 1, f"one cancellation, {received} signals"
+
+
+def _force_finished(runtime: LocalRuntime, external_id: str, **record: object) -> None:
+    """Stage a terminal record, so classification can be tested without a race."""
+    workload = runtime._registry.workload(external_id)
+    assert workload is not None
+    write_atomic(WorkloadPaths(workload.directory).finished, dict(record))
+
+
+def _mark_cancel_requested(runtime: LocalRuntime, external_id: str) -> None:
+    with write_transaction(runtime._registry._connection) as connection:
+        connection.execute(
+            "UPDATE workloads SET cancel_requested_at = 'requested' WHERE external_id = ?",
+            (external_id,),
+        )
+
+
+def test_a_cancellation_that_never_arrived_does_not_rewrite_the_outcome(
+    runtime: LocalRuntime,
+) -> None:
+    """Observed ending beats pending intent (ADR-013 §5).
+
+    The worker was already failing when the cancellation was requested and
+    exited 3 before the launcher could deliver anything. Classifying from the
+    request rather than the delivery would file a genuine failure as a
+    cancellation, and an operator looking for why training stopped would find
+    a decision they made instead of the fault that caused it.
+    """
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(OperationId.generate(), _plan(*_python("pass")))
+        await _settle(runtime, ref)
+        _force_finished(runtime, ref.external_id, exit_code=3, cancelled=False)
+        _mark_cancel_requested(runtime, ref.external_id)
+        return await runtime.get_status(ref)
+
+    status = asyncio.run(scenario())
+
+    assert status.state == "failed"
+    assert status.exit_code == 3
+
+
+def test_a_worker_that_shut_down_gracefully_is_still_cancelled(
+    runtime: LocalRuntime,
+) -> None:
+    """Exit zero after a delivered SIGTERM is a cancellation, not a success.
+
+    A worker that handles the signal and shuts down tidily did not finish its
+    work. Reading the exit code alone would put a partial run into the record
+    as a complete one, and whatever it had produced would be treated as the
+    result of the whole thing.
+    """
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(OperationId.generate(), _plan(*_python("pass")))
+        await _settle(runtime, ref)
+        _force_finished(runtime, ref.external_id, exit_code=0, cancelled=True)
+        return await runtime.get_status(ref)
+
+    assert asyncio.run(scenario()).state == "cancelled"
+
+
+def test_cancelling_reaches_the_workers_own_children(runtime: LocalRuntime, tmp_path: Path) -> None:
+    """Cancellation must leave nothing executing.
+
+    An ordinary training worker starts dataloader workers and helpers.
+    Signalling only the process the launcher can see would leave those running
+    while the workload reported itself cancelled -- a status that would be
+    false at the moment it was written.
+    """
+    pidfile = tmp_path / "child.pid"
+    source = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        "open(sys.argv[1], 'w').write(str(child.pid))\n"
+        "time.sleep(120)\n"
+    )
+
+    async def scenario() -> tuple[RuntimeStatus, int]:
+        ref = await runtime.submit_or_get(
+            OperationId.generate(), _plan(*_python(source, str(pidfile)))
+        )
+        deadline = asyncio.get_running_loop().time() + _SETTLE_SECONDS
+        while not pidfile.exists() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+        spawned = int(pidfile.read_text())
+        assert _process_exists(spawned), "the worker's child should be running"
+
+        await runtime.cancel(ref, OperationId.generate())
+        status = await _settle(runtime, ref)
+        await asyncio.sleep(0.5)
+        return status, spawned
+
+    status, spawned = asyncio.run(scenario())
+
+    try:
+        assert status.state == "cancelled"
+        assert not _process_exists(spawned), "the worker's child outlived the cancellation"
+    finally:
+        if _process_exists(spawned):
+            os.kill(spawned, signal.SIGKILL)
 
 
 def test_a_workload_that_finished_first_is_not_recorded_as_cancelled(
@@ -683,7 +784,14 @@ def test_a_workload_with_no_observed_ending_is_unknown(runtime: LocalRuntime) ->
 
         workload = runtime._registry.workload(ref.external_id)
         assert workload is not None and workload.launcher_pid is not None
-        os.killpg(os.getpgid(workload.launcher_pid), signal.SIGKILL)
+        worker_pid = (read_json(WorkloadPaths(workload.directory).started) or {})["pid"]
+
+        # Both, and separately: the worker leads its own process group now, so
+        # killing the launcher's no longer takes it down -- which is the point
+        # of the split, and means an unobserved ending has to be staged rather
+        # than assumed to follow from one signal.
+        os.killpg(worker_pid, signal.SIGKILL)
+        os.kill(workload.launcher_pid, signal.SIGKILL)
 
         return await _settle(runtime, ref)
 

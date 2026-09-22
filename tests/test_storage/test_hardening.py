@@ -509,6 +509,12 @@ def test_a_legacy_node_payload_reports_the_format_change(
 
     experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
     node = repo.create_node(make_node(experiment), actor=ACTOR)
+    # A child, so the traversals that walk *upwards* actually decode the
+    # legacy row. Asking for a root's parents reads no rows at all, which is
+    # correct behaviour and would prove nothing here.
+    child = repo.create_node(
+        make_node(experiment, fingerprint="child", parents=(node.id,)), actor=ACTOR
+    )
 
     legacy = json.loads(
         connection.execute(
@@ -524,5 +530,53 @@ def test_a_legacy_node_payload_reports_the_format_change(
             (json.dumps(legacy), str(node.id)),
         )
 
-    with pytest.raises(IncompatiblePayloadError, match="format"):
+    # Every path that reads a node, not just the one that happens to be
+    # centralised. Before this, get_node() reported the format change while
+    # nodes_for_experiment() and every graph traversal raised a Pydantic
+    # ValidationError about missing fields -- same database, same cause,
+    # three different stories.
+    readers = (
+        ("get_node", lambda: repo.aggregates.get_node(str(node.id))),
+        (
+            "nodes_for_experiment",
+            lambda: repo.aggregates.nodes_for_experiment(str(experiment.id)),
+        ),
+        ("graph.parents", lambda: repo.graph.parents(str(child.id))),
+        ("graph.ancestors", lambda: repo.graph.ancestors(str(child.id))),
+        ("graph.roots", lambda: repo.graph.roots(str(experiment.id))),
+        ("graph.lineage", lambda: repo.graph.lineage(str(child.id))),
+    )
+    for name, read in readers:
+        with pytest.raises(IncompatiblePayloadError, match="format"):
+            read()
+        assert name
+
+
+def test_a_genuinely_invalid_payload_is_not_blamed_on_the_format_change(
+    repo: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    """A schema error must still read as one.
+
+    Reporting every unreadable payload as a version problem would send the
+    reader to recreate a database over what is actually a bug.
+    """
+    from pydantic import ValidationError
+
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = repo.create_node(make_node(experiment), actor=ACTOR)
+
+    broken = json.loads(
+        connection.execute(
+            "SELECT payload_json FROM experiment_nodes WHERE id = ?", (str(node.id),)
+        ).fetchone()["payload_json"]
+    )
+    broken["revision"] = "not-a-number"
+
+    with write_transaction(connection):
+        connection.execute(
+            "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
+            (json.dumps(broken), str(node.id)),
+        )
+
+    with pytest.raises(ValidationError):
         repo.aggregates.get_node(str(node.id))

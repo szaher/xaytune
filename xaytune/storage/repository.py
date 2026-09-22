@@ -42,14 +42,13 @@ import sqlite3
 from datetime import datetime
 from typing import Any, TypeVar
 
-from pydantic import ValidationError
-
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.immutable import AggregateModel
-from xaytune.storage.errors import AggregateNotFoundError, IncompatiblePayloadError
+from xaytune.storage.errors import AggregateNotFoundError
+from xaytune.storage.payloads import decode_node_payload, decode_payload
 
 __all__ = ["AggregateStore"]
 
@@ -122,7 +121,7 @@ class AggregateStore:
             "WHERE experiment_id = ? ORDER BY created_at, id",
             (experiment_id,),
         ).fetchall()
-        return tuple(ExperimentNode.model_validate_json(row["payload_json"]) for row in rows)
+        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)
 
     def runs_for_node(self, node_id: str) -> tuple[Run, ...]:
         """Return the node's runs in creation order."""
@@ -256,17 +255,7 @@ class AggregateStore:
         ).fetchone()
         if row is None:
             return None
-        try:
-            return model.model_validate_json(row["payload_json"])
-        except ValidationError as error:
-            # A payload from before a format change reads as a pile of missing
-            # and unexpected fields. Saying so plainly beats letting the caller
-            # infer it from a validation error two frames down.
-            if _looks_pre_candidate(row["payload_json"]):
-                raise IncompatiblePayloadError(
-                    model.__name__, aggregate_id, "pre-CandidateSpec node body"
-                ) from error
-            raise
+        return decode_payload(row["payload_json"], model, aggregate_id)
 
     @staticmethod
     def _require(aggregate: AggregateT | None, name: str, aggregate_id: str) -> AggregateT:
@@ -380,15 +369,6 @@ class AggregateStore:
                 "autocommitted transition would commit state without its event "
                 "and outbox record (ADR-005 §3)."
             )
-
-
-def _looks_pre_candidate(payload: str) -> bool:
-    """Whether this payload has the band B node shape."""
-    try:
-        body = json.loads(payload)
-    except json.JSONDecodeError:
-        return False
-    return isinstance(body, dict) and "training_spec" in body and "candidate" not in body
 
 
 def _dump(aggregate: AggregateModel) -> str:

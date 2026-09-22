@@ -53,6 +53,10 @@ def _candidate(**overrides) -> CandidateSpec:
     return CandidateSpec(**defaults)
 
 
+URI = "Qwen/Qwen3-8B"
+DATA = "./support-v4.jsonl"
+
+
 def _plain_candidate() -> CandidateSpec:
     """The candidate whose fingerprint is pinned literally below."""
     return CandidateSpec(
@@ -116,7 +120,7 @@ def test_a_candidate_fingerprint_is_pinned() -> None:
     stopped matching, so the brittleness is deliberate.
     """
     assert _plain_candidate().candidate_fingerprint() == (
-        "sha256:d17e8149fc099270f48a1c15ebb67607ffba012f5d2380944efecbe7687fa4c2"
+        "sha256:3c174a88119ffa7ed47693e5854398f10277ec46c2f972de6adfbfc5a73ac4a9"
     )
 
 
@@ -376,16 +380,139 @@ def test_the_optimizer_and_schedule_are_distinguishable() -> None:
         ).candidate_fingerprint()
 
     adamw = with_optimization(
-        OptimizationSpec(optimizer=OptimizerSpec(name="adamw", learning_rate=2e-5))
+        OptimizationSpec(optimizer=OptimizerSpec(name="adamw"), learning_rate=2e-5)
     )
     sgd = with_optimization(
-        OptimizationSpec(optimizer=OptimizerSpec(name="sgd", learning_rate=2e-5))
+        OptimizationSpec(optimizer=OptimizerSpec(name="sgd"), learning_rate=2e-5)
     )
     cosine = with_optimization(
         OptimizationSpec(
-            optimizer=OptimizerSpec(name="adamw", learning_rate=2e-5),
+            optimizer=OptimizerSpec(name="adamw"),
+            learning_rate=2e-5,
             lr_schedule=LRScheduleSpec(name="cosine", warmup_steps=100),
         )
     )
 
     assert len({adamw, sgd, cosine}) == 3
+
+
+# ---- the projection is enumerated all the way down ----------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "build"),
+    [
+        (
+            "ModelRef",
+            lambda: {"model": ModelSpec(model=ModelRef(uri=URI, metadata={"n": "x"}))},
+        ),
+        (
+            "ModelSpec",
+            lambda: {"model": ModelSpec(model=ModelRef(uri=URI), metadata={"n": "x"})},
+        ),
+        (
+            "DatasetRef",
+            lambda: {"data": DataSpec(dataset=DatasetRef(uri=DATA, metadata={"n": "x"}))},
+        ),
+        (
+            "DataSpec",
+            lambda: {"data": DataSpec(dataset=DatasetRef(uri=DATA), metadata={"n": "x"})},
+        ),
+    ],
+)
+def test_nested_metadata_is_not_identity(label: str, build) -> None:
+    """The metadata rule holds at every level, not only the top one.
+
+    An earlier projection named the top-level fields and dumped the nested
+    models, so ``ModelRef.metadata`` still changed identity while
+    ``CandidateSpec.metadata`` did not -- and the test only checked the top.
+    """
+    plain = _plain_candidate()
+    annotated = CandidateSpec(
+        **{"model": plain.model, "data": plain.data, "training": plain.training, **build()}
+    )
+
+    assert annotated.candidate_fingerprint() == plain.candidate_fingerprint(), label
+
+
+def test_nested_metadata_on_optional_components_is_not_identity() -> None:
+    plain = _plain_candidate()
+
+    def with_reward(**kwargs) -> str:
+        return CandidateSpec(
+            model=plain.model,
+            data=plain.data,
+            training=plain.training,
+            reward=RewardSpec(graders=("task-success",), **kwargs),
+        ).candidate_fingerprint()
+
+    assert with_reward() == with_reward(metadata={"owner": "someone"})
+
+
+def test_a_new_field_on_a_nested_model_does_not_change_identity() -> None:
+    """The guarantee the name ``v1`` makes, checked at depth.
+
+    The previous evolution test added fields only to the two models the
+    projection named, so it confirmed the implementation rather than the
+    claim.
+    """
+    plain = _plain_candidate()
+    before = plain.candidate_fingerprint()
+
+    class FutureModelRef(ModelRef):
+        future: str | None = None
+
+    class FutureModelSpec(ModelSpec):
+        model: FutureModelRef  # type: ignore[assignment]
+
+    class FutureDatasetRef(DatasetRef):
+        future: int | None = None
+
+    class FutureDataSpec(DataSpec):
+        dataset: FutureDatasetRef  # type: ignore[assignment]
+
+    class FutureOptimization(OptimizationSpec):
+        future: bool | None = None
+
+    class FutureTrainingSpec(TrainingSpec):
+        optimization: FutureOptimization  # type: ignore[assignment]
+
+    class FutureCandidate(CandidateSpec):
+        model: FutureModelSpec  # type: ignore[assignment]
+        data: FutureDataSpec  # type: ignore[assignment]
+        training: FutureTrainingSpec  # type: ignore[assignment]
+
+    evolved = FutureCandidate.model_validate(plain.model_dump(mode="python"))
+
+    assert fingerprint(candidate_identity_v1(evolved)) == before
+
+
+@pytest.mark.parametrize(
+    ("label", "changed"),
+    [
+        ("dataset revision", {"data": DataSpec(dataset=DatasetRef(uri=DATA, revision="v2"))}),
+        (
+            "tokenizer",
+            {"data": DataSpec(dataset=DatasetRef(uri=DATA, tokenizer_fingerprint="sha256:t"))},
+        ),
+        ("model revision", {"model": ModelSpec(model=ModelRef(uri=URI, revision="main"))}),
+    ],
+)
+def test_nested_identity_bearing_fields_still_count(label: str, changed: dict) -> None:
+    """Excluding metadata must not have excluded the things that matter.
+
+    A tokenizer change produces different training data from the same source,
+    so it is identity even though the URI is unchanged.
+    """
+    plain = _plain_candidate()
+    other = CandidateSpec(
+        **{"model": plain.model, "data": plain.data, "training": plain.training, **changed}
+    )
+
+    assert other.candidate_fingerprint() != plain.candidate_fingerprint(), label
+
+
+def test_the_learning_rate_has_one_authority() -> None:
+    """Two places to put it means nothing says which a compiler should read."""
+    assert "learning_rate" not in OptimizerSpec.model_fields
+    assert "learning_rate" in OptimizationSpec.model_fields

@@ -41,7 +41,7 @@ from typing import Any
 from pydantic import Field
 
 from xaytune.core.fingerprint import fingerprint
-from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel, thaw
 from xaytune.core.refs import DatasetRef, ModelRef
 
 __all__ = [
@@ -103,10 +103,15 @@ class OptimizerSpec(FrozenDomainModel):
 
     Typed rather than left to metadata, because AdamW and SGD are different
     scientific propositions and a fingerprint must say so.
+
+    The learning rate is **not** here. It lives on
+    :class:`OptimizationSpec.learning_rate` and only there: two places to put
+    it means nothing says which one a compiler should read when they disagree,
+    and that question would then have to be answered separately in every
+    compiler.
     """
 
     name: str
-    learning_rate: float | None = None
     weight_decay: float | None = None
     betas: tuple[float, ...] = Field(default_factory=tuple)
     params: FrozenDict = Field(default_factory=FrozenDict)
@@ -254,9 +259,124 @@ class TrainingSpec(FrozenDomainModel):
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
-def _optional(value: FrozenDomainModel | None) -> Any:
-    """Project an optional component, distinguishing absent from empty."""
-    return None if value is None else value.model_dump(mode="json", by_alias=True)
+def _model_identity_v1(spec: ModelSpec) -> Mapping[str, Any]:
+    """The base model, by identity rather than by whatever fields it has."""
+    ref = spec.model
+    return {
+        "uri": ref.uri,
+        "revision": ref.revision,
+        "digest": getattr(ref, "digest", None),
+    }
+
+
+def _data_identity_v1(spec: DataSpec) -> Mapping[str, Any]:
+    """The data, including the transformations that decide what it becomes.
+
+    A tokenizer or template change produces different training data from the
+    same source, so those fingerprints are identity even though the URI is
+    unchanged.
+    """
+    ref = spec.dataset
+    return {
+        "uri": ref.uri,
+        "revision": ref.revision,
+        "split": ref.split,
+        "content_digest": ref.content_digest,
+        "transform_fingerprint": ref.transform_fingerprint,
+        "tokenizer_fingerprint": ref.tokenizer_fingerprint,
+        "template_fingerprint": ref.template_fingerprint,
+    }
+
+
+def _adapter_identity_v1(spec: AdapterSpec | None) -> Mapping[str, Any] | None:
+    if spec is None:
+        return None
+    return {
+        "type": spec.type,
+        "rank": spec.rank,
+        "alpha": spec.alpha,
+        "target_modules": list(spec.target_modules),
+    }
+
+
+def _optimizer_identity_v1(spec: OptimizerSpec | None) -> Mapping[str, Any] | None:
+    if spec is None:
+        return None
+    return {
+        "name": spec.name,
+        "weight_decay": spec.weight_decay,
+        "betas": list(spec.betas),
+        "params": thaw(spec.params),
+    }
+
+
+def _lr_schedule_identity_v1(spec: LRScheduleSpec | None) -> Mapping[str, Any] | None:
+    if spec is None:
+        return None
+    return {
+        "name": spec.name,
+        "warmup_steps": spec.warmup_steps,
+        "warmup_ratio": spec.warmup_ratio,
+        "params": thaw(spec.params),
+    }
+
+
+def _optimization_identity_v1(spec: OptimizationSpec) -> Mapping[str, Any]:
+    return {
+        "optimizer": _optimizer_identity_v1(spec.optimizer),
+        "lr_schedule": _lr_schedule_identity_v1(spec.lr_schedule),
+        "learning_rate": spec.learning_rate,
+        "micro_batch_size": spec.micro_batch_size,
+        "gradient_accumulation": spec.gradient_accumulation,
+        "epochs": spec.epochs,
+        "max_steps": spec.max_steps,
+    }
+
+
+def _training_identity_v1(spec: TrainingSpec) -> Mapping[str, Any]:
+    return {
+        "kind": spec.kind.value,
+        "algorithm": {"name": spec.algorithm.name, "params": thaw(spec.algorithm.params)},
+        "adapter": _adapter_identity_v1(spec.adapter),
+        "optimization": _optimization_identity_v1(spec.optimization),
+        "precision": {
+            "dtype": spec.precision.dtype,
+            "grad_accum_dtype": spec.precision.grad_accum_dtype,
+            "params": thaw(spec.precision.params),
+        },
+        "checkpoint": {
+            "every_optimizer_steps": spec.checkpoint.every_optimizer_steps,
+            "keep_last": spec.checkpoint.keep_last,
+            "params": thaw(spec.checkpoint.params),
+        },
+    }
+
+
+def _reward_identity_v1(spec: RewardSpec | None) -> Mapping[str, Any] | None:
+    if spec is None:
+        return None
+    return {"graders": list(spec.graders)}
+
+
+def _environment_identity_v1(spec: EnvironmentSpec | None) -> Mapping[str, Any] | None:
+    if spec is None:
+        return None
+    return {"name": spec.name, "revision": spec.revision}
+
+
+def _schedule_identity_v1(spec: TrainingSchedule | None) -> Mapping[str, Any] | None:
+    if spec is None:
+        return None
+    return {
+        "interventions": [
+            {
+                "id": item.id,
+                "trigger": thaw(item.trigger),
+                "mutation": thaw(item.mutation),
+            }
+            for item in spec.interventions
+        ]
+    }
 
 
 def candidate_identity_v1(candidate: CandidateSpec) -> Mapping[str, Any]:
@@ -266,35 +386,35 @@ def candidate_identity_v1(candidate: CandidateSpec) -> Mapping[str, Any]:
     *current schema* define identity. Add a field with a default six months
     from now and every candidate already on disk fingerprints differently,
     though no researcher changed anything -- and reuse, comparison and lineage
-    all silently stop matching. Listing the fields here means adding one later
+    all silently stop matching. Enumerating the fields means adding one later
     is a deliberate act: either it joins ``v2``, or it does not bear identity.
 
-    **What is excluded, and why.** Generic ``metadata`` does not enter identity.
-    A ticket number or an owner's name is not a scientific proposition, and
-    ``metadata={"ticket": "RHOAI-1234"}`` must not mint a new candidate.
-    Anything that genuinely should bear identity gets a typed field -- which is
-    what ``AlgorithmSpec.params`` and the other ``params`` fields are for.
+    **Enumerated all the way down.** Every nested component has its own
+    projection rather than being dumped. A projection that named the top-level
+    fields but dumped ``ModelRef`` underneath would only move the problem one
+    level down -- and, worse, would read as though it had solved it.
+
+    **What is excluded, and why.** Generic ``metadata`` does not enter
+    identity, at *any* level. A ticket number or an owner's name is not a
+    scientific proposition. Anything that genuinely should bear identity gets
+    a typed field, which is what the ``params`` fields are for -- those are
+    carried, because algorithm and optimizer parameters are the experiment.
+
+    A ``rationale`` on a scheduled intervention is excluded for the same
+    reason: rewording why a change was planned does not change what is planned.
 
     The projection is domain-separated by ``type``, so a candidate and a run
     history can never collide even if their contents coincided.
     """
-    training = candidate.training
     return {
         "type": "candidate",
         "version": 1,
-        "model": candidate.model.model.model_dump(mode="json", by_alias=True),
-        "data": candidate.data.dataset.model_dump(mode="json", by_alias=True),
-        "training": {
-            "kind": training.kind.value,
-            "algorithm": training.algorithm.model_dump(mode="json", by_alias=True),
-            "adapter": _optional(training.adapter),
-            "optimization": training.optimization.model_dump(mode="json", by_alias=True),
-            "precision": training.precision.model_dump(mode="json", by_alias=True),
-            "checkpoint": training.checkpoint.model_dump(mode="json", by_alias=True),
-        },
-        "reward": _optional(candidate.reward),
-        "environment": _optional(candidate.environment),
-        "schedule": _optional(candidate.schedule),
+        "model": _model_identity_v1(candidate.model),
+        "data": _data_identity_v1(candidate.data),
+        "training": _training_identity_v1(candidate.training),
+        "reward": _reward_identity_v1(candidate.reward),
+        "environment": _environment_identity_v1(candidate.environment),
+        "schedule": _schedule_identity_v1(candidate.schedule),
     }
 
 

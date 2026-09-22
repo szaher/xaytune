@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+from pathlib import Path
 from typing import Any, get_args
 
 import pytest
@@ -39,8 +41,14 @@ from xaytune.core.execution import (
     SecretRef,
     TrainingExecutionSpec,
 )
-from xaytune.core.ids import OperationId
-from xaytune.core.refs import DatasetRef, ModelRef, RuntimeRef
+from xaytune.core.ids import CheckpointId, OperationId
+from xaytune.core.refs import CheckpointRef, DatasetRef, ModelRef, RuntimeRef
+from xaytune.core.resume import ResumeGuarantee
+from xaytune.core.telemetry import (
+    CheckpointCommittedPayload,
+    EvaluationStartedPayload,
+    HeartbeatPayload,
+)
 from xaytune.runtimes import (
     EvaluationEventPayload,
     OperationOutcome,
@@ -474,6 +482,30 @@ def test_both_entrypoint_kinds_round_trip_through_the_spec() -> None:
         assert type(restored.entrypoint) is type(entrypoint)
 
 
+# ---- the published example is part of the contract ----------------------
+
+
+def test_the_published_example_validates_as_a_spec() -> None:
+    """The schema example is a claim about the wire format, so it has to hold.
+
+    It had drifted a long way -- an older ``plugin_version``, ``value`` for a
+    module entrypoint, ``event_protocol`` for the telemetry version, ``cpu``
+    and ``memory`` for the resource fields -- while still being the thing a
+    plugin author reads first. A documented example nobody executes is a
+    specification of something that does not exist.
+    """
+    example = (
+        Path(__file__).resolve().parents[2]
+        / "xaytune-training-harness-spec"
+        / "schemas"
+        / "training-execution-spec.example.json"
+    )
+
+    spec = TrainingExecutionSpec.model_validate(json.loads(example.read_text(encoding="utf-8")))
+
+    assert spec.telemetry.protocol_version == "xaytune.telemetry/v1alpha2"
+
+
 # ---- the telemetry envelope implements ADR-014 --------------------------
 
 
@@ -483,10 +515,22 @@ def test_an_evaluation_cannot_emit_a_checkpoint_event() -> None:
     Evaluation produces no checkpoints, which is why its state machine has
     neither CHECKPOINTING nor RECOVERING.
     """
-    assert TrainingEventPayload(type="CheckpointCommitted").type == "CheckpointCommitted"
+    assert (
+        TrainingEventPayload(
+            data=CheckpointCommittedPayload(
+                checkpoint_ref=CheckpointRef(id=CheckpointId.generate(), uri="file:///checkpoint"),
+                optimizer_step=0,
+                data_cursor=None,
+                resume_guarantee=ResumeGuarantee(
+                    state="model-only", data="none", boundary="optimizer-step"
+                ),
+            )
+        ).type
+        == "CheckpointCommitted"
+    )
 
     with pytest.raises(ValidationError):
-        EvaluationEventPayload(type="CheckpointCommitted")
+        EvaluationEventPayload.model_validate({"data": {"type": "CheckpointCommitted"}})
 
 
 def test_a_target_cannot_carry_the_other_workloads_telemetry() -> None:
@@ -502,7 +546,18 @@ def test_a_target_cannot_carry_the_other_workloads_telemetry() -> None:
             event_id="e",
             target=RuntimeOperationTarget(kind="evaluation-attempt", id="eval_1"),
             sequence=0,
-            payload=TrainingEventPayload(type="CheckpointCommitted"),
+            payload=TrainingEventPayload(
+                data=CheckpointCommittedPayload(
+                    checkpoint_ref=CheckpointRef(
+                        id=CheckpointId.generate(), uri="file:///checkpoint"
+                    ),
+                    optimizer_step=0,
+                    data_cursor=None,
+                    resume_guarantee=ResumeGuarantee(
+                        state="model-only", data="none", boundary="optimizer-step"
+                    ),
+                )
+            ),
         )
 
     with pytest.raises(ValidationError):
@@ -510,7 +565,7 @@ def test_a_target_cannot_carry_the_other_workloads_telemetry() -> None:
             event_id="e",
             target=RuntimeOperationTarget(kind="training-attempt", id="run_1"),
             sequence=0,
-            payload=EvaluationEventPayload(type="EvaluationStarted"),
+            payload=EvaluationEventPayload(data=EvaluationStartedPayload()),
         )
 
 
@@ -521,8 +576,14 @@ def test_the_shared_vocabulary_stays_shared() -> None:
     neither may borrow the other's.
     """
     for kind, payload in (
-        ("training-attempt", TrainingEventPayload(type="Heartbeat")),
-        ("evaluation-attempt", EvaluationEventPayload(type="Heartbeat")),
+        (
+            "training-attempt",
+            TrainingEventPayload(data=HeartbeatPayload(expected_interval_seconds=5)),
+        ),
+        (
+            "evaluation-attempt",
+            EvaluationEventPayload(data=HeartbeatPayload(expected_interval_seconds=5)),
+        ),
     ):
         envelope = RuntimeEventEnvelope(
             event_id="e",
@@ -541,8 +602,8 @@ def test_every_target_kind_admits_exactly_one_telemetry_family() -> None:
     of quietly accepting anything.
     """
     families = (
-        TrainingEventPayload(type="Heartbeat"),
-        EvaluationEventPayload(type="Heartbeat"),
+        TrainingEventPayload(data=HeartbeatPayload(expected_interval_seconds=5)),
+        EvaluationEventPayload(data=HeartbeatPayload(expected_interval_seconds=5)),
     )
 
     for kind in get_args(OperationTargetKind):
@@ -568,7 +629,7 @@ def test_the_envelope_names_its_target_the_way_the_journal_does() -> None:
         event_id="evt_1",
         target=RuntimeOperationTarget(kind="evaluation-attempt", id="ea_1"),
         sequence=0,
-        payload=EvaluationEventPayload(type="EvaluationStarted"),
+        payload=EvaluationEventPayload(data=EvaluationStartedPayload()),
     )
 
     restored = RuntimeEventEnvelope.model_validate_json(envelope.model_dump_json())
@@ -585,7 +646,7 @@ def test_sequences_and_generations_are_counters() -> None:
             event_id="e",
             target=target,
             sequence=-1,
-            payload=TrainingEventPayload(type="Heartbeat"),
+            payload=TrainingEventPayload(data=HeartbeatPayload(expected_interval_seconds=5)),
         )
 
     with pytest.raises(ValidationError):

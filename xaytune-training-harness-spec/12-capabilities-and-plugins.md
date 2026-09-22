@@ -184,3 +184,17 @@ from xaytune import Experiment, Objective
 without importing PyTorch or Transformers.
 
 Heavy integrations load lazily.
+
+## 11. Event sink contract (PR-009a)
+
+`xaytune.core.sinks.EventSink` is the `xaytune.event_sinks` plugin boundary:
+`descriptor: PluginDescriptor` and `async consume(event: DomainEvent) -> None`.
+Sinks receive committed durable events via the outbox, with at-least-once
+delivery and consumer deduplication by event ID. Delivery failures are isolated
+from training; external observability tools are never sources of truth.
+
+No collector/exporter capabilities are advertised merely because the contracts
+exist. `ObservabilitySpec` expresses requested observation policy; a future
+compiler/runtime must report unsupported profiler or tracing requests rather
+than silently claim to have honored them. PR-009a does not install any sink,
+collector, profiler or tracing SDK.

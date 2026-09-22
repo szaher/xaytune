@@ -3,14 +3,14 @@
 ## Status
 Accepted — 2026-09-21.
 
-Defines `xaytune.telemetry/v1alpha1`, which `TrainingExecutionSpec.telemetry`
+Defines `xaytune.telemetry/v1alpha2`, which `TrainingExecutionSpec.telemetry`
 already names and which nothing specified. Required by PR-005 (the event
 schema) and PR-011 (`LocalRuntime`).
 
 ## Context
 
 `TrainingExecutionSpec` carries a `TelemetryContract` naming
-`xaytune.telemetry/v1alpha1`, and `RuntimeBackend.watch()` returned an
+`xaytune.telemetry/v1alpha2`, and `RuntimeBackend.watch()` returned an
 undefined `AsyncIterator[RuntimeEvent]`. Neither the event type nor the
 stream's semantics were defined anywhere. This ADR defines them, and
 `watch()` now returns `AsyncIterator[RuntimeEventEnvelope]`.
@@ -41,7 +41,7 @@ The envelope is workload-neutral; the payload is not.
 
 ```python
 class RuntimeEventEnvelope(FrozenDomainModel):
-    protocol_version: str        # "xaytune.telemetry/v1alpha1"
+    protocol_version: str        # "xaytune.telemetry/v1alpha2"
     event_id: str                # ULID-shaped, unique per stream position
 
     target: RuntimeOperationTarget   # ADR-013: training-attempt | evaluation-attempt
@@ -356,9 +356,12 @@ like from the stream's point of view.
 
 ### 6. Heartbeat and liveness
 
-`Heartbeat` carries the worker's current `sequence` and the wall-clock interval
-it expects between beats. Absence of heartbeats past that interval makes the
-attempt **suspect**, not failed.
+`Heartbeat` carries the wall-clock interval it expects between beats. Its
+stream position is the enclosing `RuntimeEventEnvelope.sequence`, and the
+payload does not repeat it: there is one canonical sequence per event, assigned
+once by the telemetry supervisor (§1a), and a second copy could disagree with
+it. Absence of heartbeats past the declared interval makes the attempt
+**suspect**, not failed.
 
 The controller must confirm through `get_status()` before acting, because the
 common cause of missing heartbeats is a slow or partitioned network, and the
@@ -432,3 +435,48 @@ orders them through the RunAttempt state machine.
 8. `IncidentObserved` never transitions a run to a terminal state by itself.
 9. A controller restart mid-stream loses no durably recorded event and
    double-applies none.
+
+## PR-009a — typed observation bodies
+
+The family boundary is now executable at both levels:
+
+```python
+TrainingEventPayload(workload="training", data=TrainingObservation)
+EvaluationEventPayload(workload="evaluation", data=EvaluationObservation)
+```
+
+Each `data` union is discriminated by its literal `type`; that type lives once,
+inside the body. Python callers can read `payload.type` as a derived property.
+A checkpoint cannot be an evaluation observation, and an evaluation lifecycle
+cannot be a training observation. Tests derive target coverage dynamically from
+`OperationTargetKind`, and exercise every training union variant.
+
+Training bodies include lifecycle, named scalar metrics, training/resource/data/
+distributed/alignment metrics, numerical-health observations, typed checkpoints
+and profiler lifecycle/artifact references. Evaluation retains its own lifecycle
+and progress bodies plus shared worker-ready, heartbeat, incident, artifact,
+resource and named metric observations. Common names do not relax the enforced
+target-to-family pairing.
+
+A heartbeat declares its expected interval; its canonical sequence lives in the
+envelope, avoiding two conflicting sequence claims. Optional `TraceContext` and
+`CorrelationContext` are advisory and never override the target, generation or
+sequence. Contradictory target/generation context is rejected.
+
+`CheckpointCommittedPayload` requires ADR-012's independent state/data/boundary
+guarantees and validates them against a cursor and captured-state manifest.
+Strong guarantees cannot be attached to a bare checkpoint URI. State is
+referenced through artifacts, not embedded tensors/RNG bytes. See
+[Observability and Provenance §9](../21-observability-and-provenance.md#9-pr-009a-shared-observation-contracts)
+for units, state evidence, redaction, callback boundaries and deferred consumers.
+
+PR-009a advances the protocol from `xaytune.telemetry/v1alpha1` to
+`xaytune.telemetry/v1alpha2`: typed bodies replace the pre-NativeWorker dictionary
+body. LocalRuntime refuses plans requesting the old protocol and raises on
+incompatible complete retained records rather than silently skipping them.
+Existing streams need an explicit migration; missing checkpoint evidence must
+never be synthesized. A trailing incomplete JSONL write remains retryable. Existing
+untyped checkpoint events must not be upgraded by inventing missing state.
+LocalRuntime constructs the typed shared worker-ready/incident bodies; it still does not report training completion from
+process exit. Stream ownership, replay, sequencing and reconciliation rules above
+are unchanged.

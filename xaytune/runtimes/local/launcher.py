@@ -138,8 +138,8 @@ def _payload(
     here, so neither branch can construct a payload the envelope would refuse.
     """
     if plan.target.kind == "training-attempt":
-        return TrainingEventPayload(type=event_type, data=data)  # type: ignore[arg-type]
-    return EvaluationEventPayload(type=event_type, data=data)  # type: ignore[arg-type]
+        return TrainingEventPayload.model_validate({"data": {"type": event_type, **data}})
+    return EvaluationEventPayload.model_validate({"data": {"type": event_type, **data}})
 
 
 def _next_generation(events: Path) -> int:

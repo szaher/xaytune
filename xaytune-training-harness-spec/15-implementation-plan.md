@@ -357,7 +357,23 @@ outbox delivery as a substitute for the journal (ADR-013).
 
 Subprocess + operation idempotency.
 
-### PR-010 — NativeCompiler
+### PR-009a — Observability and training telemetry contracts
+
+Contracts and tests only, after LocalRuntime and before NativeWorker:
+
+- observation policy separate from the transport contract
+- typed training/resource/data/distributed/alignment and numerical-health observations
+- typed checkpoint cursor, captured-state evidence and three-dimensional resume guarantees
+- profiler artifact lifecycle, structured logs, trace and correlation context
+- declarative redaction and the EventSink plugin boundary
+- immutable JSON validation and dependency-isolation tests
+
+NativeWorker should emit one shared Xaytune telemetry contract rather than
+establishing a Native-specific observability vocabulary that Ray, TRL and
+Training Hub later have to translate or replace. Exporters, GPU collection,
+profiler execution, callback integration and policy decisions are deferred.
+
+### PR-010 — NativeCompiler / NativeWorker
 
 Wrap existing training loop.
 

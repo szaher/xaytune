@@ -25,6 +25,9 @@ FORBIDDEN_ROOTS = frozenset(
         "gradio",
         "kubernetes",
         "mlflow",
+        "tensorboard",
+        "opentelemetry",
+        "pynvml",
         "peft",
         "ray",
         "torch",
@@ -249,3 +252,23 @@ class TestForbiddenImportDetection:
         tree = ast.parse(source)
         found = _imported_modules(tree)
         assert any(m.split(".")[0] in FORBIDDEN_ROOTS for m in found)
+
+
+def test_runtime_contracts_and_local_runtime_import_without_integrations():
+    result = _run_isolated("""
+import xaytune.core.observability
+import xaytune.core.resume
+import xaytune.core.telemetry
+import xaytune.core.sinks
+import xaytune.runtimes
+import xaytune.runtimes.local
+assert not any(m == 'xaytune.trainer' or m.startswith('xaytune.trainer.') for m in sys.modules)
+""")
+    assert result.returncode == 0, result.stderr
+
+
+def test_runtime_declares_no_trainer_or_integration_imports():
+    for path in (CORE_DIR.parent / "runtimes").rglob("*.py"):
+        for module in _imported_modules(ast.parse(path.read_text())):
+            assert module.split(".")[0] not in FORBIDDEN_ROOTS, (path, module)
+            assert not module.startswith(("xaytune.trainer", "xaytune.recipes")), (path, module)

@@ -40,7 +40,8 @@ result = handle.wait()
 
 The same experiment should be able to execute through:
 
-- local process / torchrun
+- a local subprocess
+- a distributed local launcher
 - Ray Train
 - Training Hub
 - future platform runtimes

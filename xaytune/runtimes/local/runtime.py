@@ -59,6 +59,14 @@ _LIVE: frozenset[RuntimeState] = frozenset({"pending", "queued", "starting", "ru
 not an ending, and it is not somewhere a caller should keep waiting."""
 _POLL_SECONDS = 0.02
 
+_TELEMETRY_PROTOCOL = "xaytune.telemetry/v1alpha2"
+"""The telemetry contract this backend's launcher emits.
+
+Named here rather than read from the envelope so a plan compiled against
+an older protocol is refused at submission, which is what
+:class:`~xaytune.core.execution.TelemetryContract` exists to make
+possible."""
+
 _RUNTIME_OPTIONS = frozenset({"working_directory"})
 """Every runtime option this backend implements.
 
@@ -528,6 +536,14 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"rest would run something other than what was asked for"
         )
 
+    if plan.spec.telemetry.protocol_version != _TELEMETRY_PROTOCOL:
+        return (
+            f"this runtime speaks {_TELEMETRY_PROTOCOL}, and the plan asks for "
+            f"{plan.spec.telemetry.protocol_version!r}; a worker and a controller "
+            f"that disagree about the telemetry contract should fail at submission "
+            f"rather than halfway through a run"
+        )
+
     if plan.spec.secrets:
         names = ", ".join(secret.name for secret in plan.spec.secrets)
         return (
@@ -607,13 +623,15 @@ def _read_events(path: Path) -> list[RuntimeEventEnvelope]:
         return []
 
     envelopes = []
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
         if not line.strip():
             continue
-        try:
-            envelopes.append(RuntimeEventEnvelope.model_validate_json(line))
-        except ValueError:
+        # Only a trailing partial write is retryable. An incompatible complete
+        # record must not silently disappear from the durable stream.
+        if index == len(lines) - 1 and not text.endswith("\n"):
             continue
+        envelopes.append(RuntimeEventEnvelope.model_validate_json(line))
     envelopes.sort(key=lambda envelope: (envelope.stream_generation, envelope.sequence))
     return envelopes
 

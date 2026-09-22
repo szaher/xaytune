@@ -169,7 +169,7 @@ def overview():
     d.arrow([(600, 1092), (600, 1130)])
     d.rect(48, 1134, 1104, 188, "#fff6ed", "#ecd8c5")
     d.text(76, 1174, "Platform / infrastructure", 25, ORANGE, bold=True)
-    d.text(76, 1210, "Local: subprocess / torchrun  ·  Ray: Ray Train / Jobs", 21)
+    d.text(76, 1210, "Local: one subprocess  ·  Ray: Ray Train / Jobs", 21)
     d.text(76, 1247, "Training Hub path: Kubeflow Trainer / KubeRay → Kueue", 21)
     d.text(
         76,

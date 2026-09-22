@@ -46,7 +46,7 @@ class RuntimeBackend(Protocol):
         # the caller must await before iterating. Both shapes satisfy this, but
         # only one types correctly for an implementation that yields.
         # Yields canonical envelopes per ADR-014
-        # (xaytune.telemetry/v1alpha1), in increasing (generation, sequence)
+        # (xaytune.telemetry/v1alpha2), in increasing (generation, sequence)
         # order. cursor is the last position the controller DURABLY RECORDED,
         # not the last it received -- an event received and then lost in a
         # crash must be redelivered. It is StreamCursor(generation, sequence):
@@ -97,12 +97,19 @@ telemetry failure would record an execution retry that never happened
 
 Supports:
 
-- subprocess
-- single process
-- torchrun
-- local multi-GPU
+- local subprocess execution
+- one worker
 - local controller development
 - deterministic integration tests
+- durable operation lookup across a controller restart
+- replayable local telemetry and logs
+
+It does **not** implement `torchrun` or local multi-worker execution, and
+refuses a plan asking for either. Choosing a world size, a rendezvous endpoint
+and a restart policy means reading the training configuration, and a runtime
+that read the training configuration would be a second place scientific intent
+lived. A distributed local launcher is therefore a separate backend with its
+own capability document, not a flag on this one.
 
 ### RayTrainRuntime
 

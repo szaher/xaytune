@@ -36,11 +36,15 @@ class RuntimeBackend(Protocol):
         runtime_ref: RuntimeRef,
     ) -> RuntimeStatus: ...
 
-    async def watch(
+    def watch(
         self,
         runtime_ref: RuntimeRef,
         cursor: StreamCursor | None = None,
     ) -> AsyncIterator[RuntimeEventEnvelope]: ...
+        # `def`, not `async def`: an async generator is already declared with a
+        # plain `def` returning AsyncIterator, and `async def` here would mean
+        # the caller must await before iterating. Both shapes satisfy this, but
+        # only one types correctly for an implementation that yields.
         # Yields canonical envelopes per ADR-014
         # (xaytune.telemetry/v1alpha1), in increasing (generation, sequence)
         # order. cursor is the last position the controller DURABLY RECORDED,
@@ -58,7 +62,7 @@ class RuntimeBackend(Protocol):
         operation_id: OperationId,
     ) -> None: ...
 
-    async def get_logs(
+    def get_logs(
         self,
         runtime_ref: RuntimeRef,
     ) -> AsyncIterator[RuntimeLog]: ...

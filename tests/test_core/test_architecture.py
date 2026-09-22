@@ -42,6 +42,7 @@ FORBIDDEN_ROOTS = frozenset(
 FORBIDDEN_XAYTUNE_MODULES = frozenset(
     {
         "xaytune.cli",
+        "xaytune.compilation",
         "xaytune.config",
         "xaytune.data",
         "xaytune.eval",
@@ -51,6 +52,7 @@ FORBIDDEN_XAYTUNE_MODULES = frozenset(
         "xaytune.pipeline",
         "xaytune.plugins",
         "xaytune.recipes",
+        "xaytune.runtimes",
         "xaytune.studio",
         "xaytune.trainer",
     }

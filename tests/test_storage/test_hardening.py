@@ -8,6 +8,7 @@ or leaving an action holding intent against an effect known to have failed.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -26,7 +27,12 @@ from xaytune.core import (
 )
 from xaytune.core.domain.action import ActionStatus, ActionTarget
 from xaytune.core.errors import ConcurrentModificationError
-from xaytune.storage import AggregateNotFoundError, ControlPlaneRepository, StorageError
+from xaytune.storage import (
+    AggregateNotFoundError,
+    ControlPlaneRepository,
+    StorageError,
+    write_transaction,
+)
 from xaytune.storage.journal import IdempotencyConflictError
 
 from .conftest import make_attempt, make_experiment, make_node, make_run
@@ -460,3 +466,63 @@ def test_operation_settlement_reaches_the_outbox(repo: ControlPlaneRepository, r
 
     delivered = {record.event_id for record in repo.events.pending_outbox()}
     assert settled[0].id in delivered
+
+
+# ---- a node's fingerprint must describe its candidate --------------------
+
+
+def test_a_node_whose_fingerprint_does_not_match_its_candidate_is_refused(
+    repo: ControlPlaneRepository,
+) -> None:
+    """The stored identity has to describe the body it indexes.
+
+    Every consumer downstream trusts it: graph comparison would call two
+    nodes the same candidate, reuse would match the wrong hypothesis, and the
+    run consistency check would compare against a value describing nothing.
+    """
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = make_node(experiment)
+    mismatched = type(node).model_validate(
+        {
+            **node.model_dump(mode="python"),
+            "candidate_fingerprint": "sha256:describes-something-else",
+        }
+    )
+
+    with pytest.raises(StorageError, match="would not describe"):
+        repo.create_node(mismatched, actor=ACTOR)
+
+    assert repo.aggregates.get_node(str(node.id)) is None
+
+
+def test_a_legacy_node_payload_reports_the_format_change(
+    repo: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    """A band B row is unreadable, and says so.
+
+    PR-007 restructured the node body -- an opaque ``training_spec`` became a
+    typed ``candidate`` -- which is a deliberate format change rather than a
+    compatibility bug. What it must not be is a ValidationError about missing
+    fields, which tells the reader nothing about why.
+    """
+    from xaytune.storage.errors import IncompatiblePayloadError
+
+    experiment = repo.create_experiment(make_experiment(), actor=ACTOR)
+    node = repo.create_node(make_node(experiment), actor=ACTOR)
+
+    legacy = json.loads(
+        connection.execute(
+            "SELECT payload_json FROM experiment_nodes WHERE id = ?", (str(node.id),)
+        ).fetchone()["payload_json"]
+    )
+    legacy["training_spec"] = {"kind": "sft", "payload": {}}
+    del legacy["candidate"]
+
+    with write_transaction(connection):
+        connection.execute(
+            "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
+            (json.dumps(legacy), str(node.id)),
+        )
+
+    with pytest.raises(IncompatiblePayloadError, match="format"):
+        repo.aggregates.get_node(str(node.id))

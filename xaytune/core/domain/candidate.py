@@ -34,7 +34,9 @@ not the object.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
+from typing import Any
 
 from pydantic import Field
 
@@ -44,6 +46,7 @@ from xaytune.core.refs import DatasetRef, ModelRef
 
 __all__ = [
     "AdapterSpec",
+    "AlgorithmSpec",
     "CandidateSpec",
     "DataSpec",
     "EnvironmentSpec",
@@ -54,6 +57,7 @@ __all__ = [
     "TrainingKind",
     "TrainingSchedule",
     "TrainingSpec",
+    "CheckpointIntent",
 ]
 
 
@@ -76,10 +80,14 @@ class TrainingKind(str, Enum):
 
 
 class ModelSpec(FrozenDomainModel):
-    """The base model a candidate starts from."""
+    """The base model a candidate starts from.
+
+    The revision lives on :class:`ModelRef` and only there. Carrying a second
+    one here would create two authorities for the same fact, and nothing would
+    say which wins when they disagree.
+    """
 
     model: ModelRef
-    revision: str | None = None
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
@@ -88,6 +96,71 @@ class DataSpec(FrozenDomainModel):
 
     dataset: DatasetRef
     metadata: FrozenDict = Field(default_factory=FrozenDict)
+
+
+class OptimizerSpec(FrozenDomainModel):
+    """Which optimizer, and its declared hyperparameters.
+
+    Typed rather than left to metadata, because AdamW and SGD are different
+    scientific propositions and a fingerprint must say so.
+    """
+
+    name: str
+    learning_rate: float | None = None
+    weight_decay: float | None = None
+    betas: tuple[float, ...] = Field(default_factory=tuple)
+    params: FrozenDict = Field(default_factory=FrozenDict)
+
+
+class LRScheduleSpec(FrozenDomainModel):
+    """The declared learning-rate schedule.
+
+    Part of candidate identity: a cosine decay and a constant rate over the
+    same steps are different experiments.
+    """
+
+    name: str
+    warmup_steps: int | None = None
+    warmup_ratio: float | None = None
+    params: FrozenDict = Field(default_factory=FrozenDict)
+
+
+class PrecisionSpec(FrozenDomainModel):
+    """Declared numerical precision.
+
+    Identity-bearing: bf16 and fp32 can reach different results from the same
+    candidate, so they are not the same candidate.
+    """
+
+    dtype: str | None = None
+    grad_accum_dtype: str | None = None
+    params: FrozenDict = Field(default_factory=FrozenDict)
+
+
+class CheckpointIntent(FrozenDomainModel):
+    """How often the candidate intends to checkpoint, and what it keeps.
+
+    **Intent, not mechanism.** Declaring "every 500 optimizer steps" is a
+    control-plane statement about the experiment. Owning a trainer's
+    checkpoint save/restore lifecycle is a runtime concern and stays there
+    (TASK-029); keeping the two apart is the point of the compile/execute
+    boundary.
+    """
+
+    every_optimizer_steps: int | None = None
+    keep_last: int | None = None
+    params: FrozenDict = Field(default_factory=FrozenDict)
+
+
+class AlgorithmSpec(FrozenDomainModel):
+    """Algorithm-specific parameters beyond the training kind.
+
+    DPO's beta or GRPO's group size live here rather than in generic metadata,
+    so they are visibly part of the scientific proposition.
+    """
+
+    name: str | None = None
+    params: FrozenDict = Field(default_factory=FrozenDict)
 
 
 class AdapterSpec(FrozenDomainModel):
@@ -107,6 +180,9 @@ class OptimizationSpec(FrozenDomainModel):
     batch is scientific. A recovery that halves one and doubles the other
     preserves intent and is an `ExecutionOverride`, not a change to this spec.
     """
+
+    optimizer: OptimizerSpec | None = None
+    lr_schedule: LRScheduleSpec | None = None
 
     learning_rate: float | None = None
     micro_batch_size: int | None = None
@@ -169,10 +245,57 @@ class TrainingSpec(FrozenDomainModel):
     api_version: str = "xaytune.ai/v1alpha1"
     kind: TrainingKind
 
+    algorithm: AlgorithmSpec = Field(default_factory=AlgorithmSpec)
     adapter: AdapterSpec | None = None
     optimization: OptimizationSpec = Field(default_factory=OptimizationSpec)
+    precision: PrecisionSpec = Field(default_factory=PrecisionSpec)
+    checkpoint: CheckpointIntent = Field(default_factory=CheckpointIntent)
 
     metadata: FrozenDict = Field(default_factory=FrozenDict)
+
+
+def _optional(value: FrozenDomainModel | None) -> Any:
+    """Project an optional component, distinguishing absent from empty."""
+    return None if value is None else value.model_dump(mode="json", by_alias=True)
+
+
+def candidate_identity_v1(candidate: CandidateSpec) -> Mapping[str, Any]:
+    """The explicit, versioned projection that defines candidate identity.
+
+    **Why this is not just the model.** Hashing a Pydantic model makes the
+    *current schema* define identity. Add a field with a default six months
+    from now and every candidate already on disk fingerprints differently,
+    though no researcher changed anything -- and reuse, comparison and lineage
+    all silently stop matching. Listing the fields here means adding one later
+    is a deliberate act: either it joins ``v2``, or it does not bear identity.
+
+    **What is excluded, and why.** Generic ``metadata`` does not enter identity.
+    A ticket number or an owner's name is not a scientific proposition, and
+    ``metadata={"ticket": "RHOAI-1234"}`` must not mint a new candidate.
+    Anything that genuinely should bear identity gets a typed field -- which is
+    what ``AlgorithmSpec.params`` and the other ``params`` fields are for.
+
+    The projection is domain-separated by ``type``, so a candidate and a run
+    history can never collide even if their contents coincided.
+    """
+    training = candidate.training
+    return {
+        "type": "candidate",
+        "version": 1,
+        "model": candidate.model.model.model_dump(mode="json", by_alias=True),
+        "data": candidate.data.dataset.model_dump(mode="json", by_alias=True),
+        "training": {
+            "kind": training.kind.value,
+            "algorithm": training.algorithm.model_dump(mode="json", by_alias=True),
+            "adapter": _optional(training.adapter),
+            "optimization": training.optimization.model_dump(mode="json", by_alias=True),
+            "precision": training.precision.model_dump(mode="json", by_alias=True),
+            "checkpoint": training.checkpoint.model_dump(mode="json", by_alias=True),
+        },
+        "reward": _optional(candidate.reward),
+        "environment": _optional(candidate.environment),
+        "schedule": _optional(candidate.schedule),
+    }
 
 
 class CandidateSpec(FrozenDomainModel):
@@ -196,11 +319,13 @@ class CandidateSpec(FrozenDomainModel):
     def candidate_fingerprint(self) -> str:
         """Return this candidate's identity: *has this hypothesis been explored?*
 
-        Covers everything declared — including any pre-registered schedule,
-        which is part of the proposal. It does **not** cover the seed, the
-        evaluator, or anything about execution: two replicates of one candidate
-        share this fingerprint, a changed grader must never imply a retrain,
-        and the same hypothesis run on different hardware is the same
-        hypothesis.
+        Hashes the **v1 identity projection**, not the model. See
+        :func:`candidate_identity_v1` for what that covers and why it is not
+        simply the model's fields.
+
+        It does not cover the seed, the evaluator, or anything about execution:
+        two replicates of one candidate share this fingerprint, a changed
+        grader must never imply a retrain, and the same hypothesis on different
+        hardware is the same hypothesis.
         """
-        return fingerprint(self)
+        return fingerprint(candidate_identity_v1(self))

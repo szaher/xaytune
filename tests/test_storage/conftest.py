@@ -57,12 +57,18 @@ def store(connection: sqlite3.Connection) -> AggregateStore:
     return AggregateStore(connection)
 
 
-def _snapshot() -> CandidateSpecSnapshot:
-    """A minimal candidate, for tests that care about lineage rather than spec."""
+def _snapshot(variant: str = "a") -> CandidateSpecSnapshot:
+    """A minimal candidate, for tests that care about lineage rather than spec.
+
+    *variant* distinguishes candidates that must fingerprint differently. It
+    goes into the dataset rather than into metadata, because metadata is
+    deliberately outside candidate identity -- using it here would make every
+    "different candidate" fixture silently identical.
+    """
     return CandidateSpecSnapshot(
         candidate=CandidateSpec(
             model=ModelSpec(model=ModelRef(uri="Qwen/Qwen3-8B")),
-            data=DataSpec(dataset=DatasetRef(uri="./data/support-v4.jsonl")),
+            data=DataSpec(dataset=DatasetRef(uri=f"./data/support-{variant}.jsonl")),
             training=TrainingSpec(kind=TrainingKind.SFT),
         )
     )
@@ -82,15 +88,22 @@ def make_experiment(name: str = "support-qwen") -> Experiment:
 
 def make_node(
     experiment: Experiment,
-    fingerprint: str = "sha256:cand-a",
+    fingerprint: str | None = None,
     parents: tuple[ExperimentNodeId, ...] = (),
 ) -> ExperimentNode:
+    """Build a node whose fingerprint actually describes its candidate.
+
+    *fingerprint* names a candidate variant rather than supplying a digest:
+    the repository derives the fingerprint and refuses a node where the two
+    disagree, so a fixture cannot hand over a synthetic one.
+    """
+    snapshot = _snapshot(fingerprint or "a")
     return ExperimentNode(
         id=ExperimentNodeId.generate(),
         experiment_id=experiment.id,
         parent_ids=parents,
-        candidate=_snapshot(),
-        candidate_fingerprint=fingerprint,
+        candidate=snapshot,
+        candidate_fingerprint=snapshot.candidate.candidate_fingerprint(),
         created_by=Actor(type="system", id="controller"),
     )
 

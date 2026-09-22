@@ -11,16 +11,22 @@ import pytest
 
 from xaytune.core.domain.candidate import (
     AdapterSpec,
+    AlgorithmSpec,
     CandidateSpec,
+    CheckpointIntent,
     DataSpec,
     EnvironmentSpec,
+    LRScheduleSpec,
     ModelSpec,
     OptimizationSpec,
+    OptimizerSpec,
+    PrecisionSpec,
     RewardSpec,
     ScheduledIntervention,
     TrainingKind,
     TrainingSchedule,
     TrainingSpec,
+    candidate_identity_v1,
 )
 from xaytune.core.domain.run import (
     Run,
@@ -45,6 +51,15 @@ def _candidate(**overrides) -> CandidateSpec:
     )
     defaults.update(overrides)
     return CandidateSpec(**defaults)
+
+
+def _plain_candidate() -> CandidateSpec:
+    """The candidate whose fingerprint is pinned literally below."""
+    return CandidateSpec(
+        model=ModelSpec(model=ModelRef(uri="Qwen/Qwen3-8B")),
+        data=DataSpec(dataset=DatasetRef(uri="./support-v4.jsonl")),
+        training=TrainingSpec(kind=TrainingKind.SFT),
+    )
 
 
 def _run(candidate: CandidateSpec, **overrides) -> Run:
@@ -85,11 +100,24 @@ def test_a_fingerprint_is_stable_across_processes() -> None:
     fingerprint silently stops matching, and a test that recomputes both sides
     would not notice.
     """
-    assert fingerprint({"kind": "sft", "lr": 2e-5}) == (
-        "sha256:" + fingerprint({"kind": "sft", "lr": 2e-5}).split(":")[1]
-    )
     assert canonical_encode({"a": 1}) == "m:{s:1:a=i:1}"
     assert canonical_encode([1, "a", None, True]) == "l:[i:1,s:1:a,n,b:1]"
+    assert fingerprint({"kind": "sft", "lr": 2e-5}) == (
+        "sha256:46543e5f2f877d09d43d9add1d067b294b91eed8652872c063b83b39fcb67d74"
+    )
+
+
+def test_a_candidate_fingerprint_is_pinned() -> None:
+    """One whole CandidateFingerprint, as a literal.
+
+    This is the key experiment comparison, reuse, execution plans and
+    checkpoint compatibility are built on. A test that recomputed both sides
+    would pass through any change to it while everything already recorded
+    stopped matching, so the brittleness is deliberate.
+    """
+    assert _plain_candidate().candidate_fingerprint() == (
+        "sha256:d17e8149fc099270f48a1c15ebb67607ffba012f5d2380944efecbe7687fa4c2"
+    )
 
 
 def test_unorderable_and_unrepresentable_values_are_refused() -> None:
@@ -193,30 +221,42 @@ def _application(step: int) -> dict[str, object]:
     return {"intervention_id": "lr-drop", "step": step, "applied_value": 1e-5}
 
 
-def test_history_and_lineage_agree_on_a_clean_run() -> None:
-    """With nothing rolled back, both describe the same trajectory."""
+def test_the_two_run_identities_are_different_questions() -> None:
+    """Domain-separated, so they cannot collide even on identical contents."""
     run = _run(_candidate(), seed=1)
     applications = [_application(14250)]
 
     assert run_history_fingerprint(run, applications) != artifact_lineage_fingerprint(
         run, applications, ["ckpt-1"]
-    ), "they are different questions, so they are deliberately different hashes"
+    )
 
 
 def test_rolled_back_work_changes_history_but_not_artifact_lineage() -> None:
     """The reason there are two fingerprints at all (ADR-011).
 
-    One run applied an intervention, rolled back past it and applied it again;
-    the other applied it once. Different histories, same retained trajectory --
-    and asking "has this trajectory been run?" must answer yes.
-    """
-    run = _run(_candidate(), seed=1)
-    retained = [_application(14250)]
-    with_rollback = [_application(9000), _application(14250)]
+    Two genuinely different runs:
 
-    assert run_history_fingerprint(run, retained) != run_history_fingerprint(run, with_rollback)
-    assert artifact_lineage_fingerprint(run, retained, ["ckpt-2"]) == artifact_lineage_fingerprint(
-        run, retained, ["ckpt-2"]
+    ```text
+    A: applied at 9000, rolled back, applied again at 14250
+    B: applied once at 14250
+    ```
+
+    Different histories -- A did something B did not. The same artifact
+    lineage, because A's rolled-back work never reached the artifact. Asking
+    "has this trajectory been run?" must answer yes.
+    """
+    candidate = _candidate()
+    run_a = _run(candidate, seed=1)
+    run_b = _run(candidate, seed=1, id=run_a.id)
+
+    a_history = [_application(9000), _application(14250)]
+    b_history = [_application(14250)]
+    retained = [_application(14250)]
+    ancestry = ["ckpt-2"]
+
+    assert run_history_fingerprint(run_a, a_history) != run_history_fingerprint(run_b, b_history)
+    assert artifact_lineage_fingerprint(run_a, retained, ancestry) == artifact_lineage_fingerprint(
+        run_b, retained, ancestry
     )
 
 
@@ -247,3 +287,105 @@ def test_application_order_is_part_of_the_history() -> None:
     reversed_order = [_application(14250), _application(9000)]
 
     assert run_history_fingerprint(run, forward) != run_history_fingerprint(run, reversed_order)
+
+
+# ---- identity is versioned, not whatever the schema happens to be --------
+
+
+def test_adding_a_field_later_does_not_change_existing_identity() -> None:
+    """The reason identity hashes a projection rather than the model.
+
+    Hashing ``model_dump()`` makes the current schema define identity: add a
+    field with a default six months from now and every candidate already on
+    disk fingerprints differently, though nobody changed anything -- and
+    reuse, comparison and lineage all silently stop matching.
+    """
+    candidate = _plain_candidate()
+    before = candidate.candidate_fingerprint()
+
+    class FutureTrainingSpec(TrainingSpec):
+        gradient_checkpointing: bool | None = None
+
+    class FutureCandidateSpec(CandidateSpec):
+        training: FutureTrainingSpec  # type: ignore[assignment]
+        owner: str | None = None
+
+    evolved = FutureCandidateSpec.model_validate(candidate.model_dump(mode="python"))
+
+    assert fingerprint(candidate_identity_v1(evolved)) == before
+
+
+def test_metadata_is_not_scientific_identity() -> None:
+    """A ticket number is not a hypothesis.
+
+    Anything that genuinely bears identity gets a typed field; that is what
+    ``AlgorithmSpec.params`` and its siblings are for.
+    """
+    plain = _plain_candidate()
+    annotated = CandidateSpec(
+        model=plain.model,
+        data=plain.data,
+        training=plain.training,
+        metadata={"ticket": "RHOAI-1234", "owner": "someone"},
+    )
+
+    assert annotated.candidate_fingerprint() == plain.candidate_fingerprint()
+
+
+def test_identity_is_domain_separated() -> None:
+    """A candidate and a run history cannot collide, whatever they contain."""
+    projection = candidate_identity_v1(_plain_candidate())
+
+    assert projection["type"] == "candidate"
+    assert projection["version"] == 1
+
+
+@pytest.mark.parametrize(
+    ("component", "value"),
+    [
+        ("algorithm", AlgorithmSpec(name="dpo", params={"beta": 0.1})),
+        ("precision", PrecisionSpec(dtype="bf16")),
+        ("checkpoint", CheckpointIntent(every_optimizer_steps=500)),
+    ],
+)
+def test_the_newly_typed_components_bear_identity(component: str, value: object) -> None:
+    """Each was previously expressible only by hiding it in metadata.
+
+    ``AdamW`` versus ``SGD``, ``bf16`` versus ``fp32``, DPO's beta -- all
+    change what the experiment is, so all must change its fingerprint.
+    """
+    plain = _plain_candidate()
+    changed = CandidateSpec(
+        model=plain.model,
+        data=plain.data,
+        training=TrainingSpec(kind=TrainingKind.SFT, **{component: value}),
+    )
+
+    assert changed.candidate_fingerprint() != plain.candidate_fingerprint()
+
+
+def test_the_optimizer_and_schedule_are_distinguishable() -> None:
+    """There was no typed way to tell these apart before."""
+    plain = _plain_candidate()
+
+    def with_optimization(optimization: OptimizationSpec) -> str:
+        return CandidateSpec(
+            model=plain.model,
+            data=plain.data,
+            training=TrainingSpec(kind=TrainingKind.SFT, optimization=optimization),
+        ).candidate_fingerprint()
+
+    adamw = with_optimization(
+        OptimizationSpec(optimizer=OptimizerSpec(name="adamw", learning_rate=2e-5))
+    )
+    sgd = with_optimization(
+        OptimizationSpec(optimizer=OptimizerSpec(name="sgd", learning_rate=2e-5))
+    )
+    cosine = with_optimization(
+        OptimizationSpec(
+            optimizer=OptimizerSpec(name="adamw", learning_rate=2e-5),
+            lr_schedule=LRScheduleSpec(name="cosine", warmup_steps=100),
+        )
+    )
+
+    assert len({adamw, sgd, cosine}) == 3

@@ -79,18 +79,28 @@ def _encode(value: Any) -> str:
 
     if isinstance(value, BaseModel):
         # by_alias so a field renamed with a serialization alias fingerprints
-        # under the name it persists as, not its Python spelling. Without it,
-        # PR-007's rename would change every candidate's identity.
+        # under the name it persists as, not its Python spelling.
+        #
+        # Hashing a model directly makes the *current schema* define identity,
+        # which is fine for a transient digest and wrong for a durable one:
+        # adding a field with a default later changes the fingerprint of every
+        # record already stored, though nobody changed anything. Durable
+        # identities therefore hash an explicit versioned projection instead
+        # (see candidate_identity_v1), and reach this branch only for values
+        # nested inside one.
         return _encode(value.model_dump(mode="json", by_alias=True))
 
     if isinstance(value, Mapping):
-        items = []
-        for key in sorted(value):
+        # Validate every key BEFORE sorting. A mixed mapping such as
+        # {"a": 1, 2: "b"} raises Python's own comparison TypeError inside
+        # sorted() otherwise, and the caller gets an error about int and str
+        # not being orderable rather than the one that explains the rule.
+        for key in value:
             if not isinstance(key, str):
                 raise InvalidDomainValueError(
                     f"fingerprint mapping keys must be strings, got {type(key).__name__} ({key!r})"
                 )
-            items.append(f"{_encode(key)}={_encode(value[key])}")
+        items = [f"{_encode(key)}={_encode(value[key])}" for key in sorted(value)]
         return "m:{" + ",".join(items) + "}"
 
     if isinstance(value, (set, frozenset)):

@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
-import signal
 import subprocess
 import sys
 from collections.abc import AsyncIterator
@@ -47,7 +46,7 @@ from xaytune.runtimes import (
     RuntimeStatus,
     StreamCursor,
 )
-from xaytune.runtimes.local.paths import WorkloadPaths, read_json
+from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRecord, LocalWorkloadRegistry
 
 __all__ = ["BACKEND", "LocalRuntime", "UnsupportedPlanError"]
@@ -55,7 +54,19 @@ __all__ = ["BACKEND", "LocalRuntime", "UnsupportedPlanError"]
 BACKEND = "local"
 
 _TERMINAL: frozenset[RuntimeState] = frozenset({"succeeded", "failed", "cancelled", "preempted"})
+_LIVE: frozenset[RuntimeState] = frozenset({"pending", "queued", "starting", "running"})
+"""States a workload can still leave. ``unknown`` is in neither set: it is
+not an ending, and it is not somewhere a caller should keep waiting."""
 _POLL_SECONDS = 0.02
+
+_RUNTIME_OPTIONS = frozenset({"working_directory"})
+"""Every runtime option this backend implements.
+
+Checked as a closed set rather than read opportunistically. An unknown
+option is a caller asking for behaviour -- ``{'launcher': 'torchrun'}`` is
+the obvious one -- and silently running a plain subprocess instead would be
+exactly the "ignore part of the request" failure this runtime refuses
+elsewhere."""
 
 
 class UnsupportedPlanError(Exception):
@@ -164,22 +175,36 @@ class LocalRuntime:
         return RuntimeRef(backend=BACKEND, external_id=external_id)
 
     def _spawn(self, paths: WorkloadPaths, plan: ResolvedExecutionPlan, external_id: str) -> None:
-        """Start the launcher for a claim that has no process yet.
+        """Start a launcher for a claim that appears to have no process yet.
 
-        ``start_new_session`` puts the launcher in its own process group, which
-        is what lets a cancellation reach the worker as well as its supervisor,
-        and what stops a Ctrl-C in the controller's terminal reaching either.
+        Only *appears*: this check is an optimisation, not the guarantee. A
+        controller that died between ``Popen`` returning and any write it could
+        make would restart, see no owner, and spawn a second launcher -- so the
+        launcher claims the workload itself, and the loser of that claim exits
+        without spawning a worker. Correctness lives in the claim; this check
+        only keeps the common path from starting a process that would
+        immediately exit.
+
+        ``start_new_session`` puts the launcher in its own process group, so a
+        Ctrl-C in the controller's terminal does not reach the worker.
         """
         paths.directory.mkdir(parents=True, exist_ok=True)
         paths.plan.write_text(plan.model_dump_json(), encoding="utf-8")
 
         process = subprocess.Popen(
-            [sys.executable, "-m", "xaytune.runtimes.local.launcher", str(paths.directory)],
+            [
+                sys.executable,
+                "-m",
+                "xaytune.runtimes.local.launcher",
+                str(paths.directory),
+                str(self._root / "registry.db"),
+                external_id,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        self._registry.record_launcher_pid(external_id, process.pid)
+        self._registry.record_spawned_pid(external_id, process.pid)
 
     # -- asking what happened ---------------------------------------------
 
@@ -203,7 +228,7 @@ class LocalRuntime:
         workload = self._registry.workload(record.external_id)
         assert workload is not None
 
-        status = self._status(workload)
+        status = self._status(record.external_id)
         return OperationOutcome(
             operation_id=operation_id,
             disposition="completed" if status.state in _TERMINAL else "accepted",
@@ -213,45 +238,87 @@ class LocalRuntime:
 
     async def get_status(self, runtime_ref: RuntimeRef) -> RuntimeStatus:
         """Observe a workload, saying ``unknown`` when that is the true answer."""
-        workload = self._require(runtime_ref)
-        return self._status(workload)
+        self._require(runtime_ref)
+        return self._status(runtime_ref.external_id)
 
-    def _status(self, workload: LocalWorkloadRecord) -> RuntimeStatus:
+    def _status(self, external_id: str) -> RuntimeStatus:
         """Derive a state from what is on disk, never from a live handle.
 
         A recreated runtime has no ``Popen`` for a workload it did not start,
         so the launcher's markers are the only evidence there is -- and reading
         them is the same code path in both cases, which means the restart path
         is exercised by every test rather than by a special one.
+
+        **The launcher is not the workload.** It is the worker's parent and the
+        telemetry supervisor, and it can die while the worker, reparented, runs
+        on. Reading the supervisor's absence as the workload's end would report
+        a live training job as an unobserved ending, and ADR-014 §1a separates
+        the two precisely so a controller can lose telemetry without losing the
+        run. So the worker's own pid is what decides whether work is happening,
+        and the launcher's only decides whether anything is still watching it.
         """
+        workload = self._registry.workload(external_id)
+        assert workload is not None
         paths = WorkloadPaths(workload.directory)
-        cancelled = workload.cancel_requested_at is not None
 
         finished = read_json(paths.finished)
         if finished is not None:
-            return self._finished_status(finished, cancelled=cancelled)
+            return self._finished_status(
+                finished, cancelled=workload.cancel_requested_at is not None
+            )
 
         started = read_json(paths.started)
-        pid = workload.launcher_pid
-        alive = pid is not None and _alive(pid)
+        supervisor = workload.launcher_pid or workload.spawned_pid
+        supervised = supervisor is not None and _alive(supervisor)
 
-        if not alive:
-            # Nothing is running and nothing recorded an ending. Either the
-            # launcher died before it could write one, or it was never spawned
-            # -- and this runtime cannot tell those apart, so it says so
-            # rather than picking the convenient one.
+        if started is not None:
+            worker_pid = started.get("pid")
+            if isinstance(worker_pid, int) and _alive(worker_pid):
+                return RuntimeStatus(
+                    state="running",
+                    detail=None if supervised else "the telemetry supervisor is gone",
+                    observed_at=utc_now(),
+                )
+            if supervised:
+                # The worker has gone but its supervisor has not, so the
+                # outcome is moments away rather than lost. Reporting
+                # ``unknown`` here would send a controller to reconcile a
+                # workload that is about to report a clean exit -- the same
+                # confusion between "no answer yet" and "no answer possible"
+                # that separating these two pids exists to remove.
+                return RuntimeStatus(
+                    state="running",
+                    detail="the worker has exited; its outcome is being recorded",
+                    observed_at=utc_now(),
+                )
+
+            # Nobody is left to answer. A pid can also be reused, so "gone" is
+            # the safer reading of a pid that no longer answers than "still
+            # running" would be.
             return RuntimeStatus(
                 state="unknown",
                 detail=(
-                    "no exit was recorded and the launcher is gone: the workload "
-                    "ended in a way nothing observed, or never started"
+                    "the worker is no longer running and no exit was recorded: "
+                    "it ended in a way nothing observed"
+                ),
+                observed_at=utc_now(),
+            )
+
+        if supervised:
+            return RuntimeStatus(
+                state="starting",
+                detail=(
+                    "cancellation requested" if workload.cancel_requested_at is not None else None
                 ),
                 observed_at=utc_now(),
             )
 
         return RuntimeStatus(
-            state="running" if started is not None else "starting",
-            detail="cancellation requested" if cancelled else None,
+            state="unknown",
+            detail=(
+                "no worker was recorded and the launcher is gone: the workload "
+                "never started, or started in a way nothing observed"
+            ),
             observed_at=utc_now(),
         )
 
@@ -292,29 +359,36 @@ class LocalRuntime:
     async def cancel(self, runtime_ref: RuntimeRef, operation_id: OperationId) -> None:
         """Ask the workload to stop, once per operation.
 
-        Keyed by ``operation_id`` like every other effect: a retried
-        cancellation must not become a second signal, because the process that
-        replaced the first one on the same pid would receive it.
+        This runtime **does not signal anything**. It makes the cancellation
+        durable and the launcher delivers it, which fixes two problems that a
+        direct ``killpg`` from here cannot.
+
+        A signal is not re-assertable. A controller that crashed between
+        recording the claim and sending it would, on retry, find the claim
+        already recorded and conclude the work was done -- so the cancellation
+        would be lost permanently, which is the same "durable intent, no
+        effect" ambiguity one layer down that ADR-013 exists to remove. A
+        durable request is simply written again.
+
+        And a remembered pid is only a number. After a restart the operating
+        system may have given it to something else, and signalling it would
+        stop an unrelated process group. The launcher signals instead, because
+        it is the only participant that knows the pid is still its own child.
         """
         workload = self._require(runtime_ref)
         digest = _cancel_digest(workload)
 
-        first = self._registry.claim_cancellation(
+        self._registry.claim_cancellation(
             operation_id=operation_id, request_digest=digest, external_id=workload.external_id
         )
-        if not first:
-            return
 
-        pid = workload.launcher_pid
-        if pid is None:
-            return
-
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            # Already gone, or no longer ours. Both mean this cancellation has
-            # nothing left to do; neither means it failed.
-            return
+        # Unconditional, and after the claim. Every retry of this operation has
+        # to reach the effect, or a crash between the two lines above and this
+        # one would silence the cancellation for good.
+        self._registry.record_cancellation_request(workload.external_id)
+        paths = WorkloadPaths(workload.directory)
+        paths.directory.mkdir(parents=True, exist_ok=True)
+        write_atomic(paths.cancel, {"requested_at": utc_now().isoformat()})
 
     # -- watching ----------------------------------------------------------
 
@@ -337,19 +411,44 @@ class LocalRuntime:
         position = (cursor.generation, cursor.sequence) if cursor else (0, -1)
         delivered: set[tuple[int, int]] = set()
 
-        while True:
-            drained = True
+        def _pending() -> list[RuntimeEventEnvelope]:
+            fresh = []
             for envelope in _read_events(paths.events):
                 key = (envelope.stream_generation, envelope.sequence)
                 if key <= position or key in delivered:
                     continue
                 delivered.add(key)
-                drained = False
+                fresh.append(envelope)
+            return fresh
+
+        while True:
+            for envelope in _pending():
                 yield envelope
 
-            if drained and self._status(workload).state in _TERMINAL:
+            if self._stream_ended(workload.external_id):
+                # Nothing can append to this file any more, so one last pass
+                # cannot miss an event that a slower check would have caught.
+                for envelope in _pending():
+                    yield envelope
                 return
             await asyncio.sleep(_POLL_SECONDS)
+
+    def _stream_ended(self, external_id: str) -> bool:
+        """Whether more telemetry can still arrive for this workload.
+
+        A stream ends when the workload does -- or when the supervisor writing
+        it does, which is **not** the same thing and is why this is not simply
+        a terminal-state check. A worker outliving its launcher keeps running
+        and stops being observed, and ADR-014 calls that a gap to reconcile.
+        Waiting for more events that nobody is left to write would hang the
+        controller instead of sending it down that path.
+        """
+        workload = self._registry.workload(external_id)
+        assert workload is not None
+        if self._status(external_id).state not in _LIVE:
+            return True
+        supervisor = workload.launcher_pid or workload.spawned_pid
+        return supervisor is None or not _alive(supervisor)
 
     async def get_logs(self, runtime_ref: RuntimeRef) -> AsyncIterator[RuntimeLog]:
         """Stream worker output until the workload ends.
@@ -375,7 +474,7 @@ class LocalRuntime:
                     drained = False
                     yield RuntimeLog(stream=stream, line=line)  # type: ignore[arg-type]
 
-            if drained and self._status(workload).state in _TERMINAL:
+            if drained and self._status(workload.external_id).state not in _LIVE:
                 return
             await asyncio.sleep(_POLL_SECONDS)
 
@@ -402,6 +501,23 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
     training code rather than to a runtime that quietly dropped part of the
     request.
     """
+    if plan.runtime != BACKEND:
+        return (
+            f"this plan was resolved for {plan.runtime!r}, not {BACKEND!r}; a "
+            f"resolver's decisions are made against one runtime's capabilities "
+            f"and running them on another discards the resolution"
+        )
+
+    unsupported = sorted(set(plan.runtime_options) - _RUNTIME_OPTIONS)
+    if unsupported:
+        return (
+            f"this runtime does not implement the runtime options "
+            f"{', '.join(repr(option) for option in unsupported)}; it understands "
+            f"{', '.join(repr(option) for option in sorted(_RUNTIME_OPTIONS))}. "
+            f"They are part of the request, so honouring some and ignoring the "
+            f"rest would run something other than what was asked for"
+        )
+
     if plan.spec.secrets:
         names = ", ".join(secret.name for secret in plan.spec.secrets)
         return (

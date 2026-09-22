@@ -11,6 +11,13 @@ It is also the telemetry supervisor of ADR-014 §1a: the single writer that
 assigns ``sequence`` for this target. Nothing else appends to ``events.jsonl``,
 so the sequence is gapless by construction rather than by agreement.
 
+And it owns two decisions the controller cannot safely make from outside the
+process tree. It **claims the workload** before spawning anything, so that two
+launchers started either side of a crash cannot both produce a worker. And it
+**delivers cancellations**, because it is the only participant that knows the
+pid it is signalling is still its own child rather than a number the operating
+system has since handed to something else.
+
 **It reports what it observes and nothing more.** The events it emits are the
 ones in both workload vocabularies -- a worker started, something went wrong --
 because a process exiting zero is not evidence that training converged, and a
@@ -26,6 +33,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +46,11 @@ from xaytune.runtimes import (
     TrainingEventPayload,
 )
 from xaytune.runtimes.local.paths import WorkloadPaths, write_atomic
+from xaytune.runtimes.local.registry import LocalWorkloadRegistry
 
 __all__ = ["main", "run"]
+
+_CANCEL_POLL_SECONDS = 0.05
 
 
 def _argv(plan: ResolvedExecutionPlan) -> list[str]:
@@ -138,6 +149,14 @@ def _next_generation(events: Path) -> int:
     the old one, because its sequence restarts at zero and a controller holding
     a cursor would otherwise read the new events as duplicates of events it had
     already recorded (ADR-014 §1a).
+
+    **Provisional, and local to this backend.** ADR-014 §2 allocates the
+    generation from durable controller-side attempt state; deriving it from the
+    stream a replacement supervisor happens to find is a weaker rule, and two
+    supervisors that both read the file before either wrote to it would pick the
+    same number. It is enough while nothing relaunches a local workload
+    automatically, and it is replaced when PR-012a wires the authoritative
+    generation through from the attempt.
     """
     highest = -1
     try:
@@ -155,11 +174,46 @@ def _next_generation(events: Path) -> int:
     return highest + 1
 
 
-def run(directory: Path) -> int:
-    """Supervise the workload in *directory* and return its exit code."""
+def run(directory: Path, registry_path: Path, external_id: str) -> int:
+    """Supervise the workload in *directory* and return its exit code.
+
+    The first thing it does is try to own the workload, and the second is check
+    whether the workload has already been cancelled. Neither can be deferred
+    until after the worker is spawned: by then the duplicate exists, or the
+    cancellation has been ignored.
+    """
     paths = WorkloadPaths(directory)
     plan = ResolvedExecutionPlan.model_validate_json(paths.plan.read_text(encoding="utf-8"))
+
+    registry = LocalWorkloadRegistry(registry_path)
+    try:
+        owned = registry.claim_launcher_ownership(external_id, os.getpid())
+    finally:
+        registry.close()
+
+    if not owned:
+        # Another launcher owns this workload. Exit before spawning anything:
+        # the whole point of the claim is that only one worker exists.
+        return 0
+
     events = _EventWriter(paths, plan)
+
+    if paths.cancel.exists():
+        # Cancelled before there was anything to cancel. Recorded as an ending
+        # rather than left running, because a controller waiting on a workload
+        # that will never start has no way to find that out.
+        write_atomic(
+            paths.finished,
+            {
+                "exit_code": None,
+                "signal": None,
+                "cancelled": True,
+                "never_started": True,
+                "finished_at": utc_now().isoformat(),
+                "generation": events.generation,
+            },
+        )
+        return 0
 
     with paths.stdout.open("ab") as out, paths.stderr.open("ab") as err:
         try:
@@ -200,7 +254,9 @@ def run(directory: Path) -> int:
     )
     events.emit("WorkerReady", pid=child.pid)
 
-    code = child.wait()
+    cancelled = _wait_honouring_cancellation(child, paths)
+    code = child.returncode
+
     if code != 0:
         events.emit(
             "IncidentObserved",
@@ -213,11 +269,38 @@ def run(directory: Path) -> int:
         {
             "exit_code": code,
             "signal": -code if code < 0 else None,
+            "cancelled": cancelled,
             "finished_at": utc_now().isoformat(),
             "generation": events.generation,
         },
     )
     return code
+
+
+def _wait_honouring_cancellation(child: subprocess.Popen[bytes], paths: WorkloadPaths) -> bool:
+    """Wait for the worker, stopping it if a cancellation appears.
+
+    The launcher signals, and the controller does not, because only the
+    launcher knows that the pid it is about to signal is still its own child.
+    A controller signalling a pid it remembered from before a restart is
+    signalling a number, and the operating system may have given that number to
+    something else.
+
+    Signalled **once**. A worker that treats a second SIGTERM as "stop being
+    graceful" -- the common convention -- would be denied the shutdown the
+    first one asked for, so a retried cancellation must not become a second
+    signal.
+    """
+    signalled = False
+    while child.poll() is None:
+        if not signalled and paths.cancel.exists():
+            signalled = True
+            try:
+                child.terminate()
+            except ProcessLookupError:  # pragma: no cover - it finished first
+                pass
+        time.sleep(_CANCEL_POLL_SECONDS)
+    return signalled
 
 
 def _survive_signals() -> None:
@@ -243,10 +326,13 @@ def _survive_signals() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
-    if len(arguments) != 1:
-        print("usage: python -m xaytune.runtimes.local.launcher <workload-directory>")
+    if len(arguments) != 3:
+        print(
+            "usage: python -m xaytune.runtimes.local.launcher "
+            "<workload-directory> <registry-path> <external-id>"
+        )
         return 2
-    return run(Path(arguments[0]))
+    return run(Path(arguments[0]), Path(arguments[1]), arguments[2])
 
 
 if __name__ == "__main__":  # pragma: no cover - process entrypoint

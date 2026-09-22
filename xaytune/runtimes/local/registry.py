@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS workloads (
     target_kind         TEXT NOT NULL,
     target_id           TEXT NOT NULL,
     directory           TEXT NOT NULL,
+    spawned_pid         INTEGER,
     launcher_pid        INTEGER,
     cancel_requested_at TEXT,
     created_at          TEXT NOT NULL
@@ -64,6 +65,14 @@ class LocalWorkloadRecord:
     target_kind: OperationTargetKind
     target_id: str
     directory: Path
+    spawned_pid: int | None
+    """The pid the runtime saw ``Popen`` return, recorded best-effort.
+
+    A hint for reporting only, never for ownership. Ownership is
+    ``launcher_pid``, which only a launcher may set, and which is what keeps
+    two of them from both producing a worker.
+    """
+
     launcher_pid: int | None
     cancel_requested_at: str | None
 
@@ -180,10 +189,13 @@ class LocalWorkloadRegistry:
     ) -> bool:
         """Claim a cancellation, returning whether this call is the first.
 
-        ``False`` means the same operation asked before, so the caller must not
-        signal again. A cancellation is an external effect like any other and
-        two of them are two effects, even though the second usually lands on a
-        process that has already gone (ADR-013 §5).
+        The return value is for the record, **not** a licence to skip the
+        effect. A caller that treated ``False`` as "already done" would lose
+        every cancellation interrupted between this commit and the request
+        reaching the workload: the claim would be durable, the cancellation
+        would never have happened, and the retry would decline to try again.
+        Recording the claim and making the request durable are two steps, and
+        the second one runs every time.
         """
         with write_transaction(self._connection):
             existing = self.operation(operation_id)
@@ -191,25 +203,64 @@ class LocalWorkloadRegistry:
                 _require_same_request(existing, "cancel", request_digest)
                 return False
 
-            now = utc_now().isoformat()
             self._connection.execute(
                 "INSERT INTO operations (operation_id, operation_type, "
                 "request_digest, external_id, recorded_at) VALUES (?, 'cancel', ?, ?, ?)",
-                (str(operation_id), request_digest, external_id, now),
-            )
-            self._connection.execute(
-                "UPDATE workloads SET cancel_requested_at = COALESCE(cancel_requested_at, ?) "
-                "WHERE external_id = ?",
-                (now, external_id),
+                (str(operation_id), request_digest, external_id, utc_now().isoformat()),
             )
         return True
 
-    def record_launcher_pid(self, external_id: str, pid: int) -> None:
-        """Note which process was spawned, once it has been."""
+    def claim_launcher_ownership(self, external_id: str, pid: int) -> bool:
+        """Take ownership of a workload, returning whether this caller got it.
+
+        A compare-and-set, claimed by the launcher itself rather than recorded
+        by whoever spawned it. Between ``Popen`` returning and any write the
+        spawner could make there is a window, and a controller that died inside
+        it would restart, see no owner, and spawn a second launcher for the
+        same operation -- two workers for one ``operation_id``, which is the
+        duplicate external effect ADR-013 exists to prevent.
+
+        Moving the write to the launcher closes it. Two launchers may briefly
+        exist; only one can win the CAS, and the loser exits before spawning
+        anything.
+
+        A dead owner is **not** displaced. Its absence is ambiguous -- it may
+        have spawned a worker before it died -- and stealing the workload on
+        that basis is how the duplicate comes back.
+        """
+        with write_transaction(self._connection):
+            cursor = self._connection.execute(
+                "UPDATE workloads SET launcher_pid = ? "
+                "WHERE external_id = ? AND launcher_pid IS NULL",
+                (pid, external_id),
+            )
+            return cursor.rowcount == 1
+
+    def record_spawned_pid(self, external_id: str, pid: int) -> None:
+        """Note the process the runtime just started, for reporting only.
+
+        Deliberately a different column from ``launcher_pid``. Writing the
+        ownership column here would make the launcher's claim fail against a
+        pid the runtime had already filled in, and the launcher would exit
+        without ever starting the worker.
+
+        Losing this write to a crash costs a little precision and no
+        correctness: the workload reports ``unknown`` until a launcher claims
+        it, which is what an unobserved spawn actually is.
+        """
         with write_transaction(self._connection):
             self._connection.execute(
-                "UPDATE workloads SET launcher_pid = ? WHERE external_id = ?",
+                "UPDATE workloads SET spawned_pid = ? WHERE external_id = ?",
                 (pid, external_id),
+            )
+
+    def record_cancellation_request(self, external_id: str) -> None:
+        """Note when a cancellation was first asked for."""
+        with write_transaction(self._connection):
+            self._connection.execute(
+                "UPDATE workloads SET cancel_requested_at = COALESCE(cancel_requested_at, ?) "
+                "WHERE external_id = ?",
+                (utc_now().isoformat(), external_id),
             )
 
 
@@ -244,6 +295,7 @@ def _workload(row: sqlite3.Row) -> LocalWorkloadRecord:
         target_kind=row["target_kind"],
         target_id=row["target_id"],
         directory=Path(row["directory"]),
+        spawned_pid=row["spawned_pid"],
         launcher_pid=row["launcher_pid"],
         cancel_requested_at=row["cancel_requested_at"],
     )

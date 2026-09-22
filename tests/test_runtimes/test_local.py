@@ -13,6 +13,7 @@ import ast
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -31,10 +32,13 @@ from xaytune.core.execution import (
     TrainingExecutionSpec,
 )
 from xaytune.core.ids import OperationId
-from xaytune.runtimes import RuntimeBackend, RuntimeStatus
+from xaytune.core.refs import RuntimeRef
+from xaytune.core.sqlite import write_transaction
+from xaytune.runtimes import OperationOutcome, RuntimeBackend, RuntimeStatus
 from xaytune.runtimes.local import BACKEND, LocalRuntime, UnsupportedPlanError
 from xaytune.runtimes.local.launcher import run as run_launcher
-from xaytune.runtimes.local.paths import WorkloadPaths
+from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
+from xaytune.runtimes.local.registry import LocalWorkloadRecord
 
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "unknown"})
 _SETTLE_SECONDS = 20.0
@@ -71,6 +75,25 @@ async def _settle(runtime: LocalRuntime, ref: object) -> RuntimeStatus:
         await asyncio.sleep(0.02)
         status = await runtime.get_status(ref)  # type: ignore[arg-type]
     return status
+
+
+def _process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _release_ownership(runtime: LocalRuntime, external_id: str) -> None:
+    """Clear the launcher claim, as a deliberate replacement would."""
+    with write_transaction(runtime._registry._connection) as connection:
+        connection.execute(
+            "UPDATE workloads SET launcher_pid = NULL, spawned_pid = NULL WHERE external_id = ?",
+            (external_id,),
+        )
 
 
 async def _await_state(runtime: LocalRuntime, ref: object, state: str) -> None:
@@ -245,6 +268,77 @@ def test_a_plan_it_cannot_honour_is_refused_and_recorded(
     assert outcome.disposition == "rejected"
     assert outcome.runtime_ref is None, "nothing was started, so there is nothing to name"
     assert outcome.may_reissue is True
+
+
+@pytest.mark.parametrize(
+    ("label", "update"),
+    [
+        ("another runtime", {"runtime": "ray"}),
+        ("an unimplemented launcher", {"runtime_options": {"launcher": "torchrun"}}),
+        ("an unknown option", {"runtime_options": {"gpu_affinity": "0,1"}}),
+    ],
+)
+def test_a_plan_asking_for_something_else_is_refused(
+    runtime: LocalRuntime, label: str, update: dict[str, object]
+) -> None:
+    """Silently doing something different is the failure mode being closed.
+
+    A plan resolved for another runtime carries decisions made against that
+    runtime's capabilities, and an unknown runtime option is a caller asking
+    for behaviour. Running a plain subprocess for either would be the
+    "honour some of the request and ignore the rest" failure this backend
+    refuses everywhere else.
+    """
+    operation_id = OperationId.generate()
+    plan = _plan(*_python("pass")).model_copy(update=update)
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome is not None
+    assert outcome.disposition == "rejected"
+    assert outcome.may_reissue is True
+
+
+def test_the_runtime_option_it_does_implement_is_accepted(
+    runtime: LocalRuntime, tmp_path: Path
+) -> None:
+    """The closed set is a boundary, not a blanket refusal."""
+    workdir = tmp_path / "elsewhere"
+    workdir.mkdir()
+    source = "import os, sys; open(sys.argv[1], 'w').write(os.getcwd())"
+    marker = tmp_path / "cwd.txt"
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(
+            OperationId.generate(),
+            _plan(*_python(source, str(marker))).model_copy(
+                update={"runtime_options": {"working_directory": str(workdir)}}
+            ),
+        )
+        return await _settle(runtime, ref)
+
+    status = asyncio.run(scenario())
+
+    assert status.state == "succeeded", status.detail
+    assert Path(marker.read_text()).resolve() == workdir.resolve()
+
+
+def test_one_idempotency_conflict_for_one_condition() -> None:
+    """Both layers raise the same type, so a caller catches one thing.
+
+    The control plane's journal and this runtime's registry both implement
+    get-or-create, and a controller should not have to learn which layer
+    refused it.
+    """
+    from xaytune.core.errors import IdempotencyConflictError as CoreError
+    from xaytune.storage.journal import IdempotencyConflictError as StoragePath
+
+    assert CoreError is StoragePath
 
 
 # ---- process outcomes ----------------------------------------------------
@@ -466,14 +560,119 @@ def test_a_recreated_runtime_resubmitting_starts_nothing_new(
     assert marker.read_text() == "x"
 
 
-def test_a_workload_whose_launcher_died_is_unknown_not_failed(
+def test_a_worker_outliving_its_launcher_is_still_running(
     runtime: LocalRuntime,
 ) -> None:
+    """The supervisor is not the workload (ADR-014 §1a).
+
+    Killing the launcher ends the telemetry stream and reparents the worker;
+    it does not stop the work. Reading the supervisor's absence as the
+    workload's end would retire a training job that is still running, and its
+    artifacts with it.
+    """
+
+    async def scenario() -> tuple[RuntimeStatus, bool]:
+        ref = await runtime.submit_or_get(
+            OperationId.generate(), _plan(*_python("import time; time.sleep(120)"))
+        )
+        await _await_state(runtime, ref, "running")
+
+        workload = runtime._registry.workload(ref.external_id)
+        assert workload is not None and workload.launcher_pid is not None
+        worker_pid = (read_json(WorkloadPaths(workload.directory).started) or {})["pid"]
+
+        os.kill(workload.launcher_pid, signal.SIGKILL)
+        await asyncio.sleep(0.3)
+
+        status = await runtime.get_status(ref)
+        os.kill(worker_pid, signal.SIGKILL)
+        return status, _process_exists(workload.launcher_pid)
+
+    status, launcher_alive = asyncio.run(scenario())
+
+    assert launcher_alive is False, "the supervisor really is gone"
+    assert status.state == "running"
+    assert "supervisor" in (status.detail or "")
+
+
+def test_watching_ends_when_the_supervisor_is_gone(runtime: LocalRuntime) -> None:
+    """Otherwise the controller waits forever for a writer that no longer exists.
+
+    ADR-014 treats a lost supervisor as a gap to reconcile, which the
+    controller can only do once ``watch()`` hands control back.
+    """
+
+    async def scenario() -> int:
+        ref = await runtime.submit_or_get(
+            OperationId.generate(), _plan(*_python("import time; time.sleep(120)"))
+        )
+        await _await_state(runtime, ref, "running")
+
+        workload = runtime._registry.workload(ref.external_id)
+        assert workload is not None and workload.launcher_pid is not None
+        worker_pid = (read_json(WorkloadPaths(workload.directory).started) or {})["pid"]
+        os.kill(workload.launcher_pid, signal.SIGKILL)
+        await asyncio.sleep(0.3)
+
+        async def drain() -> list[object]:
+            return [event async for event in runtime.watch(ref)]
+
+        try:
+            return len(await asyncio.wait_for(drain(), timeout=10))
+        finally:
+            os.kill(worker_pid, signal.SIGKILL)
+
+    assert asyncio.run(scenario()) >= 1
+
+
+def test_a_worker_awaiting_its_epitaph_is_not_unknown(
+    runtime: LocalRuntime, tmp_path: Path
+) -> None:
+    """ "No answer yet" is not "no answer possible".
+
+    Between the worker exiting and the launcher recording why, the worker pid
+    is already dead. Calling that ``unknown`` would send a controller to
+    reconcile a workload that is moments from reporting a clean exit -- and
+    since the supervisor is still alive, an answer is coming.
+
+    Built rather than raced: the window is milliseconds wide, and a test that
+    tried to land inside it would pass by luck.
+    """
+    supervisor = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(OperationId.generate(), _plan(*_python("pass")))
+        await _settle(runtime, ref)
+
+        workload = runtime._registry.workload(ref.external_id)
+        assert workload is not None
+        paths = WorkloadPaths(workload.directory)
+        paths.finished.unlink()
+        write_atomic(paths.started, {"pid": dead.pid, "launcher_pid": supervisor.pid})
+        with write_transaction(runtime._registry._connection) as connection:
+            connection.execute(
+                "UPDATE workloads SET launcher_pid = ? WHERE external_id = ?",
+                (supervisor.pid, ref.external_id),
+            )
+        return await runtime.get_status(ref)
+
+    try:
+        status = asyncio.run(scenario())
+    finally:
+        supervisor.kill()
+        supervisor.wait()
+
+    assert status.state == "running"
+    assert "being recorded" in (status.detail or "")
+
+
+def test_a_workload_with_no_observed_ending_is_unknown(runtime: LocalRuntime) -> None:
     """ "I cannot tell" is an answer, and it is not "it failed".
 
-    The controller's response to an unobserved ending is to reconcile. Reading
-    it as a failure would retire a workload that may still have produced
-    artifacts, and reading it as success would be worse.
+    Reading it as a failure would retire a workload that may have produced
+    artifacts; reading it as success would be worse.
     """
 
     async def scenario() -> RuntimeStatus:
@@ -491,7 +690,176 @@ def test_a_workload_whose_launcher_died_is_unknown_not_failed(
     status = asyncio.run(scenario())
 
     assert status.state == "unknown"
-    assert "never started" in (status.detail or "")
+    assert status.exit_code is None
+
+
+def test_an_unknown_workload_is_not_reported_as_running() -> None:
+    """``is_running`` must not manufacture a certainty the runtime refused.
+
+    A backend that accepted an operation and then lost track of it reports
+    ``accepted`` with a status of ``unknown``. Collapsing that to ``True``
+    contradicts the whole reason the ``unknown`` state exists.
+    """
+    lost = OperationOutcome(
+        operation_id=OperationId.generate(),
+        disposition="accepted",
+        runtime_ref=RuntimeRef(backend=BACKEND, external_id="op_x"),
+        status=RuntimeStatus(state="unknown"),
+    )
+    running = lost.model_copy(update={"status": RuntimeStatus(state="running")})
+    done = lost.model_copy(update={"status": RuntimeStatus(state="succeeded")})
+
+    assert lost.is_running is None
+    assert running.is_running is True
+    assert done.is_running is False
+
+
+# ---- the crash windows ---------------------------------------------------
+
+
+def test_two_launchers_racing_produce_exactly_one_worker(
+    runtime: LocalRuntime, tmp_path: Path
+) -> None:
+    """The window between ``Popen`` returning and anything recording it.
+
+    A controller that dies in there restarts, sees no owner, and starts a
+    second launcher -- so this is the state that window leaves behind, and both
+    launchers are started at once to make them race for real. Ownership is
+    claimed by the launcher, so exactly one can proceed.
+    """
+    marker = tmp_path / "ran.txt"
+    plan = _plan(*_python("import sys; open(sys.argv[1], 'a').write('x')", str(marker)))
+    operation_id = OperationId.generate()
+    directory = runtime._workloads / str(operation_id)
+
+    runtime._registry.claim_submission(
+        operation_id=operation_id,
+        request_digest=plan.request_digest("submit"),
+        external_id=str(operation_id),
+        target_kind=plan.target.kind,
+        target_id=plan.target.id,
+        directory=directory,
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    WorkloadPaths(directory).plan.write_text(plan.model_dump_json(), encoding="utf-8")
+
+    command = [
+        sys.executable,
+        "-m",
+        "xaytune.runtimes.local.launcher",
+        str(directory),
+        str(runtime._root / "registry.db"),
+        str(operation_id),
+    ]
+    racers = [subprocess.Popen(command) for _ in range(2)]
+    for racer in racers:
+        racer.wait(timeout=_SETTLE_SECONDS)
+
+    assert marker.read_text() == "x", "two launchers, one worker"
+
+
+def test_a_cancellation_interrupted_before_delivery_is_not_lost(
+    runtime: LocalRuntime,
+) -> None:
+    """Durable intent that never became an effect must stay retryable.
+
+    A crash between recording the claim and the request reaching the workload
+    used to be permanent: the retry found the claim already recorded and
+    declined to act. That is the same "intent without effect" ambiguity one
+    layer down that ADR-013 exists to remove.
+    """
+    cancellation = OperationId.generate()
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(
+            OperationId.generate(), _plan(*_python("import time; time.sleep(120)"))
+        )
+        await _await_state(runtime, ref, "running")
+
+        # The claim commits, and then the controller dies before the request
+        # reaches the workload.
+        runtime._registry.claim_cancellation(
+            operation_id=cancellation,
+            request_digest=f"cancel:{ref.external_id}",
+            external_id=ref.external_id,
+        )
+        assert not WorkloadPaths(
+            (runtime._registry.workload(ref.external_id) or _missing()).directory
+        ).cancel.exists()
+
+        await runtime.cancel(ref, cancellation)
+        return await _settle(runtime, ref)
+
+    assert asyncio.run(scenario()).state == "cancelled"
+
+
+def _missing() -> LocalWorkloadRecord:
+    raise AssertionError("workload disappeared")
+
+
+def test_cancelling_never_signals_a_remembered_pid(runtime: LocalRuntime, tmp_path: Path) -> None:
+    """A pid from before a restart is a number, not a process.
+
+    The operating system may have given it to something unrelated, so the
+    runtime writes a request the launcher acts on rather than signalling
+    anything itself. Proved with a bystander: its pid is planted in the
+    registry, and it must survive the cancellation.
+    """
+    bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+    async def scenario() -> None:
+        ref = await runtime.submit_or_get(OperationId.generate(), _plan(*_python("pass")))
+        await _settle(runtime, ref)
+        with write_transaction(runtime._registry._connection) as connection:
+            connection.execute(
+                "UPDATE workloads SET launcher_pid = ?, spawned_pid = ? WHERE external_id = ?",
+                (bystander.pid, bystander.pid, ref.external_id),
+            )
+        await runtime.cancel(ref, OperationId.generate())
+
+    try:
+        asyncio.run(scenario())
+        assert bystander.poll() is None, "the cancellation reached an unrelated process"
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+def test_a_cancellation_arriving_before_the_worker_is_honoured(
+    runtime: LocalRuntime, tmp_path: Path
+) -> None:
+    """A request made during startup must not be outrun by the spawn.
+
+    The launcher checks before it spawns, so a workload cancelled in that
+    window never starts rather than starting and having to be stopped.
+    """
+    marker = tmp_path / "ran.txt"
+    plan = _plan(*_python("import sys; open(sys.argv[1], 'a').write('x')", str(marker)))
+    operation_id = OperationId.generate()
+    directory = runtime._workloads / str(operation_id)
+
+    runtime._registry.claim_submission(
+        operation_id=operation_id,
+        request_digest=plan.request_digest("submit"),
+        external_id=str(operation_id),
+        target_kind=plan.target.kind,
+        target_id=plan.target.id,
+        directory=directory,
+    )
+    paths = WorkloadPaths(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    paths.plan.write_text(plan.model_dump_json(), encoding="utf-8")
+
+    async def scenario() -> RuntimeStatus:
+        ref = RuntimeRef(backend=BACKEND, external_id=str(operation_id))
+        await runtime.cancel(ref, OperationId.generate())
+        run_launcher(directory, runtime._root / "registry.db", str(operation_id))
+        return await runtime.get_status(ref)
+
+    status = asyncio.run(scenario())
+
+    assert status.state == "cancelled"
+    assert not marker.exists(), "the worker was never started"
 
 
 # ---- telemetry -----------------------------------------------------------
@@ -568,7 +936,12 @@ def test_a_relaunch_starts_a_new_generation(runtime: LocalRuntime) -> None:
 
         workload = runtime._registry.workload(ref.external_id)
         assert workload is not None
-        run_launcher(workload.directory)
+
+        # A relaunch is only possible once ownership is released: the claim
+        # that stops two launchers racing also stops one being replaced. When
+        # PR-012a defines who may release it, this is the step it performs.
+        _release_ownership(runtime, ref.external_id)
+        run_launcher(workload.directory, runtime._root / "registry.db", ref.external_id)
 
         everything = [event async for event in runtime.watch(ref)]
         after = [

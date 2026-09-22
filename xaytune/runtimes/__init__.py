@@ -76,6 +76,10 @@ class RuntimeStatus(FrozenDomainModel):
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
+_LIVE_STATES: frozenset[RuntimeState] = frozenset({"pending", "queued", "starting", "running"})
+"""States a workload can still leave. ``unknown`` is deliberately absent:
+it is neither an ending nor a reason to keep waiting."""
+
 OperationDisposition = Literal["accepted", "completed", "rejected"]
 """What became of an operation the runtime *did* receive.
 
@@ -136,8 +140,25 @@ class OperationOutcome(FrozenDomainModel):
         return self
 
     @property
-    def is_running(self) -> bool:
-        """Whether the workload is still going, so far as the runtime knows."""
+    def is_running(self) -> bool | None:
+        """Whether the workload is still going, or ``None`` if nobody can say.
+
+        Three-valued because :data:`RuntimeState` has an ``unknown`` and it
+        would otherwise be thrown away here. A backend that accepted an
+        operation and later lost track of it reports ``accepted`` with a status
+        of ``unknown``; reading that as "running" would hand the controller a
+        certainty the runtime explicitly refused to give, and reading it as
+        "not running" would retire a workload that may still be producing
+        artifacts.
+
+        An observation outranks the disposition when there is one, because the
+        disposition records what the runtime was asked and the status records
+        what it can currently see.
+        """
+        if self.status is not None:
+            if self.status.state == "unknown":
+                return None
+            return self.status.state in _LIVE_STATES
         return self.disposition == "accepted"
 
     @property

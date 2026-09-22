@@ -9,13 +9,21 @@ are written down.
 
 ```text
 <root>/registry.db              operations and workloads (durable identity)
-<root>/workloads/<id>/plan.json     what was submitted
-                     started.json   written by the launcher once the worker is up
-                     finished.json  written by the launcher once it has exited
-                     events.jsonl   telemetry, one envelope per line
+<root>/workloads/<id>/plan.json      what was submitted
+                     cancel.request  a cancellation the launcher must honour
+                     started.json    written by the launcher once the worker is up
+                     finished.json   written by the launcher once it has exited
+                     events.jsonl    telemetry, one envelope per line
                      stdout.log
                      stderr.log
 ```
+
+``cancel.request`` is a request rather than a signal for two reasons. A
+controller that signalled a pid directly would be signalling a *remembered*
+pid, and after a restart the operating system may have given that number to
+something else entirely. And an effect that is a durable file rather than a
+transient signal can be re-asserted after a crash, which a delivered SIGTERM
+cannot.
 
 ``started.json`` and ``finished.json`` are written with :func:`write_atomic`
 and never appended to, so a reader either sees a whole record or no record.
@@ -32,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "CANCEL",
     "EVENTS",
     "FINISHED",
     "PLAN",
@@ -47,6 +56,7 @@ PLAN = "plan.json"
 STARTED = "started.json"
 FINISHED = "finished.json"
 EVENTS = "events.jsonl"
+CANCEL = "cancel.request"
 STDOUT = "stdout.log"
 STDERR = "stderr.log"
 
@@ -74,6 +84,10 @@ class WorkloadPaths:
     @property
     def events(self) -> Path:
         return self.directory / EVENTS
+
+    @property
+    def cancel(self) -> Path:
+        return self.directory / CANCEL
 
     @property
     def stdout(self) -> Path:

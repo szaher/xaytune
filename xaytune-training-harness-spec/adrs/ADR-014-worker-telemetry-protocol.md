@@ -356,9 +356,12 @@ like from the stream's point of view.
 
 ### 6. Heartbeat and liveness
 
-`Heartbeat` carries the worker's current `sequence` and the wall-clock interval
-it expects between beats. Absence of heartbeats past that interval makes the
-attempt **suspect**, not failed.
+`Heartbeat` carries the wall-clock interval it expects between beats. Its
+stream position is the enclosing `RuntimeEventEnvelope.sequence`, and the
+payload does not repeat it: there is one canonical sequence per event, assigned
+once by the telemetry supervisor (§1a), and a second copy could disagree with
+it. Absence of heartbeats past the declared interval makes the attempt
+**suspect**, not failed.
 
 The controller must confirm through `get_status()` before acting, because the
 common cause of missing heartbeats is a slow or partitioned network, and the

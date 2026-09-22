@@ -97,12 +97,19 @@ telemetry failure would record an execution retry that never happened
 
 Supports:
 
-- subprocess
-- single process
-- torchrun
-- local multi-GPU
+- local subprocess execution
+- one worker
 - local controller development
 - deterministic integration tests
+- durable operation lookup across a controller restart
+- replayable local telemetry and logs
+
+It does **not** implement `torchrun` or local multi-worker execution, and
+refuses a plan asking for either. Choosing a world size, a rendezvous endpoint
+and a restart policy means reading the training configuration, and a runtime
+that read the training configuration would be a second place scientific intent
+lived. A distributed local launcher is therefore a separate backend with its
+own capability document, not a flag on this one.
 
 ### RayTrainRuntime
 

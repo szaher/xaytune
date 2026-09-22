@@ -2,51 +2,69 @@
   "api_version": "xaytune.execution/v1alpha1",
   "compiler": {
     "name": "trl",
-    "plugin_version": "example"
+    "version": "0.1.0"
   },
+  "candidate_fingerprint": "sha256:replace-me",
   "entrypoint": {
     "kind": "python-module",
-    "value": "xaytune_runtime.trl_worker"
+    "module": "xaytune_runtime.trl_worker",
+    "function": null
   },
   "arguments": [],
   "config": {
     "trainer": "sft"
   },
   "environment": {},
+  "secrets": [],
   "dependencies": {
-    "extras": [
+    "requirements": [
       "trl"
-    ]
+    ],
+    "lock_digest": null,
+    "python_version": null
   },
   "container": null,
   "inputs": [
     {
-      "kind": "dataset",
-      "uri": "s3://datasets/support-v4"
+      "name": "train",
+      "uri": "s3://datasets/support-v4",
+      "digest": null,
+      "optional": false
     }
   ],
   "outputs": [
     {
-      "kind": "model",
-      "name": "final-model"
+      "name": "final-model",
+      "uri": "s3://artifacts/run-1/final-model",
+      "kind": "model"
     }
   ],
   "resources": {
     "gpus": 8,
     "gpu_type": null,
-    "cpu": null,
-    "memory": null
+    "workers": 8,
+    "cpus": null,
+    "memory_bytes": null,
+    "accelerator_memory_bytes": null,
+    "max_runtime_seconds": null,
+    "extensions": {}
   },
   "checkpoint": {
-    "required": true,
-    "every_steps": 200
+    "store_uri": "s3://checkpoints/run-1",
+    "format": null,
+    "every_optimizer_steps": 200,
+    "keep_last": 3,
+    "boundary": "optimizer-step",
+    "require_atomic_commit": true
   },
   "telemetry": {
-    "event_protocol": "xaytune.telemetry/v1alpha2"
+    "protocol_version": "xaytune.telemetry/v1alpha2",
+    "heartbeat_seconds": 30,
+    "endpoint": null
   },
   "required_capabilities": {
     "precision": "bf16",
     "distributed_strategy": "fsdp"
   },
-  "candidate_fingerprint": "sha256:replace-me"
+  "metadata": {}
 }

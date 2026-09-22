@@ -50,7 +50,7 @@
 <path d="M 600 1092 L 600 1130" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#architecture-overview-arrow)"/>
 <rect x="48" y="1134" width="1104" height="188" rx="16" fill="#fff6ed" stroke="#ecd8c5" stroke-width="1.5"/>
 <text x="76" y="1174" font-size="25" fill="#ad591f" font-weight="700" text-anchor="start" class="">Platform / infrastructure</text>
-<text x="76" y="1210" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Local: subprocess / torchrun  ·  Ray: Ray Train / Jobs</text>
+<text x="76" y="1210" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Local: one subprocess  ·  Ray: Ray Train / Jobs</text>
 <text x="76" y="1247" font-size="21" fill="#172b40" font-weight="400" text-anchor="start" class="">Training Hub path: Kubeflow Trainer / KubeRay → Kueue</text>
 <text x="76" y="1287" font-size="18" fill="#52677b" font-weight="400" text-anchor="start" class="">Integrations land incrementally; this diagram describes the target architecture.</text>
 <text x="48" y="1366" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>

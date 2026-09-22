@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
+from pathlib import Path
 from typing import Any, get_args
 
 import pytest
@@ -478,6 +480,30 @@ def test_both_entrypoint_kinds_round_trip_through_the_spec() -> None:
 
         assert restored.entrypoint == entrypoint
         assert type(restored.entrypoint) is type(entrypoint)
+
+
+# ---- the published example is part of the contract ----------------------
+
+
+def test_the_published_example_validates_as_a_spec() -> None:
+    """The schema example is a claim about the wire format, so it has to hold.
+
+    It had drifted a long way -- an older ``plugin_version``, ``value`` for a
+    module entrypoint, ``event_protocol`` for the telemetry version, ``cpu``
+    and ``memory`` for the resource fields -- while still being the thing a
+    plugin author reads first. A documented example nobody executes is a
+    specification of something that does not exist.
+    """
+    example = (
+        Path(__file__).resolve().parents[2]
+        / "xaytune-training-harness-spec"
+        / "schemas"
+        / "training-execution-spec.example.json"
+    )
+
+    spec = TrainingExecutionSpec.model_validate(json.loads(example.read_text(encoding="utf-8")))
+
+    assert spec.telemetry.protocol_version == "xaytune.telemetry/v1alpha2"
 
 
 # ---- the telemetry envelope implements ADR-014 --------------------------

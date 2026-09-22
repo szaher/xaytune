@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 from xaytune.core.domain.candidate import (
     CandidateSpec,
@@ -47,11 +48,92 @@ from xaytune.runtimes.local import LocalRuntime
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "unknown"})
 
 
-def _sft_candidate() -> CandidateSpec:
-    """The smallest candidate that is still a real SFT hypothesis."""
+def _tiny_model(directory: Path) -> Path:
+    """A real Hugging Face artifact, built here rather than downloaded.
+
+    Roughly four thousand parameters, saved with ``save_pretrained``. It is not
+    a stand-in: ``load_model`` resolves it through the ordinary
+    ``AutoModelForCausalLM.from_pretrained`` path a production model takes, so
+    what this proves is that a serialized ``CandidateSpec`` can name an
+    artifact a separate process resolves normally -- not that a test-only
+    branch of the loader works.
+    """
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+    from transformers import GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+
+    vocab = {
+        "<pad>": 0,
+        "<eos>": 1,
+        "<unk>": 2,
+        "### Instruction:": 3,
+        "### Response:": 4,
+        "hello": 5,
+        "world": 6,
+        "train": 7,
+        ".": 8,
+    }
+    backend = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend, pad_token="<pad>", eos_token="<eos>", unk_token="<unk>"
+    )
+    model = GPT2LMHeadModel(
+        GPT2Config(
+            vocab_size=len(vocab),
+            n_layer=1,
+            n_head=1,
+            n_embd=16,
+            n_positions=32,
+            bos_token_id=1,
+            eos_token_id=1,
+            pad_token_id=0,
+        )
+    )
+
+    directory.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(directory)
+    tokenizer.save_pretrained(directory)
+    return directory
+
+
+def _tiny_dataset(path: Path) -> Path:
+    """Four alpaca samples, on disk, in the format the local loader reads."""
+    samples = [
+        {"instruction": "train", "input": "", "output": "hello world ."},
+        {"instruction": "train", "input": "hello", "output": "world ."},
+        {"instruction": "train", "input": "world", "output": "hello ."},
+        {"instruction": "train", "input": "", "output": "train ."},
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(s) for s in samples) + "\n", encoding="utf-8")
+    return path
+
+
+def _assert_fixture_is_a_real_artifact(model_dir: Path) -> None:
+    """Fail here rather than inside the worker if the fixture is not valid.
+
+    Without this, "NativeWorker failed" and "the test fixture was never a
+    loadable model" look identical from the outside, and the second one sends
+    you reading worker code for a bug that is in the test.
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    AutoModelForCausalLM.from_pretrained(model_dir, local_files_only=True)
+    AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+
+
+def _sft_candidate(model_dir: Path, dataset: Path) -> CandidateSpec:
+    """The smallest candidate that is still a real SFT hypothesis.
+
+    Absolute paths: the worker has its own working directory, and a relative
+    one would quietly prove that cwd was inherited rather than that the plan
+    carried everything the worker needed (ADR-016).
+    """
     return CandidateSpec(
-        model=ModelSpec(model=ModelRef(uri="xaytune-test-tiny")),
-        data=DataSpec(dataset=DatasetRef(uri="xaytune-test-tiny-dataset")),
+        model=ModelSpec(model=ModelRef(uri=str(model_dir.resolve()))),
+        data=DataSpec(dataset=DatasetRef(uri=str(dataset.resolve()))),
         training=TrainingSpec(
             kind=TrainingKind.SFT,
             optimization=OptimizationSpec(learning_rate=1e-3, max_steps=2),
@@ -73,7 +155,11 @@ def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:
     """The milestone: a hypothesis becomes a finished run without a fake anywhere."""
     from xaytune.compilation.native import NativeCompiler
 
-    candidate = _sft_candidate()
+    model_dir = _tiny_model(tmp_path / "tiny-model")
+    dataset = _tiny_dataset(tmp_path / "data" / "train.jsonl")
+    _assert_fixture_is_a_real_artifact(model_dir)
+
+    candidate = _sft_candidate(model_dir, dataset)
     compiler = NativeCompiler()
 
     assert compiler.supports(candidate), "the first compiler must support plain SFT"
@@ -88,8 +174,19 @@ def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:
     assert spec.candidate_fingerprint == candidate.candidate_fingerprint()
     assert "native" in spec.entrypoint.module
 
+    # Hostile to accidental network access: if this passes, the worker crossed
+    # the process boundary with everything it needed.
+    offline = restored.model_copy(
+        update={
+            "environment": {
+                **dict(restored.environment),
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+            }
+        }
+    )
     plan = ResolvedExecutionPlan(
-        spec=restored,
+        spec=offline,
         runtime="local",
         target=RuntimeOperationTarget(kind="training-attempt", id="ra_e2e"),
     )
@@ -147,7 +244,6 @@ def test_the_worker_never_sees_the_envelope() -> None:
     source, because an import is what would actually let it happen.
     """
     import ast
-    from pathlib import Path
 
     worker = Path(__file__).resolve().parents[2] / "xaytune" / "workers" / "native.py"
     tree = ast.parse(worker.read_text(encoding="utf-8"))

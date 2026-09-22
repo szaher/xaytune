@@ -16,37 +16,12 @@ from typing import Any
 
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.operation import RuntimeOperation
-from xaytune.core.errors import ConcurrentModificationError
-from xaytune.storage.errors import StorageError
+from xaytune.core.errors import ConcurrentModificationError, IdempotencyConflictError
 
 __all__ = ["IdempotencyConflictError"]
-
-
-class IdempotencyConflictError(StorageError):
-    """An operation id was reused for a materially different request.
-
-    ADR-013 §2: same id and same request returns the original record; same id
-    and anything else is refused. Guessing which one the caller meant would be
-    worse than stopping, because one of the two answers starts a second
-    workload.
-
-    Raised for both halves of a compound write, so *kind* names which record
-    conflicted -- an error reading "operation act_..." would send the reader
-    looking in the wrong table.
-    """
-
-    def __init__(
-        self, record_id: str, differing: tuple[str, ...], *, kind: str = "operation"
-    ) -> None:
-        self.record_id = record_id
-        self.operation_id = record_id  # retained for callers that predate `kind`
-        self.differing = differing
-        self.kind = kind
-        super().__init__(
-            f"{kind} {record_id} already exists with a different "
-            f"{', '.join(differing)}; reusing a{'n' if kind[0] in 'aeiou' else ''} "
-            f"{kind} id requires an identical request"
-        )
+"""Re-exported from :mod:`xaytune.core.errors`, where it moved once a runtime
+backend needed to raise the same condition from its own registry. The name
+stays here because this is where the control plane's callers import it."""
 
 
 class EventJournal:

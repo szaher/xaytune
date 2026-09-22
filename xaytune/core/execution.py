@@ -29,6 +29,7 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator
 
 from xaytune.core.capabilities import CapabilityRequirements, PluginDescriptor
+from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
@@ -271,7 +272,8 @@ class ResolvedExecutionPlan(FrozenDomainModel):
     """What a specific runtime will actually execute.
 
     A :class:`TrainingExecutionSpec` plus the decisions a resolver made against
-    one runtime's capabilities. The spec is what to run; this is what will run.
+    one runtime's capabilities, and the attempt it is being run for. The spec
+    is what to run; this is what will run, and for whom.
 
     Separate objects because the same spec resolves differently per runtime,
     and a controller comparing two runs needs to see which differences were
@@ -282,6 +284,26 @@ class ResolvedExecutionPlan(FrozenDomainModel):
 
     spec: TrainingExecutionSpec
     runtime: str
+
+    target: RuntimeOperationTarget
+    """Which attempt this plan is being executed for.
+
+    Required, and it travels with the plan rather than being passed beside it,
+    because the runtime needs it to do two things it cannot otherwise do.
+
+    ``watch()`` returns :class:`~xaytune.runtimes.RuntimeEventEnvelope`, whose
+    ``target`` is mandatory and whose payload family is pinned to the target
+    kind -- so a backend that did not know its target could not emit a single
+    valid telemetry event. And a workload the runtime finds still running after
+    a restart has to be reported against *something*; a plan that did not say
+    which attempt it belonged to would leave the controller holding a live
+    process it could not attribute.
+
+    Part of ``request_digest`` as a result, which is correct rather than
+    incidental: the same spec submitted for a different attempt is a different
+    request, and get-or-create must not return the first attempt's workload to
+    the second.
+    """
 
     resolved_capabilities: FrozenDict = Field(default_factory=FrozenDict)
     """What the resolver decided the runtime will provide.

@@ -10,6 +10,7 @@ from __future__ import annotations
 __all__ = [
     "ConcurrentModificationError",
     "DomainError",
+    "IdempotencyConflictError",
     "InvalidDomainValueError",
     "InvalidIdError",
     "InvalidTransitionError",
@@ -73,4 +74,37 @@ class ConcurrentModificationError(XaytuneError):
         super().__init__(
             f"{aggregate} {aggregate_id} was modified concurrently "
             f"(expected revision {expected_revision})"
+        )
+
+
+class IdempotencyConflictError(XaytuneError):
+    """An operation id was reused for a materially different request.
+
+    ADR-013 §2: same id and same request returns the original record; same id
+    and anything else is refused. Guessing which one the caller meant would be
+    worse than stopping, because one of the two answers starts a second
+    workload.
+
+    In the core alongside :class:`ConcurrentModificationError`, and for the
+    same reason: the condition arises wherever get-or-create is implemented,
+    which is now the control plane's journal *and* a runtime backend's own
+    registry. A controller should catch one type for one condition rather than
+    learn which layer refused it.
+
+    Raised for both halves of a compound write, so *kind* names which record
+    conflicted -- an error reading "operation act_..." would send the reader
+    looking in the wrong table.
+    """
+
+    def __init__(
+        self, record_id: str, differing: tuple[str, ...], *, kind: str = "operation"
+    ) -> None:
+        self.record_id = record_id
+        self.operation_id = record_id  # retained for callers that predate `kind`
+        self.differing = differing
+        self.kind = kind
+        super().__init__(
+            f"{kind} {record_id} already exists with a different "
+            f"{', '.join(differing)}; reusing a{'n' if kind[0] in 'aeiou' else ''} "
+            f"{kind} id requires an identical request"
         )

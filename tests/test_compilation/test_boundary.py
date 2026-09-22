@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -29,7 +29,7 @@ from xaytune.core.domain.candidate import (
     TrainingKind,
     TrainingSpec,
 )
-from xaytune.core.domain.operation import RuntimeOperationTarget
+from xaytune.core.domain.operation import OperationTargetKind, RuntimeOperationTarget
 from xaytune.core.execution import (
     CommandEntrypoint,
     CompilerIdentity,
@@ -459,6 +459,79 @@ def test_an_evaluation_cannot_emit_a_checkpoint_event() -> None:
 
     with pytest.raises(ValidationError):
         EvaluationEventPayload(type="CheckpointCommitted")
+
+
+def test_a_target_cannot_carry_the_other_workloads_telemetry() -> None:
+    """Splitting the payload is not enough on its own.
+
+    The discriminated union constrains a payload in isolation, so it only
+    helps a caller who already chose the right family. Pairing the families
+    with the target is what stops an evaluation attempt reporting a
+    ``CheckpointCommitted`` (ADR-014 §1).
+    """
+    with pytest.raises(ValidationError):
+        RuntimeEventEnvelope(
+            event_id="e",
+            target=RuntimeOperationTarget(kind="evaluation-attempt", id="eval_1"),
+            sequence=0,
+            payload=TrainingEventPayload(type="CheckpointCommitted"),
+        )
+
+    with pytest.raises(ValidationError):
+        RuntimeEventEnvelope(
+            event_id="e",
+            target=RuntimeOperationTarget(kind="training-attempt", id="run_1"),
+            sequence=0,
+            payload=EvaluationEventPayload(type="EvaluationStarted"),
+        )
+
+
+def test_the_shared_vocabulary_stays_shared() -> None:
+    """The pairing is by family, not by event name.
+
+    Both workloads emit ``Heartbeat``; each must emit it as its own family, and
+    neither may borrow the other's.
+    """
+    for kind, payload in (
+        ("training-attempt", TrainingEventPayload(type="Heartbeat")),
+        ("evaluation-attempt", EvaluationEventPayload(type="Heartbeat")),
+    ):
+        envelope = RuntimeEventEnvelope(
+            event_id="e",
+            target=RuntimeOperationTarget(kind=kind, id="x"),
+            sequence=0,
+            payload=payload,
+        )
+        assert envelope.payload.type == "Heartbeat"
+
+
+def test_every_target_kind_admits_exactly_one_telemetry_family() -> None:
+    """No kind is left unpaired, and none accepts both.
+
+    Driven from ``OperationTargetKind`` itself rather than a list written here,
+    so a target kind added without a telemetry family fails this test instead
+    of quietly accepting anything.
+    """
+    families = (
+        TrainingEventPayload(type="Heartbeat"),
+        EvaluationEventPayload(type="Heartbeat"),
+    )
+
+    for kind in get_args(OperationTargetKind):
+        accepted = []
+        for payload in families:
+            try:
+                RuntimeEventEnvelope(
+                    event_id="e",
+                    target=RuntimeOperationTarget(kind=kind, id="x"),
+                    sequence=0,
+                    payload=payload,
+                )
+            except ValidationError:
+                continue
+            accepted.append(payload.workload)
+
+        assert len(accepted) == 1, f"{kind} accepts {accepted}, expected exactly one family"
 
 
 def test_the_envelope_names_its_target_the_way_the_journal_does() -> None:

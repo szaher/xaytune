@@ -15,12 +15,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Annotated, Literal, Protocol, runtime_checkable
+from typing import Annotated, Literal, Protocol, get_args, runtime_checkable
 
 from pydantic import Field, model_validator
 
 from xaytune.core.capabilities import CapabilityDocument, PluginDescriptor
-from xaytune.core.domain.operation import RuntimeOperationTarget
+from xaytune.core.domain.operation import OperationTargetKind, RuntimeOperationTarget
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import OperationId
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
@@ -226,6 +226,26 @@ RuntimeEventPayload = Annotated[
 ]
 
 
+_PAYLOAD_WORKLOAD_FOR_TARGET: dict[OperationTargetKind, Literal["training", "evaluation"]] = {
+    "training-attempt": "training",
+    "evaluation-attempt": "evaluation",
+}
+"""Which payload family each target kind may carry (ADR-014 §1).
+
+A mapping checked for coverage rather than a chain of ``if`` branches: a third
+target kind added without a payload family fails at import here, whereas an
+unmatched branch would silently stop enforcing the pairing for exactly the new
+kind nobody had thought about yet.
+"""
+
+if set(_PAYLOAD_WORKLOAD_FOR_TARGET) != set(get_args(OperationTargetKind)):  # pragma: no cover
+    raise RuntimeError(
+        "every operation target kind must declare which telemetry payload "
+        "family it carries; unpaired kinds: "
+        f"{set(get_args(OperationTargetKind)) ^ set(_PAYLOAD_WORKLOAD_FOR_TARGET)}"
+    )
+
+
 class RuntimeEventEnvelope(FrozenDomainModel):
     """One telemetry event (ADR-014 §1).
 
@@ -240,7 +260,12 @@ class RuntimeEventEnvelope(FrozenDomainModel):
 
     ``target`` is the same typed reference the operation journal uses, so an
     event stream and the operation that started it name their subject the same
-    way.
+    way -- and the pairing between the two is **enforced here**, not left to
+    the caller. Splitting the payload by workload only makes a bad event
+    unrepresentable once it is already being built as the right family;
+    without this validator an evaluation attempt could still carry a
+    ``CheckpointCommitted``, which is the exact confusion ADR-014 §1 pairs the
+    target with the payload to prevent.
     """
 
     protocol_version: str = "xaytune.telemetry/v1alpha1"
@@ -258,6 +283,18 @@ class RuntimeEventEnvelope(FrozenDomainModel):
 
     emitted_at: datetime | None = None
     payload: RuntimeEventPayload
+
+    @model_validator(mode="after")
+    def _payload_family_matches_target(self) -> RuntimeEventEnvelope:
+        expected = _PAYLOAD_WORKLOAD_FOR_TARGET[self.target.kind]
+        if self.payload.workload != expected:
+            raise ValueError(
+                f"a {self.target.kind} carries {expected} telemetry, not "
+                f"{self.payload.workload}: the target and the payload family "
+                f"are two statements about the same workload, and a consumer "
+                f"that trusted either one would be wrong about the other"
+            )
+        return self
 
 
 class RuntimeLog(FrozenDomainModel):

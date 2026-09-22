@@ -51,6 +51,7 @@ from xaytune.runtimes import (
 )
 
 _REF = RuntimeRef(backend="fake", external_id="pid-1")
+_TARGET = RuntimeOperationTarget(kind="training-attempt", id="ra_1")
 
 DESCRIPTOR = PluginDescriptor(
     api_version="xaytune.plugins/v1alpha1",
@@ -183,6 +184,7 @@ def test_the_spec_round_trips_through_json() -> None:
 
 def test_the_plan_round_trips_through_json() -> None:
     plan = ResolvedExecutionPlan(
+        target=_TARGET,
         spec=FakeCompiler().compile(_candidate(), _context()),
         runtime="local",
         resolved_capabilities={"precision": "bf16"},
@@ -279,7 +281,7 @@ def test_resubmitting_one_operation_does_not_start_a_second_workload() -> None:
     plugin, so the contract test needs no extra dependency."""
     runtime = FakeRuntime()
     plan = ResolvedExecutionPlan(
-        spec=FakeCompiler().compile(_candidate(), _context()), runtime="local"
+        target=_TARGET, spec=FakeCompiler().compile(_candidate(), _context()), runtime="local"
     )
     operation_id = OperationId.generate()
 
@@ -296,26 +298,28 @@ def test_resubmitting_one_operation_does_not_start_a_second_workload() -> None:
 
 
 def _digest(spec: TrainingExecutionSpec) -> str:
-    return ResolvedExecutionPlan(spec=spec, runtime="local").request_digest("submit")
+    return ResolvedExecutionPlan(target=_TARGET, spec=spec, runtime="local").request_digest(
+        "submit"
+    )
 
 
 def test_the_request_digest_hashes_the_whole_request() -> None:
     """Not ExecutionFingerprint. Two submissions can agree on compiler,
     runtime and topology while differing in entrypoint or dataset."""
     spec = FakeCompiler().compile(_candidate(), _context())
-    plan = ResolvedExecutionPlan(spec=spec, runtime="local")
+    plan = ResolvedExecutionPlan(target=_TARGET, spec=spec, runtime="local")
 
     other_data = FakeCompiler().compile(
         _candidate(data=DataSpec(dataset=DatasetRef(uri="./support-v5.jsonl"))), _context()
     )
-    other_plan = ResolvedExecutionPlan(spec=other_data, runtime="local")
+    other_plan = ResolvedExecutionPlan(target=_TARGET, spec=other_data, runtime="local")
 
     assert plan.request_digest("submit") != other_plan.request_digest("submit")
 
 
 def test_submitting_and_cancelling_are_different_requests() -> None:
     plan = ResolvedExecutionPlan(
-        spec=FakeCompiler().compile(_candidate(), _context()), runtime="local"
+        target=_TARGET, spec=FakeCompiler().compile(_candidate(), _context()), runtime="local"
     )
 
     assert plan.request_digest("submit") != plan.request_digest("cancel")
@@ -325,8 +329,12 @@ def test_the_same_request_digests_the_same() -> None:
     """Which is what makes a retry recognisable as a retry."""
     spec = FakeCompiler().compile(_candidate(), _context())
 
-    first = ResolvedExecutionPlan(spec=spec, runtime="local").request_digest("submit")
-    second = ResolvedExecutionPlan(spec=spec, runtime="local").request_digest("submit")
+    first = ResolvedExecutionPlan(target=_TARGET, spec=spec, runtime="local").request_digest(
+        "submit"
+    )
+    second = ResolvedExecutionPlan(target=_TARGET, spec=spec, runtime="local").request_digest(
+        "submit"
+    )
 
     assert first == second
 
@@ -380,10 +388,10 @@ def test_a_changed_runtime_option_changes_the_digest() -> None:
     spec = FakeCompiler().compile(_candidate(), _context())
 
     torchrun = ResolvedExecutionPlan(
-        spec=spec, runtime="local", runtime_options={"launcher": "torchrun"}
+        target=_TARGET, spec=spec, runtime="local", runtime_options={"launcher": "torchrun"}
     )
     subprocess_ = ResolvedExecutionPlan(
-        spec=spec, runtime="local", runtime_options={"launcher": "subprocess"}
+        target=_TARGET, spec=spec, runtime="local", runtime_options={"launcher": "subprocess"}
     )
 
     assert torchrun.request_digest("submit") != subprocess_.request_digest("submit")
@@ -392,12 +400,32 @@ def test_a_changed_runtime_option_changes_the_digest() -> None:
 # ---- the resolved plan is a separate object ------------------------------
 
 
+def test_the_same_plan_for_a_different_attempt_is_a_different_request() -> None:
+    """The target is part of the request, not decoration beside it.
+
+    Two attempts of the same candidate compile to the same spec. If the digest
+    ignored who the plan was for, get-or-create would hand the second attempt
+    the first one's running workload.
+    """
+    spec = FakeCompiler().compile(_candidate(), _context())
+
+    first = ResolvedExecutionPlan(spec=spec, runtime="local", target=_TARGET)
+    second = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_2"),
+    )
+
+    assert first.spec == second.spec
+    assert first.request_digest("submit") != second.request_digest("submit")
+
+
 def test_one_spec_resolves_onto_different_runtimes() -> None:
     """The reason spec and plan are not one object."""
     spec = FakeCompiler().compile(_candidate(), _context())
 
-    local = ResolvedExecutionPlan(spec=spec, runtime="local")
-    ray = ResolvedExecutionPlan(spec=spec, runtime="ray")
+    local = ResolvedExecutionPlan(target=_TARGET, spec=spec, runtime="local")
+    ray = ResolvedExecutionPlan(target=_TARGET, spec=spec, runtime="ray")
 
     assert local.spec == ray.spec
     assert local.request_digest("submit") != ray.request_digest("submit")

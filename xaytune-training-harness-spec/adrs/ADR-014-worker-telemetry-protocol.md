@@ -74,6 +74,17 @@ there is a shared envelope, not a shared aggregate.
 an event stream and the operation that started it name their subject the same
 way.
 
+**The target travels with the plan.** `RuntimeBackend.submit_or_get` receives an
+operation id and a `ResolvedExecutionPlan`, and nothing else, so the plan is the
+only place a backend can learn which attempt it is running for. It is carried as
+a field on the plan rather than passed beside it, which also puts it inside
+`request_digest` — correct, because the same spec submitted for a different
+attempt is a different request, and get-or-create must not hand the second
+attempt the first one's running workload.
+
+A backend that did not know its target could not emit a single valid envelope:
+`target` is required, and the payload family is pinned to `target.kind`.
+
 `sequence` is the contract, not `emitted_at`. Worker clocks are not
 trustworthy — they skew, they jump, and under a distributed launcher there are
 several of them. Ordering, deduplication and gap detection all key on

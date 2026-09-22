@@ -539,13 +539,20 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
         )
 
     descriptor = plan.spec.compiler.descriptor
-    if descriptor is not None:
-        try:
-            require_supported_plugin(descriptor)
-        except IncompatiblePluginError as exc:
-            # Refused here rather than raised, so the operation is recorded as
-            # rejected and the controller learns nothing was started (ADR-008).
-            return str(exc)
+    if descriptor is None:
+        return (
+            f"the plan names compiler {plan.spec.compiler.name!r} but carries no "
+            f"PluginDescriptor; ADR-008 requires every plugin to declare one, and "
+            f"a plan whose producer cannot be identified cannot be version-checked "
+            f"or traced back to what built it"
+        )
+
+    try:
+        require_supported_plugin(descriptor)
+    except IncompatiblePluginError as exc:
+        # Refused here rather than raised, so the operation is recorded as
+        # rejected and the controller learns nothing was started (ADR-008).
+        return str(exc)
 
     if plan.spec.telemetry.protocol_version != _TELEMETRY_PROTOCOL:
         return (

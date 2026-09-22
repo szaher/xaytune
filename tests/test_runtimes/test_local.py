@@ -41,6 +41,17 @@ from xaytune.runtimes.local.launcher import run as run_launcher
 from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRecord
 
+_DESCRIPTOR = PluginDescriptor(
+    api_version=PLUGIN_API_VERSIONS[0],
+    name="fake-compiler",
+    plugin_version="0.1.0",
+    provider="tests",
+    xaytune_version="0.6.0",
+)
+"""Every plan LocalRuntime runs came from a compiler, and ADR-008 says every
+compiler is a plugin that declares itself. A helper that omitted this was
+building plans no compiler could produce."""
+
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "unknown"})
 _SETTLE_SECONDS = 20.0
 
@@ -52,7 +63,7 @@ def _plan(
 ) -> ResolvedExecutionPlan:
     """A plan that runs *args* as a command."""
     spec = TrainingExecutionSpec(
-        compiler=CompilerIdentity(name="fake", version="0.1.0"),
+        compiler=CompilerIdentity(name="fake", version="0.1.0", descriptor=_DESCRIPTOR),
         candidate_fingerprint="sha256:" + "0" * 64,
         entrypoint=CommandEntrypoint(argv=args),
         **spec_kwargs,  # type: ignore[arg-type]
@@ -382,6 +393,39 @@ def test_a_plugin_speaking_an_unknown_api_is_refused(runtime: LocalRuntime) -> N
     assert outcome.disposition == "rejected"
     assert outcome.runtime_ref is None
     assert outcome.may_reissue is True
+
+
+def test_a_plan_with_no_plugin_descriptor_is_refused(runtime: LocalRuntime) -> None:
+    """ADR-008 clause 1 has to fail closed on absence, not only on mismatch.
+
+    ``CompilerIdentity.descriptor`` is optional, so a plan can name a compiler
+    and say nothing about what produced it. Checking only the descriptors that
+    happen to be present would leave the rule enforceable by omitting it --
+    and an unidentifiable producer can be neither version-checked nor traced
+    back to the build that made the plan.
+    """
+    operation_id = OperationId.generate()
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="anonymous", version="0.1.0"),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=CommandEntrypoint(argv=_python("pass")),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_anon"),
+    )
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError, match="PluginDescriptor"):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome is not None
+    assert outcome.disposition == "rejected"
+    assert outcome.runtime_ref is None, "nothing was started, so nothing to name"
 
 
 def test_a_plugin_speaking_a_supported_api_is_accepted(runtime: LocalRuntime) -> None:
@@ -1186,7 +1230,7 @@ def test_a_module_entrypoint_runs_and_receives_its_arguments(
     )
 
     spec = TrainingExecutionSpec(
-        compiler=CompilerIdentity(name="fake", version="0.1.0"),
+        compiler=CompilerIdentity(name="fake", version="0.1.0", descriptor=_DESCRIPTOR),
         candidate_fingerprint="sha256:" + "0" * 64,
         entrypoint=PythonModuleEntrypoint(module="worker", function="main"),
         arguments=(str(marker),),

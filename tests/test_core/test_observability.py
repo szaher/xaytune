@@ -488,14 +488,25 @@ def test_legacy_complete_events_are_not_silently_dropped(tmp_path):
 
 
 def test_runtime_refuses_incompatible_telemetry_protocol():
+    from xaytune.core.capabilities import PLUGIN_API_VERSIONS, PluginDescriptor
     from xaytune.core.execution import ResolvedExecutionPlan, TelemetryContract
     from xaytune.runtimes.local.runtime import _refuse
 
+    # A supported descriptor, so this isolates the telemetry refusal: ADR-008
+    # now refuses a plan whose producer is unidentifiable, and that check runs
+    # first.
+    descriptor = PluginDescriptor(
+        api_version=PLUGIN_API_VERSIONS[0],
+        name="test",
+        plugin_version="1",
+        provider="tests",
+        xaytune_version="0.6.0",
+    )
     plan = ResolvedExecutionPlan(
         runtime="local",
         target={"kind": "training-attempt", "id": "a"},
         spec=TrainingExecutionSpec(
-            compiler=CompilerIdentity(name="test", version="1"),
+            compiler=CompilerIdentity(name="test", version="1", descriptor=descriptor),
             candidate_fingerprint="c",
             entrypoint=PythonModuleEntrypoint(module="worker"),
             telemetry=TelemetryContract(protocol_version="xaytune.telemetry/v1alpha1"),

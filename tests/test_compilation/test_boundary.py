@@ -12,6 +12,7 @@ import inspect
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from xaytune.compilation import CompilationContext, SupportResult, TrainerCompiler
 from xaytune.core.capabilities import (
@@ -28,17 +29,28 @@ from xaytune.core.domain.candidate import (
     TrainingKind,
     TrainingSpec,
 )
+from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.execution import (
+    CommandEntrypoint,
     CompilerIdentity,
-    EntrypointSpec,
+    PythonModuleEntrypoint,
     ResolvedExecutionPlan,
     ResourceRequirements,
     SecretRef,
     TrainingExecutionSpec,
 )
 from xaytune.core.ids import OperationId
-from xaytune.core.refs import DatasetRef, ModelRef
-from xaytune.runtimes import OperationOutcome, RuntimeBackend
+from xaytune.core.refs import DatasetRef, ModelRef, RuntimeRef
+from xaytune.runtimes import (
+    EvaluationEventPayload,
+    OperationOutcome,
+    RuntimeBackend,
+    RuntimeEventEnvelope,
+    StreamCursor,
+    TrainingEventPayload,
+)
+
+_REF = RuntimeRef(backend="fake", external_id="pid-1")
 
 DESCRIPTOR = PluginDescriptor(
     api_version="xaytune.plugins/v1alpha1",
@@ -78,7 +90,7 @@ class FakeCompiler:
         return TrainingExecutionSpec(
             compiler=CompilerIdentity(name="fake", version="0.1.0"),
             candidate_fingerprint=candidate.candidate_fingerprint(),
-            entrypoint=EntrypointSpec(module="xaytune.trainer.worker", function="main"),
+            entrypoint=PythonModuleEntrypoint(module="xaytune.trainer.worker", function="main"),
             arguments=("--seed", str(context.seed)) if context.seed is not None else (),
             config={
                 "kind": candidate.training.kind.value,
@@ -235,7 +247,11 @@ class FakeRuntime:
     async def lookup_operation(self, operation_id: OperationId) -> OperationOutcome | None:
         if str(operation_id) not in self.submitted:
             return None
-        return OperationOutcome(operation_id=operation_id, accepted=True)
+        return OperationOutcome(
+            operation_id=operation_id,
+            disposition="accepted",
+            runtime_ref=RuntimeRef(backend="fake", external_id=str(operation_id)),
+        )
 
 
 def test_the_runtime_api_is_operation_keyed_from_the_start() -> None:
@@ -279,6 +295,10 @@ def test_resubmitting_one_operation_does_not_start_a_second_workload() -> None:
 # ---- the idempotency key -------------------------------------------------
 
 
+def _digest(spec: TrainingExecutionSpec) -> str:
+    return ResolvedExecutionPlan(spec=spec, runtime="local").request_digest("submit")
+
+
 def test_the_request_digest_hashes_the_whole_request() -> None:
     """Not ExecutionFingerprint. Two submissions can agree on compiler,
     runtime and topology while differing in entrypoint or dataset."""
@@ -311,20 +331,62 @@ def test_the_same_request_digests_the_same() -> None:
     assert first == second
 
 
-def test_a_rotated_secret_does_not_change_the_digest() -> None:
-    """A credential rotation must not read as a different request.
+def test_a_stable_secret_reference_keeps_the_digest_stable() -> None:
+    """Rotating the value behind a reference must not read as a new request.
 
-    The plan carries references, so rotating the value behind one changes
-    nothing here -- and an inlined secret would also have been persisted and
-    hashed into a durable identity.
+    An earlier version of this test compared a plan with itself, which proved
+    nothing. The observable contract is about the *reference*: the model holds
+    no secret value at all, so a rotation is invisible here -- which is the
+    point.
     """
     spec = FakeCompiler().compile(_candidate(), _context())
-    with_secret = spec.model_copy(update={"secrets": (SecretRef(name="hf-token", source="env"),)})
+    reference = SecretRef(name="hf-token", source="env", version="v1")
 
-    assert "token" not in with_secret.model_dump_json().lower().split("hf-token")[1][:200]
-    assert ResolvedExecutionPlan(spec=with_secret, runtime="local").request_digest(
-        "submit"
-    ) == ResolvedExecutionPlan(spec=with_secret, runtime="local").request_digest("submit")
+    first = spec.model_copy(update={"secrets": (reference,)})
+    second = spec.model_copy(
+        update={"secrets": (SecretRef(name="hf-token", source="env", version="v1"),)}
+    )
+
+    assert _digest(first) == _digest(second)
+
+
+def test_a_changed_secret_reference_changes_the_digest() -> None:
+    """A different version *is* a different external request (ADR-013)."""
+    spec = FakeCompiler().compile(_candidate(), _context())
+
+    v1 = spec.model_copy(update={"secrets": (SecretRef(name="t", source="env", version="v1"),)})
+    v2 = spec.model_copy(update={"secrets": (SecretRef(name="t", source="env", version="v2"),)})
+    elsewhere = spec.model_copy(
+        update={"secrets": (SecretRef(name="t", source="vault", version="v1"),)}
+    )
+
+    assert len({_digest(v1), _digest(v2), _digest(elsewhere)}) == 3
+
+
+def test_a_secret_value_cannot_be_represented() -> None:
+    """The model has nowhere to put one, which is stronger than a rule saying
+    not to: a plan is persisted and hashed, so an inlined secret would be
+    written to durable storage and baked into an identity."""
+    assert set(SecretRef.model_fields) == {"name", "source", "version"}
+    assert "value" not in SecretRef.model_fields
+
+
+def test_a_changed_runtime_option_changes_the_digest() -> None:
+    """Runtime options are part of the external request (ADR-013).
+
+    Changing a launcher changes what the runtime is being asked to do, even
+    when the spec is byte-identical.
+    """
+    spec = FakeCompiler().compile(_candidate(), _context())
+
+    torchrun = ResolvedExecutionPlan(
+        spec=spec, runtime="local", runtime_options={"launcher": "torchrun"}
+    )
+    subprocess_ = ResolvedExecutionPlan(
+        spec=spec, runtime="local", runtime_options={"launcher": "subprocess"}
+    )
+
+    assert torchrun.request_digest("submit") != subprocess_.request_digest("submit")
 
 
 # ---- the resolved plan is a separate object ------------------------------
@@ -339,3 +401,146 @@ def test_one_spec_resolves_onto_different_runtimes() -> None:
 
     assert local.spec == ray.spec
     assert local.request_digest("submit") != ray.request_digest("submit")
+
+
+# ---- the entrypoint is exactly one thing --------------------------------
+
+
+def test_an_entrypoint_cannot_be_both_a_module_and_a_command() -> None:
+    """Nothing would say which the runtime should prefer.
+
+    Every backend would invent its own precedence, and two backends would run
+    the same spec differently. The tagged union makes it unrepresentable.
+    """
+    with pytest.raises(ValidationError):
+        PythonModuleEntrypoint(module="x.worker", argv=("python", "other.py"))
+
+    with pytest.raises(ValidationError):
+        CommandEntrypoint(argv=("python",), module="x.worker")
+
+
+def test_a_command_entrypoint_is_an_argv_not_a_shell_string() -> None:
+    """A string would be re-parsed by whichever shell the runtime uses, so
+    quoting would vary between backends."""
+    entrypoint = CommandEntrypoint(argv=("python", "-m", "x", "--flag", "a b"))
+
+    assert entrypoint.argv[-1] == "a b", "one argument, not two"
+    with pytest.raises(ValidationError):
+        CommandEntrypoint(argv=())
+
+
+def test_both_entrypoint_kinds_round_trip_through_the_spec() -> None:
+    """The discriminator has to survive the wire, or the union is decoration."""
+    for entrypoint in (
+        PythonModuleEntrypoint(module="xaytune.trainer.worker", function="main"),
+        CommandEntrypoint(argv=("python", "-m", "xaytune.trainer.worker")),
+    ):
+        spec = (
+            FakeCompiler()
+            .compile(_candidate(), _context())
+            .model_copy(update={"entrypoint": entrypoint})
+        )
+        restored = TrainingExecutionSpec.model_validate_json(spec.model_dump_json())
+
+        assert restored.entrypoint == entrypoint
+        assert type(restored.entrypoint) is type(entrypoint)
+
+
+# ---- the telemetry envelope implements ADR-014 --------------------------
+
+
+def test_an_evaluation_cannot_emit_a_checkpoint_event() -> None:
+    """A type error, not a convention someone has to remember.
+
+    Evaluation produces no checkpoints, which is why its state machine has
+    neither CHECKPOINTING nor RECOVERING.
+    """
+    assert TrainingEventPayload(type="CheckpointCommitted").type == "CheckpointCommitted"
+
+    with pytest.raises(ValidationError):
+        EvaluationEventPayload(type="CheckpointCommitted")
+
+
+def test_the_envelope_names_its_target_the_way_the_journal_does() -> None:
+    """So an event stream and the operation that started it agree."""
+    envelope = RuntimeEventEnvelope(
+        event_id="evt_1",
+        target=RuntimeOperationTarget(kind="evaluation-attempt", id="ea_1"),
+        sequence=0,
+        payload=EvaluationEventPayload(type="EvaluationStarted"),
+    )
+
+    restored = RuntimeEventEnvelope.model_validate_json(envelope.model_dump_json())
+    assert restored == envelope
+    assert restored.target.kind == "evaluation-attempt"
+
+
+def test_sequences_and_generations_are_counters() -> None:
+    """Both start at zero; -1 belongs only to a cursor that recorded nothing."""
+    target = RuntimeOperationTarget(kind="training-attempt", id="a_1")
+
+    with pytest.raises(ValidationError):
+        RuntimeEventEnvelope(
+            event_id="e",
+            target=target,
+            sequence=-1,
+            payload=TrainingEventPayload(type="Heartbeat"),
+        )
+
+    with pytest.raises(ValidationError):
+        StreamCursor(generation=-1)
+    with pytest.raises(ValidationError):
+        StreamCursor(sequence=-2)
+
+    assert StreamCursor().sequence == -1, "nothing recorded yet"
+
+
+# ---- an outcome cannot carry contradictory evidence ---------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "kwargs"),
+    [
+        ("rejected with a workload", {"disposition": "rejected", "runtime_ref": _REF}),
+        ("accepted without one", {"disposition": "accepted"}),
+        ("completed without one", {"disposition": "completed"}),
+    ],
+)
+def test_an_outcome_cannot_be_contradictory(label: str, kwargs: dict) -> None:
+    """This type carries evidence during recovery.
+
+    Contradictory evidence is worse than none: it tells the controller a
+    workload exists and not where, or that one was refused and also started.
+    """
+    with pytest.raises(ValidationError):
+        OperationOutcome(operation_id=OperationId.generate(), **kwargs)
+    assert label
+
+
+def test_only_a_rejection_makes_reissuing_safe() -> None:
+    """An accepted or completed operation must be adopted, not repeated."""
+
+    def outcome(disposition: str, **kw) -> OperationOutcome:
+        return OperationOutcome(operation_id=OperationId.generate(), disposition=disposition, **kw)
+
+    assert outcome("rejected").may_reissue
+    assert not outcome("accepted", runtime_ref=_REF).may_reissue
+    assert not outcome("completed", runtime_ref=_REF).may_reissue
+
+
+# ---- the environment is what a process can actually hold ----------------
+
+
+def test_environment_values_must_be_strings() -> None:
+    """An OS environment holds strings.
+
+    Coercing here would mean every runtime inventing its own rules, and they
+    would differ on booleans and floats.
+    """
+    spec = FakeCompiler().compile(_candidate(), _context())
+
+    assert spec.model_copy(update={"environment": {"WORKERS": "4"}})
+
+    for bad in ({"WORKERS": 4}, {"DEBUG": True}, {"NESTED": {"a": "b"}}):
+        with pytest.raises(ValidationError):
+            spec.model_copy(update={"environment": bad})

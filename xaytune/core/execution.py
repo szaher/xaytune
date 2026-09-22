@@ -24,9 +24,9 @@ anything.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from xaytune.core.capabilities import CapabilityRequirements, PluginDescriptor
 from xaytune.core.fingerprint import fingerprint
@@ -39,7 +39,9 @@ __all__ = [
     "CompilerIdentity",
     "ContainerSpec",
     "DependencySpec",
+    "CommandEntrypoint",
     "EntrypointSpec",
+    "PythonModuleEntrypoint",
     "ResolvedExecutionPlan",
     "ResourceRequirements",
     "SecretRef",
@@ -61,17 +63,39 @@ class CompilerIdentity(FrozenDomainModel):
     descriptor: PluginDescriptor | None = None
 
 
-class EntrypointSpec(FrozenDomainModel):
-    """How the worker process is started.
+class PythonModuleEntrypoint(FrozenDomainModel):
+    """Start the worker by importing a module.
 
-    A module and function rather than a callable: a callable cannot cross a
-    process boundary, and pickling one would bind the plan to the exact
+    A module and function name rather than a callable: a callable cannot cross
+    a process boundary, and pickling one would bind the plan to the exact
     interpreter that built it.
     """
 
+    kind: Literal["python-module"] = "python-module"
     module: str
     function: str | None = None
-    command: tuple[str, ...] = Field(default_factory=tuple)
+
+
+class CommandEntrypoint(FrozenDomainModel):
+    """Start the worker by running an argument vector.
+
+    ``argv``, never a shell string. A string would be re-parsed by whatever
+    shell the runtime happens to use, so quoting and word-splitting would vary
+    between backends -- and an argument containing a space would mean different
+    things in different places.
+    """
+
+    kind: Literal["command"] = "command"
+    argv: tuple[str, ...] = Field(min_length=1)
+
+
+EntrypointSpec = Annotated[PythonModuleEntrypoint | CommandEntrypoint, Field(discriminator="kind")]
+"""How the worker process is started: exactly one way.
+
+A single model carrying both a module and a command would let a spec declare
+both, and nothing would say which the runtime should prefer -- so every backend
+would invent its own precedence, and two backends would run the same spec
+differently. A tagged union makes the ambiguity unrepresentable."""
 
 
 class DependencySpec(FrozenDomainModel):
@@ -205,6 +229,14 @@ class TrainingExecutionSpec(FrozenDomainModel):
     config: FrozenDict = Field(default_factory=FrozenDict)
 
     environment: FrozenDict = Field(default_factory=FrozenDict)
+    """Process environment. Values are strings, and validated as such.
+
+    An OS environment holds strings, so a spec carrying ``{"WORKERS": 4}``
+    would force every runtime to invent its own coercion -- and they would
+    differ on booleans and floats. Rejecting it here means one rule instead of
+    one per backend.
+    """
+
     secrets: tuple[SecretRef, ...] = Field(default_factory=tuple)
 
     dependencies: DependencySpec = Field(default_factory=DependencySpec)
@@ -222,6 +254,18 @@ class TrainingExecutionSpec(FrozenDomainModel):
 
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
+    @field_validator("environment")
+    @classmethod
+    def _environment_values_are_strings(cls, value: FrozenDict) -> FrozenDict:
+        offending = {k: type(v).__name__ for k, v in value.items() if not isinstance(v, str)}
+        if offending:
+            raise ValueError(
+                f"environment values must be strings; got {offending}. An OS "
+                f"environment holds strings, and coercing here would mean every "
+                f"runtime inventing its own rules for booleans and numbers"
+            )
+        return value
+
 
 class ResolvedExecutionPlan(FrozenDomainModel):
     """What a specific runtime will actually execute.
@@ -238,10 +282,26 @@ class ResolvedExecutionPlan(FrozenDomainModel):
 
     spec: TrainingExecutionSpec
     runtime: str
+
     resolved_capabilities: FrozenDict = Field(default_factory=FrozenDict)
+    """What the resolver decided the runtime will provide.
+
+    A record of resolution, not a place to configure the runtime -- those are
+    different things, and conflating them would make the record unreadable.
+    """
+
+    runtime_options: FrozenDict = Field(default_factory=FrozenDict)
+    """Backend-specific execution settings: launcher, working directory, and
+    later Ray or Training Hub configuration.
+
+    Part of the external request, so it is part of ``request_digest``
+    (ADR-013): changing a launcher changes what the runtime is being asked to
+    do, even when the spec is identical.
+    """
+
     resolution_notes: tuple[str, ...] = Field(default_factory=tuple)
 
-    def request_digest(self, operation_type: str) -> str:
+    def request_digest(self, operation_type: Literal["submit", "cancel"]) -> str:
         """The idempotency key for submitting or cancelling this plan (ADR-013).
 
         Hashes the **whole external request** — the operation type and the

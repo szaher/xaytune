@@ -46,7 +46,7 @@ class RuntimeBackend(Protocol):
         # the caller must await before iterating. Both shapes satisfy this, but
         # only one types correctly for an implementation that yields.
         # Yields canonical envelopes per ADR-014
-        # (xaytune.telemetry/v1alpha1), in increasing (generation, sequence)
+        # (xaytune.telemetry/v1alpha2), in increasing (generation, sequence)
         # order. cursor is the last position the controller DURABLY RECORDED,
         # not the last it received -- an event received and then lost in a
         # crash must be redelivered. It is StreamCursor(generation, sequence):

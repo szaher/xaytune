@@ -110,7 +110,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     adaptive-recovery work, and before persistence structures are frozen
   - ADR-013 defines external operation identity, submission replay and cancellation
     intent; required before the first runtime implementation, not after
-  - ADR-014 defines `xaytune.telemetry/v1alpha1`, the worker event protocol that
+  - ADR-014 defines `xaytune.telemetry/v1alpha2`, the worker event protocol that
     `TrainingExecutionSpec.telemetry` names and `RuntimeBackend.watch()` returns;
     without it `watch()` is a signature, not an implementable interface
   - ADR-015 gives evaluation the durable Run/Attempt lifecycle that ADR-007 left

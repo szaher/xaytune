@@ -42,7 +42,7 @@
     "every_steps": 200
   },
   "telemetry": {
-    "event_protocol": "xaytune.telemetry/v1alpha1"
+    "event_protocol": "xaytune.telemetry/v1alpha2"
   },
   "required_capabilities": {
     "precision": "bf16",

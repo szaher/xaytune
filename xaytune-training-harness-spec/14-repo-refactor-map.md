@@ -182,3 +182,17 @@ Prefer:
 4. route new API through it
 5. migrate another path
 6. delete obsolete internals only after parity
+
+## 5. PR-009a observation boundary before NativeWorker
+
+Keep `trainer/callbacks.py` and `logging/` implementations intact. CallbackManager
+is an internal NativeWorker mechanism, never a field on TrainingExecutionSpec.
+NativeWorker callbacks may emit the shared typed telemetry bodies. Scientific
+changes require Action → TrainingIntervention and operational adaptation
+requires Action/recovery → ExecutionOverride; callbacks cannot silently mutate
+LR, optimizer, dataset, algorithm, reward, adapter, precision or stopping policy.
+
+Adapt the existing console/MLflow/W&B/TensorBoard backends to EventSink later;
+do not delete them or make them authoritative. PR-009a adds only core observation,
+resume and sink contracts and the tiny LocalRuntime payload-construction adapter.
+Collectors, exporters and NativeWorker integration are deferred.

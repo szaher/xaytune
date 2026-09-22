@@ -11,6 +11,7 @@ __all__ = [
     "ConcurrentModificationError",
     "DomainError",
     "IdempotencyConflictError",
+    "IncompatiblePluginError",
     "InvalidDomainValueError",
     "InvalidIdError",
     "InvalidTransitionError",
@@ -107,4 +108,30 @@ class IdempotencyConflictError(XaytuneError):
             f"{kind} {record_id} already exists with a different "
             f"{', '.join(differing)}; reusing a{'n' if kind[0] in 'aeiou' else ''} "
             f"{kind} id requires an identical request"
+        )
+
+
+class IncompatiblePluginError(XaytuneError):
+    """A plugin declares a plugin API version this build does not implement.
+
+    ADR-008 requires unknown major plugin API versions to **fail closed**. The
+    alternative is a plugin that loads, answers ``capabilities()`` in a
+    vocabulary nobody agreed on, and produces a plan whose fields mean
+    something else -- a failure that surfaces inside a training run rather
+    than at the boundary, attributed to the training code rather than to the
+    version mismatch that caused it.
+
+    Refusing is safe in a way that guessing is not: a plugin that cannot be
+    loaded stops one experiment, and a plugin that is misread silently
+    corrupts the record of every experiment it touches.
+    """
+
+    def __init__(self, name: str, declared: str, supported: tuple[str, ...]) -> None:
+        self.name = name
+        self.declared = declared
+        self.supported = supported
+        super().__init__(
+            f"plugin {name!r} declares plugin API {declared!r}, which this build "
+            f"does not implement; it supports {', '.join(repr(v) for v in supported)}. "
+            f"Install a build of the plugin that matches, or upgrade xaytune"
         )

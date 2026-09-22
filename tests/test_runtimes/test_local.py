@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from xaytune.core.capabilities import PLUGIN_API_VERSIONS, PluginDescriptor
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.errors import IdempotencyConflictError
 from xaytune.core.execution import (
@@ -339,6 +340,75 @@ def test_one_idempotency_conflict_for_one_condition() -> None:
     from xaytune.storage.journal import IdempotencyConflictError as StoragePath
 
     assert CoreError is StoragePath
+
+
+def test_a_plugin_speaking_an_unknown_api_is_refused(runtime: LocalRuntime) -> None:
+    """ADR-008 fails closed, and the refusal is durable.
+
+    A plugin whose API this build does not implement would still load, still
+    answer ``capabilities()``, and still produce a plan -- in a vocabulary
+    nobody agreed on. The mismatch would then surface inside a worker, in
+    output attributed to the training code rather than to the version that
+    caused it. Refusing costs one experiment; guessing corrupts the record of
+    every experiment the plugin touches.
+    """
+    operation_id = OperationId.generate()
+    future = PluginDescriptor(
+        api_version="xaytune.plugins/v2",
+        name="compiler-from-the-future",
+        plugin_version="9.0.0",
+        provider="tests",
+        xaytune_version="9.0.0",
+    )
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="future", version="9.0.0", descriptor=future),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=CommandEntrypoint(argv=_python("pass")),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_abi"),
+    )
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError, match="xaytune.plugins/v2"):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome is not None
+    assert outcome.disposition == "rejected"
+    assert outcome.runtime_ref is None
+    assert outcome.may_reissue is True
+
+
+def test_a_plugin_speaking_a_supported_api_is_accepted(runtime: LocalRuntime) -> None:
+    """The gate is a boundary, not a blanket refusal of descriptors."""
+    supported = PluginDescriptor(
+        api_version=PLUGIN_API_VERSIONS[0],
+        name="native",
+        plugin_version="0.1.0",
+        provider="xaytune",
+        xaytune_version="0.6.0",
+    )
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="native", version="0.1.0", descriptor=supported),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=CommandEntrypoint(argv=_python("pass")),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_abi_ok"),
+    )
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(OperationId.generate(), plan)
+        return await _settle(runtime, ref)
+
+    assert asyncio.run(scenario()).state == "succeeded"
 
 
 # ---- process outcomes ----------------------------------------------------

@@ -62,7 +62,7 @@ must be settled before the work that depends on it, not before all implementatio
 | Ratified by merged implementation | ADR-002, ADR-010 |
 | Accepted | ADR-001, ADR-005 through ADR-007, ADR-011 through ADR-016 |
 | Superseded | ADR-003 by ADR-011 |
-| Proposed | ADR-004, ADR-008, ADR-009, ADR-017 |
+| Proposed | ADR-004, ADR-009, ADR-017 |
 
 Half-accepted statuses were removed: ADR-006's open reuse half is now ADR-017,
 and ADR-001 and ADR-007 are accepted because accepted ADRs already depend on
@@ -71,7 +71,7 @@ them. An ADR status is a gate, so it has to be one value.
 **There is no blocking governance decision left for work that is ready to
 start.** ADR-005 was accepted on 2026-09-21, opening Band B including PR-004.
 The remaining proposed ADRs retain their individual gates in
-`15-implementation-plan.md` Phase 0 — ADR-008 for Band C, ADR-009 for Band F,
+`15-implementation-plan.md` Phase 0 — ADR-009 for Band F,
 ADR-017 for Band G, ADR-004 for Band H — and they are not implicitly accepted
 by this review.
 

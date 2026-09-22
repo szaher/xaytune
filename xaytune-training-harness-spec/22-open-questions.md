@@ -116,7 +116,7 @@ The global gate has been replaced with per-ADR gates in
 implementation; ADR-011 through ADR-016 are accepted; ADR-003 is superseded in
 substance by ADR-011.
 
-ADR-004, ADR-008, ADR-009 and ADR-017 remain proposed, each gating its
+ADR-004, ADR-009 and ADR-017 remain proposed, each gating its
 dependent work. ADR-001 and ADR-007 were accepted because accepted ADRs already
 depend on them, and ADR-006's open reuse half was split into ADR-017 so no
 document carries two statuses at once. ADR-005 was accepted on 2026-09-21, which

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
+from xaytune.core.errors import IncompatiblePluginError
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
 __all__ = [
@@ -26,8 +27,10 @@ __all__ = [
     "CheckpointCapabilities",
     "DistributedCapabilities",
     "ElasticityCapabilities",
+    "PLUGIN_API_VERSIONS",
     "PluginDescriptor",
     "PrecisionCapabilities",
+    "require_supported_plugin",
     "ResilienceCapabilities",
 ]
 
@@ -164,3 +167,32 @@ class PluginDescriptor(FrozenDomainModel):
     capabilities_schema: str = "xaytune.capabilities/v1alpha1"
 
     metadata: FrozenDict = Field(default_factory=FrozenDict)
+
+
+PLUGIN_API_VERSIONS: tuple[str, ...] = ("xaytune.plugins/v1alpha1",)
+"""Every plugin API version this build implements (ADR-008).
+
+An explicit list rather than a major-version comparison, because during alpha
+the revisions are not compatible with each other and pretending otherwise is
+the failure this is meant to prevent -- ``v1alpha1`` and ``v1alpha2`` differ in
+exactly the way that makes a plugin misread its host. Adding a version here is
+a deliberate act by someone who checked. Once the API is stable this becomes a
+major-version rule, and the list is the thing that changes.
+"""
+
+
+def require_supported_plugin(descriptor: PluginDescriptor) -> None:
+    """Refuse a plugin speaking an API this build does not implement.
+
+    Fails closed, per ADR-008. Called at the boundary where a plugin's output
+    is first trusted, not at import: a descriptor that is merely constructed
+    has not yet been believed, and refusing it there would make a version check
+    impossible to test without a plugin.
+
+    Raises:
+        IncompatiblePluginError: Naming the plugin, what it declared, and what
+            this build supports -- because "incompatible plugin" alone leaves
+            the reader to work out which of the two to change.
+    """
+    if descriptor.api_version not in PLUGIN_API_VERSIONS:
+        raise IncompatiblePluginError(descriptor.name, descriptor.api_version, PLUGIN_API_VERSIONS)

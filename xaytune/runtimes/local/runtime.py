@@ -33,8 +33,10 @@ from xaytune.core.capabilities import (
     DistributedCapabilities,
     PluginDescriptor,
     ResilienceCapabilities,
+    require_supported_plugin,
 )
 from xaytune.core.clock import utc_now
+from xaytune.core.errors import IncompatiblePluginError
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import OperationId
 from xaytune.core.refs import RuntimeRef
@@ -535,6 +537,15 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"They are part of the request, so honouring some and ignoring the "
             f"rest would run something other than what was asked for"
         )
+
+    descriptor = plan.spec.compiler.descriptor
+    if descriptor is not None:
+        try:
+            require_supported_plugin(descriptor)
+        except IncompatiblePluginError as exc:
+            # Refused here rather than raised, so the operation is recorded as
+            # rejected and the controller learns nothing was started (ADR-008).
+            return str(exc)
 
     if plan.spec.telemetry.protocol_version != _TELEMETRY_PROTOCOL:
         return (

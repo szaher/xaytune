@@ -128,7 +128,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   | Ratified by merged implementation | ADR-002, ADR-010 |
   | Accepted by decision | ADR-001, ADR-005 – ADR-007, ADR-011 – ADR-016 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-004, ADR-008, ADR-009, ADR-017 |
+  | Still `Proposed` | ADR-004, ADR-009, ADR-017 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.
@@ -139,8 +139,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   single transaction rule into the full persistence transaction contract,
   because band B owns the operation journal, the Action substrate and the
   projections as well as the experiment aggregates. Nothing ready to start is
-  now blocked: ADR-008 gates band C, ADR-009 band F, ADR-017 band G and ADR-004
-  band H.
+  now blocked: ADR-009 gates band F, ADR-017 band G and ADR-004 band H. ADR-008
+  was accepted on 2026-09-22 and band C is unblocked.
 - `schemas/` — proposed YAML and JSON/Python schema examples. The SQLite file is
   **migrations 001 and 002 only**, not the target schema — 001 is the core
   aggregates plus the operation journal, 002 the minimal Action substrate, and

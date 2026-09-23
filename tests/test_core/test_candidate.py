@@ -27,6 +27,7 @@ from xaytune.core.domain.candidate import (
     TrainingSchedule,
     TrainingSpec,
     candidate_identity_v1,
+    candidate_identity_v2,
 )
 from xaytune.core.domain.run import (
     Run,
@@ -120,8 +121,50 @@ def test_a_candidate_fingerprint_is_pinned() -> None:
     stopped matching, so the brittleness is deliberate.
     """
     assert _plain_candidate().candidate_fingerprint() == (
+        "sha256:730b6faed16f611f7be3ed499a7e72e4703883d6cfff772bfbef7d0351b13fe4"
+    )
+
+
+def test_the_v1_fingerprint_is_frozen() -> None:
+    """Every fingerprint recorded before v2 must still reproduce.
+
+    This is the old pinned literal, **unchanged**. v2 added identity fields to
+    ``DataSpec`` and ``OptimizationSpec``; v1 enumerates its fields explicitly
+    and so cannot see them. If this ever fails, a v1 helper was edited rather
+    than forked -- and since v2 reuses the unchanged v1 helpers, that edit
+    would have moved both versions at once, silently.
+    """
+    assert fingerprint(candidate_identity_v1(_plain_candidate())) == (
         "sha256:3c174a88119ffa7ed47693e5854398f10277ec46c2f972de6adfbfc5a73ac4a9"
     )
+
+
+def test_a_historical_fingerprint_can_still_be_looked_up() -> None:
+    """A v1 value stays findable without being passed off as a v2 one.
+
+    The stored value is only a digest, so nothing in it says which projection
+    made it. The lookup offers both, current first, and keeps them distinct:
+    v1 cannot see data preprocessing or clipping, so a v1 match is weaker
+    evidence and a caller has to be able to tell.
+    """
+    plain = _plain_candidate()
+
+    current, historical = plain.candidate_fingerprints_for_lookup()
+
+    assert current == plain.candidate_fingerprint() == plain.candidate_fingerprint_v2()
+    assert historical == plain.candidate_fingerprint_v1()
+    assert historical == (
+        "sha256:3c174a88119ffa7ed47693e5854398f10277ec46c2f972de6adfbfc5a73ac4a9"
+    ), "the historical identity is the frozen v1 value, not a recomputation of it"
+    assert current != historical
+
+
+def test_v1_and_v2_cannot_collide() -> None:
+    """``version`` separates the domains, even when v2's new fields are unset."""
+    plain = _plain_candidate()
+    assert plain.data.format is None and plain.training.optimization.max_grad_norm is None
+
+    assert fingerprint(candidate_identity_v1(plain)) != fingerprint(candidate_identity_v2(plain))
 
 
 def test_unorderable_and_unrepresentable_values_are_refused() -> None:
@@ -296,16 +339,21 @@ def test_application_order_is_part_of_the_history() -> None:
 # ---- identity is versioned, not whatever the schema happens to be --------
 
 
-def test_adding_a_field_later_does_not_change_existing_identity() -> None:
+@pytest.mark.parametrize("projection", [candidate_identity_v1, candidate_identity_v2])
+def test_adding_a_field_later_does_not_change_existing_identity(projection) -> None:
     """The reason identity hashes a projection rather than the model.
 
     Hashing ``model_dump()`` makes the current schema define identity: add a
     field with a default six months from now and every candidate already on
     disk fingerprints differently, though nobody changed anything -- and
     reuse, comparison and lineage all silently stop matching.
+
+    Checked for each projection, comparing like with like. It previously
+    compared ``candidate_fingerprint()`` with a v1 projection, which quietly
+    assumed the default *was* v1 and broke the moment it stopped being.
     """
     candidate = _plain_candidate()
-    before = candidate.candidate_fingerprint()
+    before = fingerprint(projection(candidate))
 
     class FutureTrainingSpec(TrainingSpec):
         gradient_checkpointing: bool | None = None
@@ -316,7 +364,7 @@ def test_adding_a_field_later_does_not_change_existing_identity() -> None:
 
     evolved = FutureCandidateSpec.model_validate(candidate.model_dump(mode="python"))
 
-    assert fingerprint(candidate_identity_v1(evolved)) == before
+    assert fingerprint(projection(evolved)) == before
 
 
 def test_metadata_is_not_scientific_identity() -> None:
@@ -449,15 +497,16 @@ def test_nested_metadata_on_optional_components_is_not_identity() -> None:
     assert with_reward() == with_reward(metadata={"owner": "someone"})
 
 
-def test_a_new_field_on_a_nested_model_does_not_change_identity() -> None:
-    """The guarantee the name ``v1`` makes, checked at depth.
+@pytest.mark.parametrize("projection", [candidate_identity_v1, candidate_identity_v2])
+def test_a_new_field_on_a_nested_model_does_not_change_identity(projection) -> None:
+    """The guarantee a projection's version makes, checked at depth.
 
     The previous evolution test added fields only to the two models the
     projection named, so it confirmed the implementation rather than the
     claim.
     """
     plain = _plain_candidate()
-    before = plain.candidate_fingerprint()
+    before = fingerprint(projection(plain))
 
     class FutureModelRef(ModelRef):
         future: str | None = None
@@ -484,7 +533,7 @@ def test_a_new_field_on_a_nested_model_does_not_change_identity() -> None:
 
     evolved = FutureCandidate.model_validate(plain.model_dump(mode="python"))
 
-    assert fingerprint(candidate_identity_v1(evolved)) == before
+    assert fingerprint(projection(evolved)) == before
 
 
 @pytest.mark.parametrize(

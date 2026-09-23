@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import os
 import signal
 import subprocess
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from xaytune.core.capabilities import PLUGIN_API_VERSIONS, PluginDescriptor
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.errors import IdempotencyConflictError
 from xaytune.core.execution import (
@@ -40,6 +42,17 @@ from xaytune.runtimes.local.launcher import run as run_launcher
 from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRecord
 
+_DESCRIPTOR = PluginDescriptor(
+    api_version=PLUGIN_API_VERSIONS[0],
+    name="fake-compiler",
+    plugin_version="0.1.0",
+    provider="tests",
+    xaytune_version="0.6.0",
+)
+"""Every plan LocalRuntime runs came from a compiler, and ADR-008 says every
+compiler is a plugin that declares itself. A helper that omitted this was
+building plans no compiler could produce."""
+
 _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "unknown"})
 _SETTLE_SECONDS = 20.0
 
@@ -51,7 +64,7 @@ def _plan(
 ) -> ResolvedExecutionPlan:
     """A plan that runs *args* as a command."""
     spec = TrainingExecutionSpec(
-        compiler=CompilerIdentity(name="fake", version="0.1.0"),
+        compiler=CompilerIdentity(name="fake", version="0.1.0", descriptor=_DESCRIPTOR),
         candidate_fingerprint="sha256:" + "0" * 64,
         entrypoint=CommandEntrypoint(argv=args),
         **spec_kwargs,  # type: ignore[arg-type]
@@ -339,6 +352,197 @@ def test_one_idempotency_conflict_for_one_condition() -> None:
     from xaytune.storage.journal import IdempotencyConflictError as StoragePath
 
     assert CoreError is StoragePath
+
+
+def test_a_plugin_speaking_an_unknown_api_is_refused(runtime: LocalRuntime) -> None:
+    """ADR-008 fails closed, and the refusal is durable.
+
+    A plugin whose API this build does not implement would still load, still
+    answer ``capabilities()``, and still produce a plan -- in a vocabulary
+    nobody agreed on. The mismatch would then surface inside a worker, in
+    output attributed to the training code rather than to the version that
+    caused it. Refusing costs one experiment; guessing corrupts the record of
+    every experiment the plugin touches.
+    """
+    operation_id = OperationId.generate()
+    future = PluginDescriptor(
+        api_version="xaytune.plugins/v2",
+        name="compiler-from-the-future",
+        plugin_version="9.0.0",
+        provider="tests",
+        xaytune_version="9.0.0",
+    )
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="future", version="9.0.0", descriptor=future),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=CommandEntrypoint(argv=_python("pass")),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_abi"),
+    )
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError, match="xaytune.plugins/v2"):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome is not None
+    assert outcome.disposition == "rejected"
+    assert outcome.runtime_ref is None
+    assert outcome.may_reissue is True
+
+
+def test_a_plan_with_no_plugin_descriptor_is_refused(runtime: LocalRuntime) -> None:
+    """ADR-008 clause 1 has to fail closed on absence, not only on mismatch.
+
+    ``CompilerIdentity.descriptor`` is optional, so a plan can name a compiler
+    and say nothing about what produced it. Checking only the descriptors that
+    happen to be present would leave the rule enforceable by omitting it --
+    and an unidentifiable producer can be neither version-checked nor traced
+    back to the build that made the plan.
+    """
+    operation_id = OperationId.generate()
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="anonymous", version="0.1.0"),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=CommandEntrypoint(argv=_python("pass")),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_anon"),
+    )
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError, match="PluginDescriptor"):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+
+    assert outcome is not None
+    assert outcome.disposition == "rejected"
+    assert outcome.runtime_ref is None, "nothing was started, so nothing to name"
+
+
+def test_a_plugin_speaking_a_supported_api_is_accepted(runtime: LocalRuntime) -> None:
+    """The gate is a boundary, not a blanket refusal of descriptors."""
+    supported = PluginDescriptor(
+        api_version=PLUGIN_API_VERSIONS[0],
+        name="native",
+        plugin_version="0.1.0",
+        provider="xaytune",
+        xaytune_version="0.6.0",
+    )
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="native", version="0.1.0", descriptor=supported),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=CommandEntrypoint(argv=_python("pass")),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_abi_ok"),
+    )
+
+    async def scenario() -> RuntimeStatus:
+        ref = await runtime.submit_or_get(OperationId.generate(), plan)
+        return await _settle(runtime, ref)
+
+    assert asyncio.run(scenario()).state == "succeeded"
+
+
+# ---- placement topology comes from the runtime, not the controller's shell
+
+
+_CONTROLLER_UNDER_TORCHRUN = {
+    "WORLD_SIZE": "8",
+    "RANK": "3",
+    "LOCAL_RANK": "3",
+    "LOCAL_WORLD_SIZE": "8",
+    "MASTER_ADDR": "10.0.0.1",
+    "MASTER_PORT": "29500",
+    "TORCHELASTIC_RUN_ID": "controller-run",
+}
+
+
+def _record_environment(runtime: LocalRuntime, tmp_path: Path, **plan_env: str) -> dict:
+    """Run a worker that writes down the environment it was actually given."""
+    names = sorted({*_CONTROLLER_UNDER_TORCHRUN, "CUDA_VISIBLE_DEVICES", "NCCL_DEBUG"})
+    out = tmp_path / "seen.json"
+    source = (
+        "import json, os, sys\n"
+        f"names = {names!r}\n"
+        "json.dump({n: os.environ.get(n) for n in names}, open(sys.argv[1], 'w'))\n"
+    )
+    plan = _plan(*_python(source, str(out)), environment=plan_env)
+
+    async def scenario() -> None:
+        ref = await runtime.submit_or_get(OperationId.generate(), plan)
+        await _settle(runtime, ref)
+
+    asyncio.run(scenario())
+    return json.loads(out.read_text())
+
+
+def test_a_controller_under_torchrun_does_not_hand_its_topology_to_the_worker(
+    runtime: LocalRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker must not believe it is rank 3 of 8.
+
+    Those variables describe where the *controller* is running. Inherited, the
+    native trainer's ``init_distributed()`` would read ``WORLD_SIZE=8`` and try
+    to join a group at the controller's ``MASTER_ADDR`` -- failing, or hanging
+    for seven ranks nobody started -- and nothing in the plan would say why.
+    """
+    for name, value in _CONTROLLER_UNDER_TORCHRUN.items():
+        monkeypatch.setenv(name, value)
+
+    seen = _record_environment(runtime, tmp_path)
+
+    leaked = {name: seen[name] for name in _CONTROLLER_UNDER_TORCHRUN if seen[name] is not None}
+    assert leaked == {}, f"the worker inherited the controller's topology: {leaked}"
+
+
+def test_device_and_tuning_constraints_are_still_inherited(
+    runtime: LocalRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stripping placement must not strip everything that looks related.
+
+    An operator restricting a controller to one device is setting a constraint
+    the worker should keep; removing it would hand the worker every device on
+    the machine. NCCL tuning is behaviour, not placement.
+    """
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setenv("NCCL_DEBUG", "INFO")
+
+    seen = _record_environment(runtime, tmp_path)
+
+    assert seen["CUDA_VISIBLE_DEVICES"] == "2"
+    assert seen["NCCL_DEBUG"] == "INFO"
+
+
+def test_a_plan_declaring_a_distributed_topology_is_refused(runtime: LocalRuntime) -> None:
+    """Refusing beats honouring half of it.
+
+    This runtime places its one worker in no group. A plan that sets
+    ``WORLD_SIZE`` is asking for a process that waits for peers this runtime
+    will never launch.
+    """
+    operation_id = OperationId.generate()
+    plan = _plan(*_python("pass"), environment={"WORLD_SIZE": "4", "RANK": "0"})
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError, match="WORLD_SIZE"):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+    assert outcome is not None and outcome.disposition == "rejected"
 
 
 # ---- process outcomes ----------------------------------------------------
@@ -1116,7 +1320,7 @@ def test_a_module_entrypoint_runs_and_receives_its_arguments(
     )
 
     spec = TrainingExecutionSpec(
-        compiler=CompilerIdentity(name="fake", version="0.1.0"),
+        compiler=CompilerIdentity(name="fake", version="0.1.0", descriptor=_DESCRIPTOR),
         candidate_fingerprint="sha256:" + "0" * 64,
         entrypoint=PythonModuleEntrypoint(module="worker", function="main"),
         arguments=(str(marker),),

@@ -150,8 +150,9 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** The remaining `Proposed`
-ones gate later bands: ADR-008 blocks band C, ADR-009 band F, ADR-017 band G and
-ADR-004 band H. Each must be accepted before its own band, not before PR-004.
+ones gate later bands: ADR-009 blocks band F, ADR-017 band G and ADR-004 band H.
+Each must be accepted before its own band, not before PR-004. ADR-008 was
+accepted on 2026-09-22, unblocking band C.
 
 From here, changes to these contracts should come from an implementation
 finding, a failing test or a demonstrated contradiction — not from another pass

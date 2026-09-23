@@ -477,25 +477,50 @@ def test_all_evaluation_variants_roundtrip():
 
 
 def test_legacy_complete_events_are_not_silently_dropped(tmp_path):
-    from xaytune.runtimes.local.runtime import _read_events
+    """A v1alpha1 envelope is a hole in the stream, not something to skip.
+
+    Same intent as before; ``_read_events`` became the shared
+    ``AppendOnlyJsonlReader`` so the launcher could tail worker observations
+    with the same primitive. The two properties it asserted are the reader's:
+    a complete record that does not validate raises, a partial one waits.
+    """
+    from pydantic import TypeAdapter
+
+    from xaytune.runtimes import RuntimeEventEnvelope
+    from xaytune.runtimes.local.jsonl import AppendOnlyJsonlReader, CorruptRecordError
+
+    adapter = TypeAdapter(RuntimeEventEnvelope)
 
     path = tmp_path / "events.jsonl"
     path.write_text('{"protocol_version":"xaytune.telemetry/v1alpha1"}\n')
-    with pytest.raises(ValidationError):
-        _read_events(path)
-    path.write_text('{"partial":')
-    assert _read_events(path) == []
+    with pytest.raises(CorruptRecordError):
+        AppendOnlyJsonlReader(path, adapter).read_new()
+
+    partial = tmp_path / "partial.jsonl"
+    partial.write_text('{"partial":')
+    assert AppendOnlyJsonlReader(partial, adapter).read_new() == ()
 
 
 def test_runtime_refuses_incompatible_telemetry_protocol():
+    from xaytune.core.capabilities import PLUGIN_API_VERSIONS, PluginDescriptor
     from xaytune.core.execution import ResolvedExecutionPlan, TelemetryContract
     from xaytune.runtimes.local.runtime import _refuse
 
+    # A supported descriptor, so this isolates the telemetry refusal: ADR-008
+    # now refuses a plan whose producer is unidentifiable, and that check runs
+    # first.
+    descriptor = PluginDescriptor(
+        api_version=PLUGIN_API_VERSIONS[0],
+        name="test",
+        plugin_version="1",
+        provider="tests",
+        xaytune_version="0.6.0",
+    )
     plan = ResolvedExecutionPlan(
         runtime="local",
         target={"kind": "training-attempt", "id": "a"},
         spec=TrainingExecutionSpec(
-            compiler=CompilerIdentity(name="test", version="1"),
+            compiler=CompilerIdentity(name="test", version="1", descriptor=descriptor),
             candidate_fingerprint="c",
             entrypoint=PythonModuleEntrypoint(module="worker"),
             telemetry=TelemetryContract(protocol_version="xaytune.telemetry/v1alpha1"),

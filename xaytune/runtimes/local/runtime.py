@@ -27,14 +27,18 @@ import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from xaytune.core.capabilities import (
     CapabilityDocument,
     CheckpointCapabilities,
     DistributedCapabilities,
     PluginDescriptor,
     ResilienceCapabilities,
+    require_supported_plugin,
 )
 from xaytune.core.clock import utc_now
+from xaytune.core.errors import IncompatiblePluginError
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import OperationId
 from xaytune.core.refs import RuntimeRef
@@ -46,8 +50,10 @@ from xaytune.runtimes import (
     RuntimeStatus,
     StreamCursor,
 )
+from xaytune.runtimes.local.jsonl import AppendOnlyJsonlReader
 from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRecord, LocalWorkloadRegistry
+from xaytune.runtimes.worker import TOPOLOGY_VARIABLES
 
 __all__ = ["BACKEND", "LocalRuntime", "UnsupportedPlanError"]
 
@@ -66,6 +72,8 @@ Named here rather than read from the envelope so a plan compiled against
 an older protocol is refused at submission, which is what
 :class:`~xaytune.core.execution.TelemetryContract` exists to make
 possible."""
+
+_ENVELOPE: TypeAdapter[RuntimeEventEnvelope] = TypeAdapter(RuntimeEventEnvelope)
 
 _RUNTIME_OPTIONS = frozenset({"working_directory"})
 """Every runtime option this backend implements.
@@ -427,17 +435,21 @@ class LocalRuntime:
         workload = self._require(runtime_ref)
         paths = WorkloadPaths(workload.directory)
         position = (cursor.generation, cursor.sequence) if cursor else (0, -1)
-        delivered: set[tuple[int, int]] = set()
+
+        # A fresh reader starts at byte zero, so a controller that restarted
+        # still sees the whole file and filters it against its own durable
+        # cursor. The byte offset never leaves this generator, and no set of
+        # delivered keys grows with the run.
+        reader: AppendOnlyJsonlReader[RuntimeEventEnvelope] = AppendOnlyJsonlReader(
+            paths.events, _ENVELOPE
+        )
 
         def _pending() -> list[RuntimeEventEnvelope]:
-            fresh = []
-            for envelope in _read_events(paths.events):
-                key = (envelope.stream_generation, envelope.sequence)
-                if key <= position or key in delivered:
-                    continue
-                delivered.add(key)
-                fresh.append(envelope)
-            return fresh
+            return [
+                envelope
+                for envelope in reader.read_new()
+                if (envelope.stream_generation, envelope.sequence) > position
+            ]
 
         while True:
             for envelope in _pending():
@@ -536,12 +548,37 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"rest would run something other than what was asked for"
         )
 
+    descriptor = plan.spec.compiler.descriptor
+    if descriptor is None:
+        return (
+            f"the plan names compiler {plan.spec.compiler.name!r} but carries no "
+            f"PluginDescriptor; ADR-008 requires every plugin to declare one, and "
+            f"a plan whose producer cannot be identified cannot be version-checked "
+            f"or traced back to what built it"
+        )
+
+    try:
+        require_supported_plugin(descriptor)
+    except IncompatiblePluginError as exc:
+        # Refused here rather than raised, so the operation is recorded as
+        # rejected and the controller learns nothing was started (ADR-008).
+        return str(exc)
+
     if plan.spec.telemetry.protocol_version != _TELEMETRY_PROTOCOL:
         return (
             f"this runtime speaks {_TELEMETRY_PROTOCOL}, and the plan asks for "
             f"{plan.spec.telemetry.protocol_version!r}; a worker and a controller "
             f"that disagree about the telemetry contract should fail at submission "
             f"rather than halfway through a run"
+        )
+
+    placed = sorted(set(plan.spec.environment) & TOPOLOGY_VARIABLES)
+    if placed:
+        return (
+            f"the plan sets {', '.join(placed)}; those place a worker in a "
+            f"distributed process group, and this runtime runs one worker in "
+            f"none -- honouring them would start a process waiting for peers "
+            f"that were never launched"
         )
 
     if plan.spec.secrets:
@@ -608,32 +645,6 @@ def _alive(pid: int) -> bool:
     except OSError as exc:  # pragma: no cover - platform specific
         return exc.errno == errno.EPERM
     return True
-
-
-def _read_events(path: Path) -> list[RuntimeEventEnvelope]:
-    """Every complete envelope in the file, in stream order.
-
-    A trailing partial line is skipped rather than raised on: the launcher
-    appends and flushes, so a reader can arrive mid-write, and the next poll
-    will see the whole line.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-
-    envelopes = []
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        # Only a trailing partial write is retryable. An incompatible complete
-        # record must not silently disappear from the durable stream.
-        if index == len(lines) - 1 and not text.endswith("\n"):
-            continue
-        envelopes.append(RuntimeEventEnvelope.model_validate_json(line))
-    envelopes.sort(key=lambda envelope: (envelope.stream_generation, envelope.sequence))
-    return envelopes
 
 
 def _read_lines(path: Path, offset: int) -> tuple[list[str], int]:

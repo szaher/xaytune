@@ -26,7 +26,21 @@ from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.execution import TrainingExecutionSpec
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
-__all__ = ["CompilationContext", "SupportResult", "TrainerCompiler"]
+__all__ = ["CompilationContext", "SupportResult", "TrainerCompiler", "UnsupportedCandidateError"]
+
+
+class UnsupportedCandidateError(ValueError):
+    """``compile()`` was asked for a candidate its compiler does not support.
+
+    Carries every reason, not the first: a planner told only "unsupported
+    learning rate" would fix that, resubmit, and be told about the optimizer
+    next -- one round-trip per defect, for defects the compiler already knew.
+    """
+
+    def __init__(self, compiler: str, reasons: tuple[str, ...]) -> None:
+        self.compiler = compiler
+        self.reasons = reasons
+        super().__init__(f"{compiler} cannot compile this candidate: " + "; ".join(reasons))
 
 
 class SupportResult(FrozenDomainModel):

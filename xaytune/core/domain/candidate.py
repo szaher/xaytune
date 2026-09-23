@@ -92,9 +92,23 @@ class ModelSpec(FrozenDomainModel):
 
 
 class DataSpec(FrozenDomainModel):
-    """The data a candidate trains on."""
+    """The data a candidate trains on, and what it becomes before training.
+
+    ``format``, ``max_seq_length`` and ``packing`` are here because they
+    decide the tokens the model actually sees. The same file read as ``text``
+    or as ``alpaca``, truncated at 512 or at 2048, packed or not, is a
+    different training set -- so they bear identity, and none of them can be
+    left for a compiler to fill in.
+
+    Optional at the type level and required by the compilers that need them.
+    A GRPO or agent candidate may have no meaningful notion of a data format;
+    making it mandatory here would force every workload to invent one.
+    """
 
     dataset: DatasetRef
+    format: str | None = None
+    max_seq_length: int | None = Field(default=None, gt=0)
+    packing: bool | None = None
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
@@ -194,6 +208,17 @@ class OptimizationSpec(FrozenDomainModel):
     gradient_accumulation: int | None = None
     epochs: int | None = None
     max_steps: int | None = None
+
+    max_grad_norm: float | None = Field(default=None, ge=0)
+    """Gradient clipping threshold; ``0`` disables clipping.
+
+    Scientific rather than operational: clipping changes the optimization
+    trajectory, and a candidate that left it out would train under whatever
+    the trainer happened to default to. ``None`` means *undeclared*, as it does
+    throughout this module -- which is why "no clipping" is ``0`` rather than
+    ``None``.
+    """
+
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
@@ -288,6 +313,16 @@ def _data_identity_v1(spec: DataSpec) -> Mapping[str, Any]:
     }
 
 
+def _data_identity_v2(spec: DataSpec) -> Mapping[str, Any]:
+    """v1, plus the preprocessing that decides what the data becomes."""
+    return {
+        **_data_identity_v1(spec),
+        "format": spec.format,
+        "max_seq_length": spec.max_seq_length,
+        "packing": spec.packing,
+    }
+
+
 def _adapter_identity_v1(spec: AdapterSpec | None) -> Mapping[str, Any] | None:
     if spec is None:
         return None
@@ -330,6 +365,19 @@ def _optimization_identity_v1(spec: OptimizationSpec) -> Mapping[str, Any]:
         "gradient_accumulation": spec.gradient_accumulation,
         "epochs": spec.epochs,
         "max_steps": spec.max_steps,
+    }
+
+
+def _optimization_identity_v2(spec: OptimizationSpec) -> Mapping[str, Any]:
+    """v1, plus gradient clipping."""
+    return {**_optimization_identity_v1(spec), "max_grad_norm": spec.max_grad_norm}
+
+
+def _training_identity_v2(spec: TrainingSpec) -> Mapping[str, Any]:
+    """v1 with the v2 optimization projection substituted, and nothing else."""
+    return {
+        **_training_identity_v1(spec),
+        "optimization": _optimization_identity_v2(spec.optimization),
     }
 
 
@@ -418,6 +466,38 @@ def candidate_identity_v1(candidate: CandidateSpec) -> Mapping[str, Any]:
     }
 
 
+def candidate_identity_v2(candidate: CandidateSpec) -> Mapping[str, Any]:
+    """v1, plus the fields v1 could not see: data preprocessing and clipping.
+
+    **Why a new version rather than an edit to v1.** Every candidate fingerprint
+    already recorded -- in ``experiment_nodes.candidate_fingerprint``, indexed,
+    with no column saying which projection produced it -- was computed by v1.
+    Adding a key to v1 would change all of them while leaving v1's name
+    unchanged, which is precisely the silent drift the version number exists
+    to prevent. So v1 is frozen and still reproduces every historical value,
+    and the new fields enter identity here.
+
+    ``"version": 2`` separates the two domains, so a v1 and a v2 fingerprint
+    cannot collide even for a candidate where the new fields are all unset.
+
+    **The v1 helpers are now shared, and therefore frozen.** The unchanged
+    components -- model, reward, environment, schedule -- reuse their v1
+    projections. A later change to one of them would move *both* versions, so
+    any such change must fork the helper instead. The pinned v1 literal in the
+    test suite is the tripwire for that.
+    """
+    return {
+        "type": "candidate",
+        "version": 2,
+        "model": _model_identity_v1(candidate.model),
+        "data": _data_identity_v2(candidate.data),
+        "training": _training_identity_v2(candidate.training),
+        "reward": _reward_identity_v1(candidate.reward),
+        "environment": _environment_identity_v1(candidate.environment),
+        "schedule": _schedule_identity_v1(candidate.schedule),
+    }
+
+
 class CandidateSpec(FrozenDomainModel):
     """One whole scientific proposition.
 
@@ -439,13 +519,41 @@ class CandidateSpec(FrozenDomainModel):
     def candidate_fingerprint(self) -> str:
         """Return this candidate's identity: *has this hypothesis been explored?*
 
-        Hashes the **v1 identity projection**, not the model. See
-        :func:`candidate_identity_v1` for what that covers and why it is not
-        simply the model's fields.
+        Hashes the **v2 identity projection**, not the model. See
+        :func:`candidate_identity_v2` for what changed from v1 and why v1 was
+        left alone, and :func:`candidate_identity_v1` for why identity is a
+        projection rather than the model's fields.
 
         It does not cover the seed, the evaluator, or anything about execution:
         two replicates of one candidate share this fingerprint, a changed
         grader must never imply a retrain, and the same hypothesis on different
         hardware is the same hypothesis.
         """
+        return fingerprint(candidate_identity_v2(self))
+
+    def candidate_fingerprint_v1(self) -> str:
+        """This candidate's identity under the frozen v1 projection.
+
+        For finding what was recorded before v2. A stored fingerprint is only a
+        digest -- ``experiment_nodes.candidate_fingerprint`` carries no
+        projection version -- so a v1 value and a v2 value for the same
+        candidate simply do not compare equal, and nothing in the stored value
+        says why. This is how a caller asks for the historical one on purpose.
+        """
         return fingerprint(candidate_identity_v1(self))
+
+    def candidate_fingerprint_v2(self) -> str:
+        """This candidate's identity under v2, the current projection."""
+        return fingerprint(candidate_identity_v2(self))
+
+    def candidate_fingerprints_for_lookup(self) -> tuple[str, ...]:
+        """Every identity this candidate may have been recorded under, newest first.
+
+        For a lookup that has to find a candidate whichever projection stored
+        it. The two are deliberately **not** treated as equivalent: v1 cannot
+        see data preprocessing or clipping, so a v1 match is weaker evidence
+        than a v2 one, and a caller that needs to tell them apart can, by
+        position. Deciding what a historical match permits -- reuse, or only
+        comparison -- is the reuse policy's decision (ADR-017), not this one's.
+        """
+        return (self.candidate_fingerprint_v2(), self.candidate_fingerprint_v1())

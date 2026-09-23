@@ -114,6 +114,14 @@ class NativeCompiler:
             )
         if context.output_uri is None:
             raise ValueError("the compilation context has no output_uri to write the model to")
+        output_dir = _local_path(context.output_uri)
+        if output_dir is None:
+            raise ValueError(
+                f"output_uri {context.output_uri!r} is not an absolute local path; the "
+                f"native worker writes the model with save_pretrained() to a local "
+                f"directory, so any other location would be written somewhere else "
+                f"than the plan and the ArtifactProduced event claim"
+            )
 
         training = candidate.training
         optimization = training.optimization
@@ -129,6 +137,8 @@ class NativeCompiler:
         assert candidate.data.format is not None
         assert candidate.data.max_seq_length is not None
         assert candidate.data.packing is not None
+        dataset_path = _local_path(candidate.data.dataset.uri)
+        assert dataset_path is not None
 
         # Always 0 while supports() refuses checkpoint intent; kept in the wire
         # schema so TASK-029 changes the refusal, not the contract.
@@ -137,7 +147,7 @@ class NativeCompiler:
         config = NativeSftConfig(
             model=NativeModel(uri=candidate.model.model.uri),
             data=NativeData(
-                path=candidate.data.dataset.uri,
+                path=dataset_path,
                 format=candidate.data.format,
                 max_seq_length=candidate.data.max_seq_length,
                 packing=candidate.data.packing,
@@ -157,7 +167,7 @@ class NativeCompiler:
             ),
             realization=NativeRealization(
                 seed=context.seed,
-                output_dir=context.output_uri,
+                output_dir=output_dir,
                 checkpoint_every_optimizer_steps=every_steps,
             ),
         )
@@ -171,7 +181,7 @@ class NativeCompiler:
             candidate_fingerprint=candidate.candidate_fingerprint(),
             entrypoint=PythonModuleEntrypoint(module=_WORKER_MODULE, function="main"),
             config=FrozenDict(config.model_dump(mode="json")),
-            outputs=(ArtifactOutput(name="model", uri=context.output_uri, kind="model"),),
+            outputs=(ArtifactOutput(name="model", uri=output_dir, kind="model"),),
             resources=ResourceRequirements(workers=1),
             checkpoint=CheckpointExecutionContract(
                 store_uri=context.checkpoint_store_uri,
@@ -224,9 +234,7 @@ def _data_refusals(candidate: CandidateSpec) -> Iterator[str]:
     if data.packing is None:
         yield "data.packing is undeclared; it decides whether examples share sequences"
 
-    # Reading the declared string, not the filesystem.
-    location = dataset.uri.removeprefix("file://")
-    if not os.path.isabs(location):
+    if _local_path(dataset.uri) is None:
         yield (
             f"data.dataset.uri {dataset.uri!r} is not an absolute local path; the "
             f"native worker reads local JSONL, and a relative path would depend on "
@@ -236,6 +244,29 @@ def _data_refusals(candidate: CandidateSpec) -> Iterator[str]:
         yield "data.dataset.revision is declared; a local file has no revisions to select"
     if dataset.split is not None:
         yield "data.dataset.split is declared; the native loader reads a whole file"
+    for field in (
+        "content_digest",
+        "transform_fingerprint",
+        "tokenizer_fingerprint",
+        "template_fingerprint",
+    ):
+        if getattr(dataset, field) is not None:
+            yield (
+                f"data.dataset.{field} is declared; it is part of the candidate's "
+                f"identity, but the native worker cannot verify it and would train on "
+                f"whatever the file and its own preprocessing currently produce"
+            )
+
+
+def _local_path(uri: str) -> str | None:
+    """*uri* as an absolute local path, or ``None`` if it is not one.
+
+    Reading the declared string, not the filesystem. ``file://`` is accepted and
+    removed, because the worker hands the result to ``Path``; any other scheme
+    is not absolute and so is not local.
+    """
+    location = uri.removeprefix("file://")
+    return location if os.path.isabs(location) else None
 
 
 def _model_refusals(candidate: CandidateSpec) -> Iterator[str]:
@@ -243,6 +274,12 @@ def _model_refusals(candidate: CandidateSpec) -> Iterator[str]:
         yield (
             "model.model.revision is declared; the native loader takes no revision, "
             "so it would load whatever the URI currently points at"
+        )
+    if candidate.model.model.digest is not None:
+        yield (
+            "model.model.digest is declared; it is part of the candidate's identity, "
+            "but the native worker cannot verify it and would train on whatever the "
+            "URI currently holds"
         )
 
 
@@ -271,6 +308,11 @@ def _optimization_refusals(candidate: CandidateSpec) -> Iterator[str]:
             )
         if schedule.params:
             yield f"{prefix}.lr_schedule.params are declared; the native trainer takes none"
+        if (schedule.warmup_steps or 0) > 0 and (schedule.warmup_ratio or 0) > 0:
+            yield (
+                f"{prefix}.lr_schedule declares both warmup_steps and warmup_ratio; the "
+                f"native trainer uses warmup_steps and silently ignores the ratio"
+            )
 
     optimizer = optimization.optimizer
     if optimizer is None:

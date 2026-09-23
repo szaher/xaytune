@@ -98,9 +98,8 @@ def train_config_from(config: Mapping[str, Any]) -> TrainConfig:
         model=ModelConfig(
             name=spec.model.uri,
             quantization=None,
-            # As the artifact declares. The model artifact is identity already
-            # (its URI and revision), so this is determined by the candidate
-            # rather than invented here.
+            # As the artifact declares, so the checkpoint's own dtype decides
+            # rather than one invented here.
             dtype="auto",
             trust_remote_code=False,
         ),

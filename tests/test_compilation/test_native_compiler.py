@@ -299,6 +299,30 @@ def test_an_undeclared_scientific_value_is_refused(field: str, candidate) -> Non
         ),
         ("a relative dataset path", lambda: _with_data(dataset=DatasetRef(uri="data.jsonl"))),
         ("a remote dataset", lambda: _with_data(dataset=DatasetRef(uri="hf://org/set"))),
+        (
+            "a model digest it cannot verify",
+            lambda: _candidate(model=ModelSpec(model=ModelRef(uri=MODEL, digest="sha256:abc"))),
+        ),
+        *[
+            (
+                f"a dataset {field} it cannot verify",
+                lambda field=field: _with_data(
+                    dataset=DatasetRef(uri=DATASET, **{field: "sha256:abc"})
+                ),
+            )
+            for field in (
+                "content_digest",
+                "transform_fingerprint",
+                "tokenizer_fingerprint",
+                "template_fingerprint",
+            )
+        ],
+        (
+            "both warmup forms, one of which it would ignore",
+            lambda: _with_optimization(
+                lr_schedule=LRScheduleSpec(name="linear", warmup_steps=13, warmup_ratio=0.1)
+            ),
+        ),
     ],
 )
 def test_what_the_native_loop_cannot_honour_is_refused(label: str, candidate) -> None:
@@ -382,3 +406,97 @@ def test_the_config_is_not_train_config() -> None:
 
     assert config["api_version"] == "xaytune.native-sft/v1alpha1"
     assert "recipe" not in config, "a TrainConfig field leaked into the boundary"
+
+
+# ---- identity it cannot verify, and locations it cannot reach -----------
+
+
+def test_a_declared_identity_constraint_is_named_in_the_refusal() -> None:
+    """The fingerprint would carry the digest while the worker ignored it.
+
+    Each identity field is refused by name, so a planner learns which
+    constraint the native path cannot keep rather than that "something" failed.
+    """
+    from xaytune.compilation.native import NativeCompiler
+
+    candidate = _candidate(
+        model=ModelSpec(model=ModelRef(uri=MODEL, digest="sha256:m")),
+        data=DataSpec(
+            dataset=DatasetRef(
+                uri=DATASET,
+                content_digest="sha256:c",
+                transform_fingerprint="sha256:t",
+                tokenizer_fingerprint="sha256:k",
+                template_fingerprint="sha256:p",
+            ),
+            format="text",
+            max_seq_length=333,
+            packing=False,
+        ),
+    )
+
+    reasons = " ".join(NativeCompiler().supports(candidate).reasons)
+
+    for field in (
+        "model.model.digest",
+        "data.dataset.content_digest",
+        "data.dataset.transform_fingerprint",
+        "data.dataset.tokenizer_fingerprint",
+        "data.dataset.template_fingerprint",
+    ):
+        assert field in reasons, field
+
+
+@pytest.mark.parametrize(
+    ("steps", "ratio"),
+    [(13, None), (None, 0.1), (13, 0.0), (0, 0.1), (None, None)],
+)
+def test_one_warmup_form_is_honourable(steps: int | None, ratio: float | None) -> None:
+    """The boundary is two *effective* warmups, not two fields being present."""
+    from xaytune.compilation.native import NativeCompiler
+
+    candidate = _with_optimization(
+        lr_schedule=LRScheduleSpec(name="linear", warmup_steps=steps, warmup_ratio=ratio)
+    )
+
+    assert NativeCompiler().supports(candidate)
+
+
+@pytest.mark.parametrize(
+    ("output_uri", "expected"),
+    [("/out/run_1", "/out/run_1"), ("file:///out/run_1", "/out/run_1")],
+)
+def test_the_plan_and_the_worker_agree_on_one_local_output(output_uri: str, expected: str) -> None:
+    """The plan's declared output and where the worker writes are one path."""
+    plan = _compile(output_uri=output_uri)
+
+    assert plan.outputs[0].uri == expected
+    assert plan.config["realization"]["output_dir"] == expected
+    assert _train_config_for(plan).output.dir == expected
+
+
+@pytest.mark.parametrize(
+    "output_uri",
+    ["out/run_1", "file://out/run_1", "s3://bucket/models/run_1", "https://host/run_1"],
+)
+def test_an_output_the_worker_cannot_write_to_is_an_error(output_uri: str) -> None:
+    """``Path("s3://b/k")`` is the local path ``s3:/b/k``, not an S3 location.
+
+    Accepting it would make the plan, the worker's actual write and the
+    ArtifactProduced event name three different places.
+    """
+    with pytest.raises(ValueError, match="absolute local path"):
+        _compile(output_uri=output_uri)
+
+
+def test_a_file_uri_dataset_reaches_the_worker_as_a_path() -> None:
+    """The worker hands the dataset location to ``Path``, which knows no schemes."""
+    plan = _compile(_with_data(dataset=DatasetRef(uri=f"file://{DATASET}")))
+
+    assert _train_config_for(plan).data.path == DATASET
+
+
+def _train_config_for(plan):
+    from xaytune.workers.native import train_config_from
+
+    return train_config_from(plan.config)

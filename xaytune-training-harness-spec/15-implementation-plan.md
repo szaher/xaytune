@@ -135,8 +135,8 @@ be acted on: ADR-001 is now `Accepted` because everything after it assumes it,
 ADR-007 because ADR-015 depends on it, and ADR-006's genuinely open half became
 ADR-017 rather than a second status on one document.
 
-**ADR-005 was accepted on 2026-09-21, so band B is unblocked and PR-004 may
-start.** It was expanded before acceptance rather than accepted as written: the
+ADR-005 was accepted on 2026-09-21, which unblocked band B. (Status as of
+2026-09-23: PR-004 through PR-010 have merged and PR-011 is next.) It was expanded before acceptance rather than accepted as written: the
 original fifteen lines covered one transaction, which was adequate when band B
 owned the experiment aggregates and the outbox. Band B also owns
 `RuntimeOperation`, the Action substrate and its linkage, operation and
@@ -386,7 +386,13 @@ CandidateSpec → NativeCompiler → TrainingExecutionSpec → LocalRuntime
 
 ### PR-011 — TRLCompiler
 
-Start with SFT only.
+Start with SFT only, and plain-text datasets only: prompt/completion and chat
+datasets make TRL choose completion-only loss, which the candidate cannot yet
+express. The second compiler is the proof that the boundary is
+trainer-neutral, so the acceptance test runs one candidate through both
+compilers and asserts the control-plane contract is the same -- not the
+weights or the losses. Its runs share the candidate's fingerprint and differ in
+execution identity (ADR-011 §5).
 
 ### PR-012 — public ExperimentHandle / EmbeddedControllerHost
 

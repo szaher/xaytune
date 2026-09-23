@@ -48,7 +48,7 @@ These describe the planned ecosystem, not an installed-backend support matrix.
 
 ## Development status
 
-Status as of **2026-09-22**, after the Band B hardening merged.
+Status as of **2026-09-23**, after PR-010 merged.
 
 ### Completed foundation
 
@@ -74,9 +74,13 @@ candidates already recorded. `RunHistoryFingerprint` and
 `ArtifactLineageFingerprint` separate what a run *did* from what produced its
 artifact.
 
-Next is `TrainerCompiler`, `TrainingExecutionSpec` and capability resolution.
-Restart-safe LocalRuntime, Native/TRL compiler adapters, the embedded controller,
-and runtime-operation reconciliation follow within this band.
+`TrainerCompiler`, `TrainingExecutionSpec` and capability resolution, the
+restart-safe `LocalRuntime`, the v1alpha2 telemetry contract, and the first
+end-to-end run -- `NativeCompiler` and `NativeWorker` -- have landed.
+
+Next is `TRLCompiler`: a second, independent trainer behind the same contract.
+The embedded controller (`ExperimentHandle`) and runtime-operation
+reconciliation follow within this band.
 
 <details>
 <summary>Foundation implementation history</summary>
@@ -86,6 +90,11 @@ Band B landed through [SQLite repository (#18)](https://github.com/szaher/xaytun
 [Action substrate (#20)](https://github.com/szaher/xaytune/pull/20),
 [experiment graph (#21)](https://github.com/szaher/xaytune/pull/21), and
 [persistence hardening (#22)](https://github.com/szaher/xaytune/pull/22).
+Band C so far: [CandidateSpec and fingerprints (#24)](https://github.com/szaher/xaytune/pull/24),
+[compile/execute contracts (#25)](https://github.com/szaher/xaytune/pull/25),
+[LocalRuntime (#26)](https://github.com/szaher/xaytune/pull/26),
+[telemetry contracts (#27)](https://github.com/szaher/xaytune/pull/27), and
+[NativeCompiler and NativeWorker (#28)](https://github.com/szaher/xaytune/pull/28).
 The [implementation plan](xaytune-training-harness-spec/15-implementation-plan.md)
 defines the remaining contracts and acceptance gates.
 

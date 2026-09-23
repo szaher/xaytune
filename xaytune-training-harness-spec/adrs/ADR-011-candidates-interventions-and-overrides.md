@@ -126,6 +126,21 @@ training: two runs executing the same declared schedule remain replicates of one
 candidate. A reactive LR drop was not declared, so it changes
 both run fingerprints while leaving the node and candidate intact.
 
+**Replicates share an execution implementation, not only a candidate**
+(amended 2026-09-23, before PR-011 introduced a second compiler). A native run
+and a TRL run of one candidate share a `CandidateFingerprint`: they test the
+same scientific proposition, and candidate reuse and artifact reuse treat them
+as the same candidate. They are **not** interchangeable replicates. Two trainers
+implementing "AdamW, linear warmup, gradient clipping" differ in loss
+reduction, clipping order, data ordering and numerical details, so their
+trajectories can diverge for reasons the candidate does not describe. The
+compiler -- `CompilerIdentity` name and version -- is part of
+`ExecutionFingerprint`, and statistical aggregation across replicates (means,
+variances, significance between candidates) groups runs by
+`CandidateFingerprint` **and** execution implementation. Aggregating across
+implementations is something a later policy may permit explicitly; it never
+happens by default.
+
 ### 6. Evaluation is not part of candidate identity
 
 `CandidateSpec` contains model, data, training, reward and environment. It does **not**

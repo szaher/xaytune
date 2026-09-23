@@ -39,6 +39,8 @@ from xaytune.workers.trl_schema import (
     TRLSftConfig,
 )
 
+pytestmark = pytest.mark.trl
+
 
 def _spec(**optimization: object) -> TRLSftConfig:
     fields: dict[str, object] = {

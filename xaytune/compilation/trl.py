@@ -149,6 +149,8 @@ class TRLCompiler:
         assert candidate.data.max_seq_length is not None
         dataset_path = local_path(candidate.data.dataset.uri)
         assert dataset_path is not None
+        model_path = local_path(candidate.model.model.uri)
+        assert model_path is not None
 
         schedule = optimization.lr_schedule
         warmup_steps = schedule.warmup_steps or 0
@@ -162,7 +164,7 @@ class TRLCompiler:
         beta1, beta2 = tuple(optimization.optimizer.betas) or _ADAMW_DEFAULT_BETAS
 
         config = TRLSftConfig(
-            model=TRLModel(uri=candidate.model.model.uri),
+            model=TRLModel(uri=model_path),
             data=TRLData(path=dataset_path, max_length=candidate.data.max_seq_length),
             optimization=TRLOptimization(
                 learning_rate=optimization.learning_rate,

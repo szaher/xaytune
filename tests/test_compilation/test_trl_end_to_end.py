@@ -47,7 +47,14 @@ from .conftest import (
     tiny_model,
 )
 
-pytest.importorskip("trl")
+pytestmark = pytest.mark.trl
+
+
+@pytest.fixture(autouse=True)
+def _trl_installed() -> None:
+    """Per test, not at import: a module-level skip happens during collection,
+    before ``XAYTUNE_REQUIRE_TRL`` can turn it into a failure."""
+    pytest.importorskip("trl")
 
 
 def test_an_sft_candidate_compiles_runs_and_reports_through_trl(tmp_path) -> None:

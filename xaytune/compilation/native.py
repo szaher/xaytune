@@ -136,13 +136,15 @@ class NativeCompiler:
         assert candidate.data.packing is not None
         dataset_path = local_path(candidate.data.dataset.uri)
         assert dataset_path is not None
+        model_path = local_path(candidate.model.model.uri)
+        assert model_path is not None
 
         # Always 0 while supports() refuses checkpoint intent; kept in the wire
         # schema so TASK-029 changes the refusal, not the contract.
         every_steps = 0
 
         config = NativeSftConfig(
-            model=NativeModel(uri=candidate.model.model.uri),
+            model=NativeModel(uri=model_path),
             data=NativeData(
                 path=dataset_path,
                 format=candidate.data.format,

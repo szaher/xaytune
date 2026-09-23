@@ -377,3 +377,50 @@ def test_compiling_needs_no_trl() -> None:
         [sys.executable, "-c", program], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
+
+
+# ---- the model is one the worker can pin ----------------------------------
+
+
+@pytest.mark.parametrize("compiler", ["native", "trl"])
+@pytest.mark.parametrize("uri", ["Qwen/Qwen3-8B", "gpt2", "models/tiny", "hf://org/model"])
+def test_a_model_the_worker_cannot_pin_is_refused_by_both(compiler: str, uri: str) -> None:
+    """A hub name loads whatever it points at the day the worker starts.
+
+    One rule in ``_sft``, so the two compilers cannot disagree about it.
+    """
+    from xaytune.compilation.native import NativeCompiler
+    from xaytune.compilation.trl import TRLCompiler
+
+    instance = NativeCompiler() if compiler == "native" else TRLCompiler()
+    result = instance.supports(_candidate(model=ModelSpec(model=ModelRef(uri=uri))))
+
+    assert not result
+    assert any("model.model.uri" in reason for reason in result.reasons)
+
+
+@pytest.mark.parametrize("compiler", ["native", "trl"])
+def test_a_file_uri_model_reaches_the_worker_as_a_path(compiler: str) -> None:
+    """``from_pretrained`` knows no schemes, as ``Path`` does not."""
+    from xaytune.compilation.native import NativeCompiler
+    from xaytune.compilation.trl import TRLCompiler
+
+    instance = NativeCompiler() if compiler == "native" else TRLCompiler()
+    candidate = _candidate(model=ModelSpec(model=ModelRef(uri=f"file://{MODEL}")))
+    if compiler == "native":
+        # The native trainer cannot set betas; this candidate declares some.
+        candidate = candidate.model_copy(
+            update={
+                "training": candidate.training.model_copy(
+                    update={
+                        "optimization": candidate.training.optimization.model_copy(
+                            update={"optimizer": OptimizerSpec(name="adamw", weight_decay=0.0)}
+                        )
+                    }
+                )
+            }
+        )
+
+    spec = instance.compile(candidate, _context())
+
+    assert spec.config["model"]["uri"] == MODEL

@@ -121,6 +121,16 @@ def _data_refusals(candidate: CandidateSpec) -> Iterator[str]:
 
 def _model_refusals(candidate: CandidateSpec) -> Iterator[str]:
     model = candidate.model.model
+    if local_path(model.uri) is None:
+        # "Qwen/Qwen3-8B" is a hub name, and without a revision the loader
+        # fetches whatever that name points at on the day the worker starts.
+        # The candidate would name one model and the run could train another;
+        # a digest or revision would pin it, and neither can be verified yet.
+        yield (
+            f"model.model.uri {model.uri!r} is not an absolute local path; the "
+            f"worker cannot pin a hub name to the model the candidate means, so "
+            f"it would train whatever the name resolves to when it starts"
+        )
     if model.revision is not None:
         yield (
             "model.model.revision is declared; the worker's loader takes no revision, "

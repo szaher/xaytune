@@ -48,9 +48,26 @@ class CorruptRecordError(Exception):
     can.
     """
 
-    def __init__(self, path: Path, line_number: int, reason: str) -> None:
+    def __init__(
+        self,
+        path: Path,
+        line_number: int,
+        reason: str,
+        *,
+        records: tuple[object, ...] = (),
+        line_numbers: tuple[int, ...] = (),
+    ) -> None:
         self.path = path
         self.line_number = line_number
+        self.line_numbers = line_numbers or (line_number,)
+        self.records = records
+        """Every valid record read in the same call, in order.
+
+        Carried rather than discarded. The offset has already moved past the
+        whole batch, so a record not delivered here is never delivered: one
+        corrupt line would take the good records on either side of it down
+        with it, which is a worse hole than the one being reported.
+        """
         super().__init__(f"{path} line {line_number} is not a valid record: {reason}")
 
 
@@ -77,6 +94,16 @@ class AppendOnlyJsonlReader(Generic[T]):
         """Bytes consumed so far. Diagnostic only, never protocol state."""
         return self._offset
 
+    @property
+    def pending_bytes(self) -> int:
+        """Bytes after the last newline, not yet a record.
+
+        Zero once a writer has finished cleanly. Non-zero after its writer is
+        known to have stopped means the last record was cut off mid-write --
+        which a reader can report but, by design, never deliver.
+        """
+        return len(self._tail)
+
     def read_new(self) -> tuple[T, ...]:
         """Return records completed since the previous call.
 
@@ -101,7 +128,8 @@ class AppendOnlyJsonlReader(Generic[T]):
         buffered = self._tail + chunk
         *complete, self._tail = buffered.split(b"\n")
 
-        records = []
+        records: list[T] = []
+        failures: list[CorruptRecordError] = []
         for raw in complete:
             self._lines_read += 1
             if not raw.strip():
@@ -109,7 +137,25 @@ class AppendOnlyJsonlReader(Generic[T]):
                 # because the alternative makes a writer's trailing newline a
                 # fatal error while saying nothing about data integrity.
                 continue
-            records.append(self._parse(raw, self._lines_read))
+            try:
+                records.append(self._parse(raw, self._lines_read))
+            except CorruptRecordError as exc:
+                # Keep reading: the rest of the batch is still valid, and the
+                # offset is already past it.
+                failures.append(exc)
+
+        if failures:
+            first = failures[0]
+            reason = str(first).split(": ", 1)[-1]
+            if len(failures) > 1:
+                reason += f" (and {len(failures) - 1} more)"
+            raise CorruptRecordError(
+                self._path,
+                first.line_number,
+                reason,
+                records=tuple(records),
+                line_numbers=tuple(failure.line_number for failure in failures),
+            )
         return tuple(records)
 
     def _parse(self, raw: bytes, line_number: int) -> T:

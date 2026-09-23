@@ -11,6 +11,8 @@ are written down.
 <root>/registry.db              operations and workloads (durable identity)
 <root>/workloads/<id>/plan.json      what was submitted
                      cancel.request  a cancellation the launcher must honour
+                     worker-config.json  the compiled config, for the worker
+                     observations.jsonl  what the worker saw (transport only)
                      started.json    written by the launcher once the worker is up
                      finished.json   written by the launcher once it has exited
                      events.jsonl    telemetry, one envelope per line
@@ -43,10 +45,12 @@ __all__ = [
     "CANCEL",
     "EVENTS",
     "FINISHED",
+    "OBSERVATIONS",
     "PLAN",
     "STARTED",
     "STDERR",
     "STDOUT",
+    "WORKER_CONFIG",
     "WorkloadPaths",
     "read_json",
     "write_atomic",
@@ -57,6 +61,8 @@ STARTED = "started.json"
 FINISHED = "finished.json"
 EVENTS = "events.jsonl"
 CANCEL = "cancel.request"
+WORKER_CONFIG = "worker-config.json"
+OBSERVATIONS = "observations.jsonl"
 STDOUT = "stdout.log"
 STDERR = "stderr.log"
 
@@ -88,6 +94,14 @@ class WorkloadPaths:
     @property
     def cancel(self) -> Path:
         return self.directory / CANCEL
+
+    @property
+    def worker_config(self) -> Path:
+        return self.directory / WORKER_CONFIG
+
+    @property
+    def observations(self) -> Path:
+        return self.directory / OBSERVATIONS
 
     @property
     def stdout(self) -> Path:

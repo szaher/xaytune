@@ -37,17 +37,26 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
 from xaytune.core.clock import utc_now
 from xaytune.core.execution import CommandEntrypoint, ResolvedExecutionPlan
+from xaytune.core.telemetry import EvaluationObservation, TrainingObservation
 from xaytune.runtimes import (
     EvaluationEventPayload,
     RuntimeEventEnvelope,
     RuntimeEventPayload,
     TrainingEventPayload,
 )
+from xaytune.runtimes.local.jsonl import AppendOnlyJsonlReader, CorruptRecordError
 from xaytune.runtimes.local.paths import WorkloadPaths, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRegistry
-from xaytune.runtimes.worker import TOPOLOGY_VARIABLES
+from xaytune.runtimes.worker import (
+    OBSERVATIONS_PATH_ENV,
+    TOPOLOGY_VARIABLES,
+    WORKER_CONFIG_PATH_ENV,
+    WorkerObservationRecord,
+)
 
 __all__ = ["main", "run"]
 
@@ -85,7 +94,7 @@ def _argv(plan: ResolvedExecutionPlan) -> list[str]:
     ]
 
 
-def _environment(plan: ResolvedExecutionPlan) -> dict[str, str]:
+def _environment(plan: ResolvedExecutionPlan, paths: WorkloadPaths) -> dict[str, str]:
     """The worker's environment: this process's, plus what the plan declares.
 
     Inherited rather than replaced, because a bare environment has no ``PATH``
@@ -102,6 +111,10 @@ def _environment(plan: ResolvedExecutionPlan) -> dict[str, str]:
     environment.update({key: str(value) for key, value in plan.spec.environment.items()})
     environment["XAYTUNE_TARGET_KIND"] = plan.target.kind
     environment["XAYTUNE_TARGET_ID"] = plan.target.id
+    # Set after the plan's own environment, so a plan cannot redirect them:
+    # where the config and observations live is this runtime's decision.
+    environment[WORKER_CONFIG_PATH_ENV] = str(paths.worker_config)
+    environment[OBSERVATIONS_PATH_ENV] = str(paths.observations)
     return environment
 
 
@@ -119,14 +132,54 @@ class _EventWriter:
         return self._generation
 
     def emit(self, event_type: str, **data: Any) -> None:
+        """Record something the launcher itself observed."""
+        self._append(_payload(self._plan, event_type, data), emitted_at=utc_now())
+
+    def emit_observation(self, record: WorkerObservationRecord[Any]) -> None:
+        """Wrap something the worker observed, and record it.
+
+        The same sequencer as :meth:`emit`, on purpose: one counter, one file,
+        one writer. Two paths each assigning sequence numbers would be the two
+        writers ADR-014 §1a forbids, just inside one process.
+
+        ``emitted_at`` is when the worker observed it, not now -- otherwise it
+        would record when this loop happened to poll.
+
+        Raises:
+            ValueError: If the observation cannot be enveloped for this target,
+                for instance a correlation context naming a different attempt.
+        """
+        if self._plan.target.kind == "training-attempt":
+            payload: RuntimeEventPayload = TrainingEventPayload(data=record.observation)
+        else:
+            payload = EvaluationEventPayload(data=record.observation)
+        self._append(
+            payload,
+            emitted_at=record.observed_at,
+            context=record.context,
+            trace_context=record.trace_context,
+        )
+
+    def _append(
+        self,
+        payload: RuntimeEventPayload,
+        *,
+        emitted_at: Any,
+        context: Any = None,
+        trace_context: Any = None,
+    ) -> None:
         envelope = RuntimeEventEnvelope(
             event_id=f"{self._plan.target.id}-{self._generation}-{self._sequence}",
             target=self._plan.target,
             stream_generation=self._generation,
             sequence=self._sequence,
-            emitted_at=utc_now(),
-            payload=_payload(self._plan, event_type, data),
+            emitted_at=emitted_at,
+            payload=payload,
+            context=context,
+            trace_context=trace_context,
         )
+        # Only after the envelope is known valid: a refused observation must
+        # not consume a sequence number, or the stream would have a gap in it.
         self._sequence += 1
 
         with self._paths.events.open("a", encoding="utf-8") as stream:
@@ -222,13 +275,18 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
         )
         return 0
 
+    # Written before the worker exists, so it can never start without it.
+    paths.worker_config.write_text(
+        json.dumps(dict(plan.spec.config), sort_keys=True), encoding="utf-8"
+    )
+
     with paths.stdout.open("ab") as out, paths.stderr.open("ab") as err:
         try:
             child = subprocess.Popen(
                 _argv(plan),
                 stdout=out,
                 stderr=err,
-                env=_environment(plan),
+                env=_environment(plan, paths),
                 cwd=str(plan.runtime_options.get("working_directory", directory)),
                 # Its own session, so the worker leads a process group that
                 # contains it and everything it starts. Cancelling a training
@@ -265,9 +323,13 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
             "started_at": utc_now().isoformat(),
         },
     )
+    # First, and before any drain: whatever the worker writes waits in its
+    # file until the loop below reads it, so this is sequence 0 however the
+    # operating system schedules the two processes.
     events.emit("WorkerReady", pid=child.pid)
 
-    cancelled = _wait_honouring_cancellation(child, paths)
+    observations = AppendOnlyJsonlReader(paths.observations, _observation_adapter(plan))
+    cancelled = _supervise(child, paths, events, observations)
     code = child.returncode
 
     if code != 0:
@@ -290,7 +352,94 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
     return code
 
 
-def _wait_honouring_cancellation(child: subprocess.Popen[bytes], paths: WorkloadPaths) -> bool:
+def _observation_adapter(plan: ResolvedExecutionPlan) -> TypeAdapter[Any]:
+    """Validate worker records against the family this target may carry.
+
+    The two vocabularies share members, so the family is chosen by the typed
+    target and not inferred from the record: an evaluation worker reporting
+    ``CheckpointCommitted`` is refused here, before it becomes an envelope.
+    """
+    if plan.target.kind == "training-attempt":
+        return TypeAdapter(WorkerObservationRecord[TrainingObservation])
+    return TypeAdapter(WorkerObservationRecord[EvaluationObservation])
+
+
+def _drain(observations: AppendOnlyJsonlReader[Any], events: _EventWriter) -> None:
+    """Move everything the worker has reported so far into the event stream.
+
+    **The supervisor does not die of bad worker output.** The worker is the
+    user's code, and if a corrupt line or an unwrappable observation killed the
+    launcher, nothing would ever write ``finished.json`` -- a workload that
+    finished would report ``unknown`` forever. So each is recorded as an
+    incident, the valid records around it still go through, and supervision
+    continues.
+    """
+    try:
+        records = observations.read_new()
+        corrupt: CorruptRecordError | None = None
+    except CorruptRecordError as exc:
+        records, corrupt = exc.records, exc
+
+    for record in records:
+        try:
+            events.emit_observation(record)
+        except (ValidationError, ValueError) as exc:
+            events.emit(
+                "IncidentObserved",
+                reason="invalid-observation",
+                detail=f"the worker reported an observation this target cannot carry: {exc}",
+            )
+
+    if corrupt is not None:
+        events.emit(
+            "IncidentObserved",
+            reason="corrupt-observation",
+            detail=(
+                f"lines {', '.join(str(n) for n in corrupt.line_numbers)} of the worker's "
+                f"observations were not valid records: {corrupt}"
+            ),
+        )
+
+
+def _supervise(
+    child: subprocess.Popen[bytes],
+    paths: WorkloadPaths,
+    events: _EventWriter,
+    observations: AppendOnlyJsonlReader[Any],
+) -> bool:
+    """Relay observations and honour cancellation until the worker exits.
+
+    **Drained once more after exit, before anything else.** A worker commonly
+    reports ``TrainingCompleted`` and exits immediately. If the loop saw the
+    exit first and returned, that last observation would still be sitting in
+    the file, unread, when ``finished.json`` was written -- a completed run
+    recorded without its completion, intermittently, and mostly not on the
+    machine where anyone was looking. Nothing can be written after the worker
+    has exited, so one more read is enough.
+
+    A record still cut off after that read means the worker died mid-write;
+    that is reported rather than silently dropped.
+    """
+    cancelled = _wait_honouring_cancellation(child, paths, lambda: _drain(observations, events))
+    _drain(observations, events)
+
+    if observations.pending_bytes:
+        events.emit(
+            "IncidentObserved",
+            reason="truncated-observation",
+            detail=(
+                f"the worker exited mid-write, leaving {observations.pending_bytes} "
+                f"bytes that were never a complete record"
+            ),
+        )
+    return cancelled
+
+
+def _wait_honouring_cancellation(
+    child: subprocess.Popen[bytes],
+    paths: WorkloadPaths,
+    on_poll: Any = None,
+) -> bool:
     """Wait for the worker, stopping it if a cancellation appears.
 
     The launcher signals, and the controller does not, because only the
@@ -312,6 +461,8 @@ def _wait_honouring_cancellation(child: subprocess.Popen[bytes], paths: Workload
     """
     signalled = False
     while child.poll() is None:
+        if on_poll is not None:
+            on_poll()
         if not signalled and paths.cancel.exists():
             signalled = True
             try:

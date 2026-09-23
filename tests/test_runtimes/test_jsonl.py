@@ -169,3 +169,30 @@ def test_a_fresh_reader_replays_the_whole_file(tmp_path: Path) -> None:
     assert used.read_new() == ()
 
     assert [r.n for r in _reader(path).read_new()] == [0, 1, 2, 3, 4]
+
+
+def test_a_corrupt_line_does_not_take_its_neighbours_with_it(tmp_path: Path) -> None:
+    """Raise, but hand over every valid record from the same read.
+
+    The offset has already moved past the whole batch, so a record not
+    delivered here is never delivered. Without this, one garbage line written
+    by a worker would silently cost the good records on either side of it --
+    a worse hole than the one being reported.
+    """
+    path = tmp_path / "records.jsonl"
+    _append(
+        path,
+        json.dumps({"n": 1}) + "\n",
+        "garbage\n",
+        json.dumps({"n": 3}) + "\n",
+        "{also bad}\n",
+    )
+    reader = _reader(path)
+
+    with pytest.raises(CorruptRecordError) as caught:
+        reader.read_new()
+
+    assert [r.n for r in caught.value.records] == [1, 3]
+    assert caught.value.line_numbers == (2, 4)
+    assert "and 1 more" in str(caught.value)
+    assert reader.read_new() == (), "reported once, not raised again on every poll"

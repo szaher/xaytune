@@ -21,13 +21,9 @@ checked that the default cannot matter.
 from __future__ import annotations
 
 import math
-import os
-import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
-
-from pydantic import ValidationError
+from typing import TYPE_CHECKING, Any
 
 from xaytune.config.schema import (
     DataConfig,
@@ -39,12 +35,8 @@ from xaytune.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from xaytune.core.ids import ArtifactId
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import ArtifactRef
 from xaytune.core.telemetry import (
-    ArtifactProducedPayload,
-    IncidentObservedPayload,
     NumericalInstabilityObserved,
     TrainingCompletedPayload,
     TrainingFailedPayload,
@@ -55,6 +47,13 @@ from xaytune.runtimes.worker import (
     OBSERVATIONS_PATH_ENV,
     WORKER_CONFIG_PATH_ENV,
     ObservationWriter,
+)
+from xaytune.workers.common import (
+    failure_reason,
+    nonfinite,
+    publish_model,
+    report,
+    require_environment,
 )
 from xaytune.workers.native_schema import NativeSftConfig
 
@@ -204,7 +203,7 @@ class _NativeObservations:
                 lambda: NumericalInstabilityObserved(
                     optimizer_step=step,
                     quantity="loss",
-                    observation=_nonfinite(loss),
+                    observation=nonfinite(loss),
                 )
             )
             return
@@ -233,60 +232,7 @@ class _NativeObservations:
         self._report(lambda: TrainingCompletedPayload(optimizer_step=state.global_step))
 
     def _report(self, build: Any) -> None:
-        """Build one observation and write it, keeping the two failures apart.
-
-        A value the vocabulary refuses is one bad observation: it is reported
-        on stderr and skipped, and training continues, because the observation
-        channel is not authoritative and one malformed metric is no reason to
-        lose a run. A failure to *write* is not caught: that is the runtime's
-        channel broken, which is an execution-contract failure.
-        """
-        try:
-            observation = build()
-        except ValidationError as exc:
-            print(f"xaytune: dropped an observation the vocabulary refused: {exc}", file=sys.stderr)
-            return
-        self._writer.write(observation)
-
-
-_WEIGHT_PATTERNS = ("*.safetensors", "*.bin", "*.safetensors.index.json", "*.bin.index.json")
-
-
-def _require_model_artifact(target: Path, *, with_tokenizer: bool) -> None:
-    """Confirm the artifact exists, rather than inferring it from silence.
-
-    ``save_pretrained`` does not always raise when it fails. Given a path that
-    is a file, it logs "should be a directory" and returns -- and a worker that
-    read *no exception* as *written* would announce a model that does not
-    exist, under a run reporting success. So the result is checked for the
-    files a loader needs: a config and the weights, and the tokenizer's
-    config when one was saved.
-
-    Structural rather than a full load. Loading the model back would prove
-    more, at the cost of a second copy of the weights in memory on the
-    training host.
-
-    Raises:
-        FileNotFoundError: Naming what is missing.
-    """
-    if not target.is_dir():
-        raise FileNotFoundError(f"{target} is not a directory; nothing was written there")
-
-    missing = []
-    if not (target / "config.json").is_file():
-        missing.append("config.json")
-    if not any(any(target.glob(pattern)) for pattern in _WEIGHT_PATTERNS):
-        missing.append("model weights")
-    if with_tokenizer and not (target / "tokenizer_config.json").is_file():
-        missing.append("tokenizer_config.json")
-    if missing:
-        raise FileNotFoundError(f"{target} is missing {', '.join(missing)}")
-
-
-def _nonfinite(value: float) -> Literal["nan", "positive-infinity", "negative-infinity"]:
-    if math.isnan(value):
-        return "nan"
-    return "positive-infinity" if value > 0 else "negative-infinity"
+        report(self._writer, build)
 
 
 def register_native_observation_callbacks(
@@ -303,16 +249,6 @@ def register_native_observation_callbacks(
     callbacks.on("train_end")(observations.train_end)
 
 
-def _require_environment(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(
-            f"{name} is not set; NativeWorker runs under a runtime that provides it, "
-            f"and without it there is no config to run or channel to report on"
-        )
-    return value
-
-
 def main(*_arguments: str) -> int:
     """Run one compiled native SFT config, reporting as it goes.
 
@@ -321,8 +257,8 @@ def main(*_arguments: str) -> int:
     worker exists to attach one. The recipe stays the legacy convenience API;
     this is the implementation behind the execution boundary.
     """
-    config_path = Path(_require_environment(WORKER_CONFIG_PATH_ENV))
-    writer = ObservationWriter(Path(_require_environment(OBSERVATIONS_PATH_ENV)))
+    config_path = Path(require_environment(WORKER_CONFIG_PATH_ENV))
+    writer = ObservationWriter(Path(require_environment(OBSERVATIONS_PATH_ENV)))
     writer.verify()
 
     worker_config = NativeSftConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
@@ -353,7 +289,7 @@ def main(*_arguments: str) -> int:
         # launcher separately records the non-zero exit as process-level
         # evidence, and the two are not duplicates.
         try:
-            writer.write(TrainingFailedPayload(reason=_reason(exc), detail=str(exc)))
+            writer.write(TrainingFailedPayload(reason=failure_reason(exc), detail=str(exc)))
         except OSError:
             # The channel failing too must not replace the error that matters.
             pass
@@ -369,56 +305,5 @@ def main(*_arguments: str) -> int:
 def _publish_model(
     model: Any, tokenizer: Any, worker_config: NativeSftConfig, writer: ObservationWriter
 ) -> None:
-    """Produce the model the plan declared, and say so.
-
-    The trainer leaves only a checkpoint -- a raw ``state_dict`` -- which
-    nothing outside this trainer can load. The plan's declared ``model`` output
-    is a loadable artifact, so it is written with ``save_pretrained``, the same
-    form a candidate names when it refers to a model: what this run produces
-    is something the next candidate can train from.
-
-    Reported after it is **confirmed** to exist, not merely after the save
-    returned. An ``ArtifactProduced`` for a write that silently did nothing
-    would be a claim with nothing behind it -- which is not hypothetical:
-    ``save_pretrained`` returns without raising when handed a file.
-
-    No content digest yet. Hashing multi-gigabyte weights on the training host
-    is a real cost, and whether it happens here, asynchronously, or in an
-    artifact store is a decision worth making deliberately rather than by
-    default.
-
-    Raises:
-        Exception: Whatever the save raised, after reporting it -- the run did
-            train, but did not produce what the plan declared, so the process
-            must not exit as though it had.
-    """
-    target = Path(worker_config.realization.output_dir)
-    try:
-        # Unwrapped if distributed wrapping ever applies; a plain model here.
-        getattr(model, "module", model).save_pretrained(target)
-        if tokenizer is not None:
-            tokenizer.save_pretrained(target)
-        _require_model_artifact(target, with_tokenizer=tokenizer is not None)
-    except Exception as exc:
-        writer.write(
-            IncidentObservedPayload(
-                reason="artifact-publication-failed",
-                detail=f"training completed but the model could not be written: {exc}",
-            )
-        )
-        raise
-
-    writer.write(
-        ArtifactProducedPayload(
-            # Attribution travels on the envelope's target, which names the
-            # attempt, so it is not repeated as producer_attempt_id here.
-            artifact_ref=ArtifactRef(id=ArtifactId.generate(), kind="model", uri=str(target))
-        )
-    )
-
-
-def _reason(exc: BaseException) -> str:
-    """A ``Name``-shaped reason: the exception's type, lower-kebab-cased."""
-    name = type(exc).__name__
-    kebab = "".join(f"-{c.lower()}" if c.isupper() else c for c in name).lstrip("-")
-    return kebab or "error"
+    """Produce the model the plan declared, and say so (see ``publish_model``)."""
+    publish_model(model, tokenizer, Path(worker_config.realization.output_dir), writer)

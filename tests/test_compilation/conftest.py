@@ -62,7 +62,14 @@ def tiny_model(directory: Path) -> Path:
     backend = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
     backend.pre_tokenizer = Whitespace()
     tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=backend, pad_token="<pad>", eos_token="<eos>", unk_token="<unk>"
+        tokenizer_object=backend,
+        pad_token="<pad>",
+        # The model config below names <eos> (id 1) as BOS too. A tokenizer
+        # that disagreed would be an incoherent artifact, and transformers'
+        # Trainer "aligns" such a pair by rewriting the model config.
+        bos_token="<eos>",
+        eos_token="<eos>",
+        unk_token="<unk>",
     )
     model = GPT2LMHeadModel(
         GPT2Config(

@@ -19,10 +19,10 @@ on the machine that executes them.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 
 from xaytune.compilation import CompilationContext, SupportResult, UnsupportedCandidateError
+from xaytune.compilation._sft import local_path, sft_refusals
 from xaytune.core.capabilities import (
     PLUGIN_API_VERSIONS,
     AlgorithmCapabilities,
@@ -30,7 +30,7 @@ from xaytune.core.capabilities import (
     DistributedCapabilities,
     PluginDescriptor,
 )
-from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
+from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.execution import (
     ArtifactOutput,
     CheckpointExecutionContract,
@@ -52,9 +52,6 @@ from xaytune.workers.native_schema import (
 __all__ = ["NativeCompiler"]
 
 _WORKER_MODULE = "xaytune.workers.native"
-
-_SCHEDULERS = frozenset({"cosine", "linear", "constant", "constant_with_warmup"})
-_PRECISIONS = frozenset({"fp16", "bf16", "fp32"})
 
 _ADAMW_DEFAULT_BETAS = (0.9, 0.999)
 """The betas ``torch.optim.AdamW`` uses when none are passed, which is always.
@@ -114,7 +111,7 @@ class NativeCompiler:
             )
         if context.output_uri is None:
             raise ValueError("the compilation context has no output_uri to write the model to")
-        output_dir = _local_path(context.output_uri)
+        output_dir = local_path(context.output_uri)
         if output_dir is None:
             raise ValueError(
                 f"output_uri {context.output_uri!r} is not an absolute local path; the "
@@ -137,7 +134,7 @@ class NativeCompiler:
         assert candidate.data.format is not None
         assert candidate.data.max_seq_length is not None
         assert candidate.data.packing is not None
-        dataset_path = _local_path(candidate.data.dataset.uri)
+        dataset_path = local_path(candidate.data.dataset.uri)
         assert dataset_path is not None
 
         # Always 0 while supports() refuses checkpoint intent; kept in the wire
@@ -198,178 +195,25 @@ class NativeCompiler:
 
 def _refusals(candidate: CandidateSpec) -> Iterator[str]:
     """Every reason this compiler cannot run *candidate* as declared."""
-    training = candidate.training
+    yield from sft_refusals(candidate, trainer="the native trainer")
 
-    if training.kind is not TrainingKind.SFT:
-        yield (
-            f"training.kind is {training.kind.value!r}; the native compiler supports "
-            f"only 'sft' in this release"
-        )
-    if training.adapter is not None:
-        yield "training.adapter is declared; the native compiler runs full-parameter SFT only"
-    if training.algorithm.name is not None or training.algorithm.params:
-        yield "training.algorithm is declared; plain SFT has no algorithm variant to select"
-    if candidate.reward is not None:
-        yield "reward is declared; supervised fine-tuning has no reward"
-    if candidate.environment is not None:
-        yield "environment is declared; supervised fine-tuning has no environment"
-    if candidate.schedule is not None:
-        yield "schedule is declared; the native worker cannot apply scheduled interventions yet"
-
-    yield from _data_refusals(candidate)
-    yield from _model_refusals(candidate)
-    yield from _optimization_refusals(candidate)
-    yield from _precision_refusals(candidate)
-    yield from _checkpoint_refusals(candidate)
-
-
-def _data_refusals(candidate: CandidateSpec) -> Iterator[str]:
-    data = candidate.data
-    dataset = data.dataset
-
-    if data.format is None:
-        yield "data.format is undeclared; it decides what the file's records become"
-    if data.max_seq_length is None:
-        yield "data.max_seq_length is undeclared; it decides where examples are truncated"
-    if data.packing is None:
-        yield "data.packing is undeclared; it decides whether examples share sequences"
-
-    if _local_path(dataset.uri) is None:
-        yield (
-            f"data.dataset.uri {dataset.uri!r} is not an absolute local path; the "
-            f"native worker reads local JSONL, and a relative path would depend on "
-            f"the working directory of whichever process resolved it"
-        )
-    if dataset.revision is not None:
-        yield "data.dataset.revision is declared; a local file has no revisions to select"
-    if dataset.split is not None:
-        yield "data.dataset.split is declared; the native loader reads a whole file"
-    for field in (
-        "content_digest",
-        "transform_fingerprint",
-        "tokenizer_fingerprint",
-        "template_fingerprint",
-    ):
-        if getattr(dataset, field) is not None:
-            yield (
-                f"data.dataset.{field} is declared; it is part of the candidate's "
-                f"identity, but the native worker cannot verify it and would train on "
-                f"whatever the file and its own preprocessing currently produce"
-            )
-
-
-def _local_path(uri: str) -> str | None:
-    """*uri* as an absolute local path, or ``None`` if it is not one.
-
-    Reading the declared string, not the filesystem. ``file://`` is accepted and
-    removed, because the worker hands the result to ``Path``; any other scheme
-    is not absolute and so is not local.
-    """
-    location = uri.removeprefix("file://")
-    return location if os.path.isabs(location) else None
-
-
-def _model_refusals(candidate: CandidateSpec) -> Iterator[str]:
-    if candidate.model.model.revision is not None:
-        yield (
-            "model.model.revision is declared; the native loader takes no revision, "
-            "so it would load whatever the URI currently points at"
-        )
-    if candidate.model.model.digest is not None:
-        yield (
-            "model.model.digest is declared; it is part of the candidate's identity, "
-            "but the native worker cannot verify it and would train on whatever the "
-            "URI currently holds"
-        )
-
-
-def _optimization_refusals(candidate: CandidateSpec) -> Iterator[str]:
     optimization = candidate.training.optimization
     prefix = "training.optimization"
 
-    for field in (
-        "learning_rate",
-        "micro_batch_size",
-        "gradient_accumulation",
-        "epochs",
-        "max_grad_norm",
-    ):
-        if getattr(optimization, field) is None:
-            yield f"{prefix}.{field} is undeclared"
-
     schedule = optimization.lr_schedule
-    if schedule is None:
-        yield f"{prefix}.lr_schedule is undeclared"
-    else:
-        if schedule.name not in _SCHEDULERS:
-            yield (
-                f"{prefix}.lr_schedule.name {schedule.name!r} is not one the native "
-                f"trainer implements ({', '.join(sorted(_SCHEDULERS))})"
-            )
-        if schedule.params:
-            yield f"{prefix}.lr_schedule.params are declared; the native trainer takes none"
-        if (schedule.warmup_steps or 0) > 0 and (schedule.warmup_ratio or 0) > 0:
-            yield (
-                f"{prefix}.lr_schedule declares both warmup_steps and warmup_ratio; the "
-                f"native trainer uses warmup_steps and silently ignores the ratio"
-            )
+    if (
+        schedule is not None
+        and (schedule.warmup_steps or 0) > 0
+        and (schedule.warmup_ratio or 0) > 0
+    ):
+        yield (
+            f"{prefix}.lr_schedule declares both warmup_steps and warmup_ratio; the "
+            f"native trainer uses warmup_steps and silently ignores the ratio"
+        )
 
     optimizer = optimization.optimizer
-    if optimizer is None:
-        yield f"{prefix}.optimizer is undeclared"
-        return
-    if optimizer.name != "adamw":
-        yield (
-            f"{prefix}.optimizer.name is {optimizer.name!r}; the native trainer builds "
-            f"AdamW and nothing else, so any other optimizer would be silently replaced"
-        )
-    if optimizer.weight_decay is None:
-        yield f"{prefix}.optimizer.weight_decay is undeclared"
-    if optimizer.betas and tuple(optimizer.betas) != _ADAMW_DEFAULT_BETAS:
+    if optimizer is not None and optimizer.betas and tuple(optimizer.betas) != _ADAMW_DEFAULT_BETAS:
         yield (
             f"{prefix}.optimizer.betas {tuple(optimizer.betas)} cannot be set; the native "
             f"trainer always uses AdamW's defaults {_ADAMW_DEFAULT_BETAS}"
         )
-    if optimizer.params:
-        yield f"{prefix}.optimizer.params are declared; the native trainer passes none"
-
-
-def _precision_refusals(candidate: CandidateSpec) -> Iterator[str]:
-    precision = candidate.training.precision
-    if precision.dtype is None:
-        yield "training.precision.dtype is undeclared"
-    elif precision.dtype not in _PRECISIONS:
-        yield (
-            f"training.precision.dtype {precision.dtype!r} is not one the native "
-            f"trainer implements ({', '.join(sorted(_PRECISIONS))})"
-        )
-    if precision.grad_accum_dtype is not None:
-        yield "training.precision.grad_accum_dtype is declared; the native trainer cannot set it"
-    if precision.params:
-        yield "training.precision.params are declared; the native trainer takes none"
-
-
-def _checkpoint_refusals(candidate: CandidateSpec) -> Iterator[str]:
-    """No checkpoint intent is supported yet, so declaring one is refused.
-
-    The native trainer can write periodic checkpoints, but it emits no
-    ``CheckpointCommitted`` for them -- and the controller learns that a
-    resumable position exists only when a checkpoint is reported (ADR-014).
-    A checkpoint written silently is unusable for recovery and would claim a
-    capability this path does not have. Checkpointing with the telemetry that
-    makes it real is TASK-029, which flips this refusal.
-    """
-    checkpoint = candidate.training.checkpoint
-    if checkpoint.every_optimizer_steps is not None:
-        yield (
-            "training.checkpoint.every_optimizer_steps is declared; the native worker "
-            "does not yet report checkpoints, so a resume point it wrote could not be "
-            "found (TASK-029)"
-        )
-    if checkpoint.keep_last is not None:
-        yield (
-            "training.checkpoint.keep_last is declared; the native trainer keeps only "
-            "the last checkpoint and cannot honour a retention count"
-        )
-    if checkpoint.params:
-        yield "training.checkpoint.params are declared; the native trainer takes none"

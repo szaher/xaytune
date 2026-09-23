@@ -530,3 +530,30 @@ class CandidateSpec(FrozenDomainModel):
         hardware is the same hypothesis.
         """
         return fingerprint(candidate_identity_v2(self))
+
+    def candidate_fingerprint_v1(self) -> str:
+        """This candidate's identity under the frozen v1 projection.
+
+        For finding what was recorded before v2. A stored fingerprint is only a
+        digest -- ``experiment_nodes.candidate_fingerprint`` carries no
+        projection version -- so a v1 value and a v2 value for the same
+        candidate simply do not compare equal, and nothing in the stored value
+        says why. This is how a caller asks for the historical one on purpose.
+        """
+        return fingerprint(candidate_identity_v1(self))
+
+    def candidate_fingerprint_v2(self) -> str:
+        """This candidate's identity under v2, the current projection."""
+        return fingerprint(candidate_identity_v2(self))
+
+    def candidate_fingerprints_for_lookup(self) -> tuple[str, ...]:
+        """Every identity this candidate may have been recorded under, newest first.
+
+        For a lookup that has to find a candidate whichever projection stored
+        it. The two are deliberately **not** treated as equivalent: v1 cannot
+        see data preprocessing or clipping, so a v1 match is weaker evidence
+        than a v2 one, and a caller that needs to tell them apart can, by
+        position. Deciding what a historical match permits -- reuse, or only
+        comparison -- is the reuse policy's decision (ADR-017), not this one's.
+        """
+        return (self.candidate_fingerprint_v2(), self.candidate_fingerprint_v1())

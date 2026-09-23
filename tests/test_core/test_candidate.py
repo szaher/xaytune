@@ -139,6 +139,26 @@ def test_the_v1_fingerprint_is_frozen() -> None:
     )
 
 
+def test_a_historical_fingerprint_can_still_be_looked_up() -> None:
+    """A v1 value stays findable without being passed off as a v2 one.
+
+    The stored value is only a digest, so nothing in it says which projection
+    made it. The lookup offers both, current first, and keeps them distinct:
+    v1 cannot see data preprocessing or clipping, so a v1 match is weaker
+    evidence and a caller has to be able to tell.
+    """
+    plain = _plain_candidate()
+
+    current, historical = plain.candidate_fingerprints_for_lookup()
+
+    assert current == plain.candidate_fingerprint() == plain.candidate_fingerprint_v2()
+    assert historical == plain.candidate_fingerprint_v1()
+    assert historical == (
+        "sha256:3c174a88119ffa7ed47693e5854398f10277ec46c2f972de6adfbfc5a73ac4a9"
+    ), "the historical identity is the frozen v1 value, not a recomputation of it"
+    assert current != historical
+
+
 def test_v1_and_v2_cannot_collide() -> None:
     """``version`` separates the domains, even when v2's new fields are unset."""
     plain = _plain_candidate()

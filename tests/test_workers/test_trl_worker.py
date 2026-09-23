@@ -96,10 +96,25 @@ def sft_config_type():
 
 @pytest.mark.parametrize("precision", ["fp32", "bf16", "fp16"])
 def test_every_sft_config_field_is_classified(sft_config_type, tmp_path, precision) -> None:
-    """The tripwire, armed: passing means nothing is left to a TRL default."""
+    """The tripwire, armed: passing means nothing is left to a TRL default.
+
+    Half precision is hardware-dependent, and ``TrainingArguments`` refuses it
+    at construction where the device cannot do it -- which is the behaviour
+    wanted: a declared precision is honoured or the run fails before
+    training, never silently trained in fp32. So on such a host the test
+    asserts that refusal instead. It is not skipped: a skip would hide which
+    of the two happened, and under ``XAYTUNE_REQUIRE_TRL`` it would fail.
+    """
     controlled = sft_arguments(_spec(mixed_precision=precision), trainer_dir=str(tmp_path))
 
-    verify_classification(sft_config_type(**controlled), controlled)
+    try:
+        config = sft_config_type(**controlled)
+    except ValueError as exc:
+        assert precision != "fp32", f"fp32 is supported everywhere: {exc}"
+        assert precision in str(exc), f"refused for a reason other than {precision}: {exc}"
+        return
+
+    verify_classification(config, controlled)
 
 
 # ---- and it bites ---------------------------------------------------------

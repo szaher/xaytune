@@ -130,7 +130,9 @@ class NativeCompiler:
         assert candidate.data.max_seq_length is not None
         assert candidate.data.packing is not None
 
-        every_steps = training.checkpoint.every_optimizer_steps or 0
+        # Always 0 while supports() refuses checkpoint intent; kept in the wire
+        # schema so TASK-029 changes the refusal, not the contract.
+        every_steps = 0
 
         config = NativeSftConfig(
             model=NativeModel(uri=candidate.model.model.uri),
@@ -306,7 +308,22 @@ def _precision_refusals(candidate: CandidateSpec) -> Iterator[str]:
 
 
 def _checkpoint_refusals(candidate: CandidateSpec) -> Iterator[str]:
+    """No checkpoint intent is supported yet, so declaring one is refused.
+
+    The native trainer can write periodic checkpoints, but it emits no
+    ``CheckpointCommitted`` for them -- and the controller learns that a
+    resumable position exists only when a checkpoint is reported (ADR-014).
+    A checkpoint written silently is unusable for recovery and would claim a
+    capability this path does not have. Checkpointing with the telemetry that
+    makes it real is TASK-029, which flips this refusal.
+    """
     checkpoint = candidate.training.checkpoint
+    if checkpoint.every_optimizer_steps is not None:
+        yield (
+            "training.checkpoint.every_optimizer_steps is declared; the native worker "
+            "does not yet report checkpoints, so a resume point it wrote could not be "
+            "found (TASK-029)"
+        )
     if checkpoint.keep_last is not None:
         yield (
             "training.checkpoint.keep_last is declared; the native trainer keeps only "

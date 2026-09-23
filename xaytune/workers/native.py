@@ -31,7 +31,10 @@ from pydantic import ValidationError
 
 from xaytune.config.schema import (
     DataConfig,
+    EvalConfig,
+    LoggingConfig,
     ModelConfig,
+    OnlineRLConfig,
     OutputConfig,
     TrainConfig,
     TrainerConfig,
@@ -68,21 +71,22 @@ def train_config_from(config: Mapping[str, Any]) -> TrainConfig:
     different compiler, or an older schema, is refused here rather than
     half-applied.
 
-    Left at ``TrainConfig`` defaults, deliberately, because each is inert for
-    full-parameter SFT:
+    **Every section that can change this run is set here, even where the value
+    equals today's default.** A default is only neutral until someone changes
+    it; an explicit value is neutral regardless. ``eval`` is set to never run
+    rather than trusted to stay idle because no evaluation data happens to be
+    supplied, and ``online_rl`` and ``data_prep`` are set off rather than
+    assumed off. Evaluation is its own lifecycle (ADR-007), not something a
+    training run does to itself.
+
+    Left at ``TrainConfig`` defaults, because each is *gated by a field set
+    here* and cannot be read on this path:
 
     ``lora``        read only when ``method == "lora"``; this is ``"full"``.
-    ``eval``        no evaluation data is ever supplied (``eval_split=0``, no
-                    ``eval_path``), so in-training evaluation cannot run, and
-                    early stopping is disabled by default. Evaluation is its
-                    own lifecycle (ADR-007), not something a training run does
-                    to itself.
-    ``ppo``,        off; this is not an RL recipe.
-    ``online_rl``
+    ``ppo``         read only by the PPO recipe; this is ``"finetune"``.
     ``fsdp``,       read only under those strategies. ``strategy="auto"``
-    ``deepspeed``   resolves to single-device when ``WORLD_SIZE`` is unset,
-                    which LocalRuntime does not set.
-    ``logging``     console only; nothing leaves the process.
+    ``deepspeed``   resolves to single-device, because LocalRuntime strips
+                    ``WORLD_SIZE`` from the worker's environment.
     """
     spec = NativeSftConfig.model_validate(dict(config))
     optimization = spec.optimization
@@ -126,11 +130,26 @@ def train_config_from(config: Mapping[str, Any]) -> TrainConfig:
             max_grad_norm=optimization.max_grad_norm,
             seed=realization.seed,
             checkpoint_every_n_steps=realization.checkpoint_every_optimizer_steps,
-            save_last=True,
+            # The run's output is the model published after training, written
+            # deliberately. A raw state_dict checkpoint at the end is a
+            # different artifact with different meaning, and it should not
+            # appear because a config happened to ask for it.
+            save_last=False,
             activation_checkpointing=False,
             async_checkpoint=False,
         ),
         output=OutputConfig(dir=realization.output_dir, merge_on_complete=False),
+        eval=EvalConfig(
+            every_n_steps=0,
+            metrics=[],
+            benchmarks=[],
+            early_stopping_patience=0,
+        ),
+        logging=LoggingConfig(backends=["console"], log_every_n_steps=10),
+        online_rl=OnlineRLConfig(enabled=False),
+        data_prep=[],
+        method_params={},
+        base=None,
     )
 
 
@@ -231,6 +250,40 @@ class _NativeObservations:
         self._writer.write(observation)
 
 
+_WEIGHT_PATTERNS = ("*.safetensors", "*.bin", "*.safetensors.index.json", "*.bin.index.json")
+
+
+def _require_model_artifact(target: Path, *, with_tokenizer: bool) -> None:
+    """Confirm the artifact exists, rather than inferring it from silence.
+
+    ``save_pretrained`` does not always raise when it fails. Given a path that
+    is a file, it logs "should be a directory" and returns -- and a worker that
+    read *no exception* as *written* would announce a model that does not
+    exist, under a run reporting success. So the result is checked for the
+    files a loader needs: a config and the weights, and the tokenizer's
+    config when one was saved.
+
+    Structural rather than a full load. Loading the model back would prove
+    more, at the cost of a second copy of the weights in memory on the
+    training host.
+
+    Raises:
+        FileNotFoundError: Naming what is missing.
+    """
+    if not target.is_dir():
+        raise FileNotFoundError(f"{target} is not a directory; nothing was written there")
+
+    missing = []
+    if not (target / "config.json").is_file():
+        missing.append("config.json")
+    if not any(any(target.glob(pattern)) for pattern in _WEIGHT_PATTERNS):
+        missing.append("model weights")
+    if with_tokenizer and not (target / "tokenizer_config.json").is_file():
+        missing.append("tokenizer_config.json")
+    if missing:
+        raise FileNotFoundError(f"{target} is missing {', '.join(missing)}")
+
+
 def _nonfinite(value: float) -> Literal["nan", "positive-infinity", "negative-infinity"]:
     if math.isnan(value):
         return "nan"
@@ -325,8 +378,10 @@ def _publish_model(
     form a candidate names when it refers to a model: what this run produces
     is something the next candidate can train from.
 
-    Reported after it exists, not before. An ``ArtifactProduced`` sent ahead of
-    a write that then failed would be a claim with nothing behind it.
+    Reported after it is **confirmed** to exist, not merely after the save
+    returned. An ``ArtifactProduced`` for a write that silently did nothing
+    would be a claim with nothing behind it -- which is not hypothetical:
+    ``save_pretrained`` returns without raising when handed a file.
 
     No content digest yet. Hashing multi-gigabyte weights on the training host
     is a real cost, and whether it happens here, asynchronously, or in an
@@ -344,6 +399,7 @@ def _publish_model(
         getattr(model, "module", model).save_pretrained(target)
         if tokenizer is not None:
             tokenizer.save_pretrained(target)
+        _require_model_artifact(target, with_tokenizer=tokenizer is not None)
     except Exception as exc:
         writer.write(
             IncidentObservedPayload(

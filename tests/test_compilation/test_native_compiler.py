@@ -60,7 +60,6 @@ def _candidate(**overrides: object) -> CandidateSpec:
         kind=TrainingKind.SFT,
         optimization=optimization,
         precision=PrecisionSpec(dtype="fp16"),
-        checkpoint=CheckpointIntent(every_optimizer_steps=17),
     )
     fields: dict[str, object] = {
         "model": ModelSpec(model=ModelRef(uri=MODEL)),
@@ -163,13 +162,74 @@ def test_an_absent_step_cap_means_no_cap() -> None:
     assert _train_config(_with_optimization(max_steps=None)).trainer.max_steps == -1
 
 
-def test_an_absent_checkpoint_intent_means_no_periodic_checkpoints() -> None:
-    """``0`` is the loop's word for none, and cadence is operational anyway."""
-    config = _train_config(_with_training(checkpoint=CheckpointIntent()))
-    assert config.trainer.checkpoint_every_n_steps == 0
+def test_an_absent_checkpoint_intent_means_no_checkpoints_at_all() -> None:
+    """Neither periodic ones nor a final one the candidate never asked for.
 
-    declared = _train_config()
-    assert declared.trainer.checkpoint_every_n_steps == 17
+    ``0`` rather than the legacy ``500``; and no ``save_last``, because the
+    run's output is the model published deliberately after training, and a raw
+    state_dict at the end would be a second artifact with a different meaning.
+    """
+    config = _train_config(_with_training(checkpoint=CheckpointIntent()))
+
+    assert config.trainer.checkpoint_every_n_steps == 0, "not the legacy 500"
+    assert config.trainer.save_last is False, "not the legacy True"
+
+
+def test_every_behaviour_bearing_field_is_chosen_not_inherited() -> None:
+    """Checked by what was *set*, not by what the values happen to be.
+
+    A value-equality test passes as long as the translator's choice and the
+    legacy default agree today. ``model_fields_set`` asks the question that
+    matters: did the translator decide this, or did ``TrainConfig`` decide it
+    for us? Only the first survives a change to a default.
+    """
+    config = _train_config()
+
+    required = [
+        (config, _REQUIRED_TOP_LEVEL),
+        (config.model, {"name", "quantization", "dtype", "trust_remote_code"}),
+        (config.data, _REQUIRED_DATA),
+        (config.trainer, _REQUIRED_TRAINER),
+        (config.output, {"dir", "merge_on_complete"}),
+        (config.eval, {"every_n_steps", "metrics", "benchmarks", "early_stopping_patience"}),
+        (config.logging, {"backends", "log_every_n_steps"}),
+        (config.online_rl, {"enabled"}),
+    ]
+
+    inherited = {
+        type(section).__name__: sorted(fields - section.model_fields_set)
+        for section, fields in required
+        if fields - section.model_fields_set
+    }
+    assert inherited == {}, f"left to a legacy default: {inherited}"
+
+
+_REQUIRED_TOP_LEVEL = frozenset(
+    "recipe method model data trainer output eval logging online_rl "
+    "data_prep method_params base".split()
+)
+_REQUIRED_DATA = frozenset(
+    "path format source eval_split eval_path packing max_seq_length streaming".split()
+)
+_REQUIRED_TRAINER = frozenset(
+    "strategy mixed_precision batch_size gradient_accumulation learning_rate "
+    "num_epochs max_steps warmup_steps warmup_ratio scheduler weight_decay "
+    "max_grad_norm seed checkpoint_every_n_steps save_last "
+    "activation_checkpointing async_checkpoint".split()
+)
+
+
+def test_evaluation_can_never_run_inside_training() -> None:
+    """Set to never, not trusted to stay idle.
+
+    It currently stays idle because no evaluation data is supplied. That is an
+    argument about today's inputs; ``every_n_steps=0`` is a guarantee.
+    """
+    config = _train_config()
+    assert config.eval.every_n_steps == 0
+    assert config.eval.early_stopping_patience == 0
+    assert config.online_rl.enabled is False
+    assert config.data_prep == []
 
 
 # ---- a candidate that says too little is refused -------------------------
@@ -228,6 +288,14 @@ def test_an_undeclared_scientific_value_is_refused(field: str, candidate) -> Non
             lambda: _with_optimization(
                 optimizer=OptimizerSpec(name="adamw", weight_decay=0.1, params={"eps": 1e-6})
             ),
+        ),
+        (
+            "periodic checkpoints it cannot report",
+            lambda: _with_training(checkpoint=CheckpointIntent(every_optimizer_steps=100)),
+        ),
+        (
+            "a retention count it cannot enforce",
+            lambda: _with_training(checkpoint=CheckpointIntent(keep_last=3)),
         ),
         ("a relative dataset path", lambda: _with_data(dataset=DatasetRef(uri="data.jsonl"))),
         ("a remote dataset", lambda: _with_data(dataset=DatasetRef(uri="hf://org/set"))),

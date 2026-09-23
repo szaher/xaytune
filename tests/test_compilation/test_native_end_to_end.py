@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from pathlib import Path
 
 from xaytune.core.domain.candidate import (
@@ -224,6 +225,16 @@ def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:
     assert "TrainingMetricObserved" in emitted, "a real train() reports at least one metric"
     assert "TrainingCompleted" in emitted, "and must say it finished"
 
+    # Real optimizer steps with finite metrics. Deliberately not "loss went
+    # down": with a four-thousand-parameter random model that is evidence, not
+    # a contract, and a test built on it would be flaky by design.
+    metrics = [e.payload.data for e in events if e.payload.data.type == "TrainingMetricObserved"]
+    assert [m.optimizer_step for m in metrics] == [1, 2], "max_steps=2 means two steps"
+    assert all(m.loss is not None and math.isfinite(m.loss) for m in metrics)
+
+    # No raw state_dict checkpoint the candidate never asked for.
+    assert not list((tmp_path / "artifacts").glob("checkpoint-*"))
+
     # ADR-014 §1a: the supervisor owns sequencing, and it is gapless.
     positions = [(event.stream_generation, event.sequence) for event in events]
     assert positions == sorted(positions)
@@ -343,3 +354,68 @@ def test_a_training_failure_is_reported_at_both_levels(tmp_path) -> None:
         if event.payload.data.type == "IncidentObserved"
     ]
     assert "nonzero-exit" in reasons, "and the launcher must say the process failed"
+
+
+def test_training_that_completes_but_cannot_publish_is_a_failed_run(tmp_path) -> None:
+    """Training finished; the declared output does not exist. Both are facts.
+
+    ```text
+    TrainingCompleted
+    IncidentObserved(artifact-publication-failed)
+    no ArtifactProduced
+    non-zero exit  ->  status failed
+    ```
+
+    Triggered by an output location that is a regular file, which is the case
+    that first fooled the worker: ``save_pretrained`` logs an error for it and
+    returns without raising, and the worker announced a model that was never
+    written, under a run reporting success.
+    """
+    from xaytune.compilation import CompilationContext
+    from xaytune.compilation.native import NativeCompiler
+
+    occupied = tmp_path / "not-a-directory"
+    occupied.write_text("occupied")
+    context = CompilationContext(
+        run_id="run_pub",
+        seed=7,
+        output_uri=str(occupied),
+        checkpoint_store_uri=str(tmp_path / "checkpoints"),
+    )
+    candidate = _sft_candidate(
+        _tiny_model(tmp_path / "tiny-model"), _tiny_dataset(tmp_path / "data" / "t.jsonl")
+    )
+    spec = NativeCompiler().compile(candidate, context)
+    plan = ResolvedExecutionPlan(
+        spec=spec.model_copy(
+            update={
+                "environment": {
+                    **dict(spec.environment),
+                    "HF_HUB_OFFLINE": "1",
+                    "TRANSFORMERS_OFFLINE": "1",
+                }
+            }
+        ),
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_publish"),
+    )
+
+    runtime = LocalRuntime(tmp_path / "runtime")
+    try:
+        status, events = asyncio.run(_run(runtime, plan))
+    finally:
+        runtime.close()
+
+    emitted = [event.payload.data.type for event in events]
+    reasons = [
+        event.payload.data.reason
+        for event in events
+        if event.payload.data.type == "IncidentObserved"
+    ]
+
+    assert "TrainingCompleted" in emitted, "training did finish"
+    assert "TrainingFailed" not in emitted, "and saying otherwise would be false"
+    assert "artifact-publication-failed" in reasons
+    assert "ArtifactProduced" not in emitted, "a model that was never written"
+    assert status.state == "failed"
+    assert occupied.read_text() == "occupied"

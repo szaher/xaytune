@@ -53,6 +53,7 @@ from xaytune.core.domain import (
     TrainingSpec,
     artifact_lineage_fingerprint,
     candidate_identity_v1,
+    candidate_identity_v2,
     run_history_fingerprint,
 )
 from xaytune.core.errors import (
@@ -171,6 +172,7 @@ __all__ = [
     "ATTEMPT_MACHINE",
     "BudgetSpec",
     "candidate_identity_v1",
+    "candidate_identity_v2",
     "CandidateSpec",
     "CandidateSpecSnapshot",
     "CapabilityDocument",

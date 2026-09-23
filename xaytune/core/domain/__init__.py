@@ -30,6 +30,7 @@ from xaytune.core.domain.candidate import (
     TrainingSchedule,
     TrainingSpec,
     candidate_identity_v1,
+    candidate_identity_v2,
 )
 from xaytune.core.domain.event import (
     DomainEvent,
@@ -74,6 +75,7 @@ __all__ = [
     "artifact_lineage_fingerprint",
     "BudgetSpec",
     "candidate_identity_v1",
+    "candidate_identity_v2",
     "CandidateSpec",
     "CandidateSpecSnapshot",
     "CheckpointIntent",

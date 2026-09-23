@@ -47,7 +47,7 @@ DATASET = "/data/train.jsonl"
 def _candidate(**overrides: object) -> CandidateSpec:
     """A fully declared SFT candidate, every value distinct from a legacy default."""
     optimization = OptimizationSpec(
-        optimizer=OptimizerSpec(name="adamw", weight_decay=0.123),
+        optimizer=OptimizerSpec(name="adamw", weight_decay=0.0),
         lr_schedule=LRScheduleSpec(name="linear", warmup_steps=13),
         learning_rate=1.234e-5,
         micro_batch_size=7,
@@ -129,7 +129,7 @@ def test_every_scientific_value_reaches_the_trainer_from_the_candidate() -> None
     assert config.trainer.max_steps == 11, "not the legacy -1"
     assert config.trainer.scheduler == "linear", "not the legacy cosine"
     assert config.trainer.warmup_steps == 13, "not the legacy 0"
-    assert config.trainer.weight_decay == 0.123, "not the legacy 0.01"
+    assert config.trainer.weight_decay == 0.0, "not the legacy 0.01"
     assert config.trainer.max_grad_norm == 0.456, "not the legacy 1.0"
     assert config.trainer.mixed_precision == "fp16", "not the legacy bf16"
 
@@ -280,14 +280,18 @@ def test_an_undeclared_scientific_value_is_refused(field: str, candidate) -> Non
         (
             "betas it cannot set",
             lambda: _with_optimization(
-                optimizer=OptimizerSpec(name="adamw", weight_decay=0.1, betas=(0.8, 0.95))
+                optimizer=OptimizerSpec(name="adamw", weight_decay=0.0, betas=(0.8, 0.95))
             ),
         ),
         (
             "optimizer parameters it cannot pass",
             lambda: _with_optimization(
-                optimizer=OptimizerSpec(name="adamw", weight_decay=0.1, params={"eps": 1e-6})
+                optimizer=OptimizerSpec(name="adamw", weight_decay=0.0, params={"eps": 1e-6})
             ),
+        ),
+        (
+            "weight decay whose parameter policy the candidate cannot state",
+            lambda: _with_optimization(optimizer=OptimizerSpec(name="adamw", weight_decay=0.1)),
         ),
         (
             "periodic checkpoints it cannot report",
@@ -345,7 +349,7 @@ def test_default_adamw_betas_are_honourable() -> None:
     from xaytune.compilation.native import NativeCompiler
 
     explicit = _with_optimization(
-        optimizer=OptimizerSpec(name="adamw", weight_decay=0.123, betas=(0.9, 0.999))
+        optimizer=OptimizerSpec(name="adamw", weight_decay=0.0, betas=(0.9, 0.999))
     )
     assert NativeCompiler().supports(explicit)
 

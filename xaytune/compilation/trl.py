@@ -12,11 +12,6 @@ over a hundred fields and several of them change training (see
 :mod:`xaytune.workers.trl`). The compiler's half of the job is to refuse what
 TRL would do *differently from what the candidate says*:
 
-``weight_decay > 0``   ``Trainer`` exempts biases and normalization weights
-                       from decay; the native trainer decays every parameter.
-                       The candidate does not say which is meant, so a
-                       non-zero value would mean different things on the two
-                       trainers under one fingerprint.
 ``warmup_ratio``       ``TrainingArguments`` rounds a ratio up; the native
                        trainer rounds down. Only a step count means one thing.
 ``format != "text"``   Prompt/completion and chat data make TRL choose
@@ -24,6 +19,10 @@ TRL would do *differently from what the candidate says*:
                        express.
 ``packing``            TRL packs best-fit-decreasing; the native trainer does
                        not. Same word, different datasets.
+
+Non-zero weight decay is refused by both compilers (see
+:mod:`xaytune.compilation._sft`): the candidate cannot say which parameters
+decay, and the two trainers answer differently.
 
 And it can honour what the native compiler must refuse: TRL passes AdamW's
 betas through, so a candidate declaring them is supported here. Two compilers
@@ -239,11 +238,4 @@ def _refusals(candidate: CandidateSpec) -> Iterator[str]:
         yield (
             f"{prefix}.optimizer.betas {tuple(optimizer.betas)} is not a pair; AdamW "
             f"takes exactly two"
-        )
-    if optimizer is not None and optimizer.weight_decay:
-        yield (
-            f"{prefix}.optimizer.weight_decay is {optimizer.weight_decay}; {_TRAINER} "
-            f"exempts biases and normalization weights from decay while the native "
-            f"trainer decays every parameter, and the candidate does not say which "
-            f"is meant"
         )

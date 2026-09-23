@@ -394,6 +394,14 @@ compilers and asserts the control-plane contract is the same -- not the
 weights or the losses. Its runs share the candidate's fingerprint and differ in
 execution identity (ADR-011 §5).
 
+Introducing the second trainer surfaced semantics the first one had been
+choosing silently, and both compilers now refuse them rather than disagree:
+non-zero weight decay (the native loop decays every parameter, transformers
+exempts biases and normalization weights, and the candidate cannot say which
+is meant) until `OptimizerSpec` carries an explicit, identity-bearing
+weight-decay policy in a new candidate projection; and a half precision the
+device cannot run, which the native loop used to replace with fp32.
+
 ### PR-012 — public ExperimentHandle / EmbeddedControllerHost
 
 Support:

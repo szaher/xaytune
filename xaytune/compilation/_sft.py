@@ -1,7 +1,7 @@
 """What every SFT compiler refuses, whichever trainer it targets.
 
 Some refusals are about a trainer: the native loop builds ``AdamW`` with fixed
-betas, TRL decays a different set of parameters. Those stay with the compiler
+betas, TRL packs sequences its own way. Those stay with the compiler
 that has the limitation. The rest are about the **candidate and the boundary**,
 and would be wrong to decide twice:
 
@@ -12,6 +12,7 @@ and would be wrong to decide twice:
   run does not keep;
 - a location that is not an absolute local path, which the worker would
   resolve against whatever it happened to be given;
+- non-zero weight decay, whose parameter policy the candidate cannot express;
 - checkpoint intent, which no worker yet reports (TASK-029).
 
 Kept here so the two compilers cannot drift on them: a rule one compiler
@@ -175,6 +176,19 @@ def _optimization_refusals(candidate: CandidateSpec, *, trainer: str) -> Iterato
         )
     if optimizer.weight_decay is None:
         yield f"{prefix}.optimizer.weight_decay is undeclared"
+    elif optimizer.weight_decay > 0:
+        # Not a limitation of one trainer: the candidate cannot say which
+        # parameters decay, and the two trainers answer differently -- the
+        # native loop decays every parameter, transformers exempts biases and
+        # normalization weights. Either answer would be a compiler default
+        # standing in for a scientific choice. Supported again when the
+        # optimizer intent carries an explicit, identity-bearing policy.
+        yield (
+            f"{prefix}.optimizer.weight_decay is {optimizer.weight_decay}; the "
+            f"candidate cannot yet say which parameters decay (every parameter, or "
+            f"all but biases and normalization weights), and trainers differ, so "
+            f"only 0 means the same thing everywhere"
+        )
     if optimizer.params:
         yield f"{prefix}.optimizer.params are declared; {trainer} passes none"
 

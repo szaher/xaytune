@@ -60,7 +60,13 @@ from xaytune.workers.native_schema import NativeSftConfig
 if TYPE_CHECKING:
     from xaytune.trainer.callbacks import CallbackManager
 
-__all__ = ["main", "register_native_observation_callbacks", "train_config_from"]
+__all__ = [
+    "UnsupportedPrecisionError",
+    "main",
+    "register_native_observation_callbacks",
+    "require_honourable_precision",
+    "train_config_from",
+]
 
 
 def train_config_from(config: Mapping[str, Any]) -> TrainConfig:
@@ -235,6 +241,67 @@ class _NativeObservations:
         report(self._writer, build)
 
 
+class UnsupportedPrecisionError(RuntimeError):
+    """The declared precision cannot be honoured on the device the model is on."""
+
+
+def require_honourable_precision(model: Any, precision: str) -> None:
+    """Refuse a declared precision the native trainer would silently drop.
+
+    The trainer loop switches autocast off wherever it does not support it --
+    on CPU, for any half precision -- and trains in fp32 without a word, so a
+    candidate declaring ``bf16`` would run as a different proposition under
+    its fingerprint. Execution may fail because hardware cannot do what was
+    declared; it may not quietly do something else. So this mirrors the
+    loop's own decision, and then checks the hardware:
+
+    - the device must be one the loop runs autocast on at all;
+    - on CUDA, ``bf16`` needs ``torch.cuda.is_bf16_supported()`` -- a GPU
+      that runs autocast does not necessarily have bf16;
+    - and a one-matmul probe on the model's device must actually produce the
+      declared dtype, which catches a backend that accepts the request and
+      computes in something else.
+
+    The legacy trainer keeps its fallback; this is the control-plane path's
+    rule, enforced at the worker boundary.
+
+    Raises:
+        UnsupportedPrecisionError: Naming the precision and the device.
+    """
+    if precision == "fp32":
+        return
+
+    import torch
+
+    from xaytune.trainer.device import detect_device_type_from_model, supports_amp
+
+    dtype = {"bf16": torch.bfloat16, "fp16": torch.float16}[precision]
+    device_type = detect_device_type_from_model(model)
+
+    if not supports_amp(device_type):
+        raise UnsupportedPrecisionError(
+            f"{precision} was declared, but the native trainer runs no mixed precision "
+            f"on {device_type}; it would silently train in fp32"
+        )
+    if device_type == "cuda" and dtype is torch.bfloat16 and not torch.cuda.is_bf16_supported():
+        raise UnsupportedPrecisionError(
+            "bf16 was declared, but this CUDA device does not support bf16"
+        )
+
+    probe = torch.ones(2, 2, device=device_type)
+    try:
+        with torch.amp.autocast(device_type, dtype=dtype):
+            produced = (probe @ probe).dtype
+    except (RuntimeError, TypeError) as exc:
+        raise UnsupportedPrecisionError(
+            f"{precision} was declared, but autocast on {device_type} refused it: {exc}"
+        ) from exc
+    if produced != dtype:
+        raise UnsupportedPrecisionError(
+            f"{precision} was declared, but autocast on {device_type} computes in {produced}"
+        )
+
+
 def register_native_observation_callbacks(
     callbacks: CallbackManager,
     writer: ObservationWriter,
@@ -278,6 +345,9 @@ def main(*_arguments: str) -> int:
 
     try:
         components = setup_training(train_config, callback_manager=callbacks)
+        # After the model is placed, because only then is the device known,
+        # and before train(), which would otherwise degrade silently.
+        require_honourable_precision(components.model, worker_config.optimization.mixed_precision)
         components.trainer.train(
             model=components.model,
             train_dataloader=components.train_dataloader,

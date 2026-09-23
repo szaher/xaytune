@@ -1,20 +1,36 @@
-"""NativeCompiler: an SFT candidate into a plan the native trainer can run.
+"""TRLCompiler: an SFT candidate into a plan TRL's ``SFTTrainer`` can run.
 
-The first real :class:`~xaytune.compilation.TrainerCompiler`.
+The second :class:`~xaytune.compilation.TrainerCompiler`, and the first for a
+trainer Xaytune does not own. That is the point of it: one compiler behind a
+boundary shows the boundary can be implemented; two, on unrelated trainers,
+are evidence it is not a description of the first one.
 
-**A value that changes what the model learns comes from the candidate, or the
-candidate is refused.** The native trainer has a default for nearly every field
-it reads, and a compiler that left one unset would not raise -- it would produce
-a run the candidate never described, under a fingerprint claiming to describe it
-completely. So :meth:`NativeCompiler.supports` refuses anything undeclared, and
-refuses anything the native loop would silently replace: it builds
-``AdamW(lr, weight_decay)`` and nothing else, so a candidate naming SGD, or AdamW
-with other betas, would train on that AdamW regardless.
+Same rule as :mod:`xaytune.compilation.native`: **a value that changes what
+the model learns comes from the candidate, or the candidate is refused.** TRL
+makes the rule harder to keep, because ``SFTConfig`` has a default for well
+over a hundred fields and several of them change training (see
+:mod:`xaytune.workers.trl`). The compiler's half of the job is to refuse what
+TRL would do *differently from what the candidate says*:
 
-**Compilation inspects nothing.** No filesystem, no model, no dataset, no
-environment, no clock. Paths are opaque strings: a compiler whose output
-depended on the machine it ran on would produce plans that could not be trusted
-on the machine that executes them.
+``warmup_ratio``       ``TrainingArguments`` rounds a ratio up; the native
+                       trainer rounds down. Only a step count means one thing.
+``format != "text"``   Prompt/completion and chat data make TRL choose
+                       completion-only loss, which the candidate cannot yet
+                       express.
+``packing``            TRL packs best-fit-decreasing; the native trainer does
+                       not. Same word, different datasets.
+
+Non-zero weight decay is refused by both compilers (see
+:mod:`xaytune.compilation._sft`): the candidate cannot say which parameters
+decay, and the two trainers answer differently.
+
+And it can honour what the native compiler must refuse: TRL passes AdamW's
+betas through, so a candidate declaring them is supported here. Two compilers
+accepting different candidates is the capability resolution ADR-008 describes,
+not an inconsistency.
+
+**Compilation inspects nothing**, and imports nothing from TRL: a controller
+host compiles plans without the worker's training stack installed.
 """
 
 from __future__ import annotations
@@ -41,32 +57,35 @@ from xaytune.core.execution import (
     TrainingExecutionSpec,
 )
 from xaytune.core.immutable import FrozenDict
-from xaytune.workers.native_schema import (
-    NativeData,
-    NativeModel,
-    NativeOptimization,
-    NativeRealization,
-    NativeSftConfig,
+from xaytune.workers.trl_schema import (
+    TRLData,
+    TRLModel,
+    TRLOptimization,
+    TRLRealization,
+    TRLSftConfig,
 )
 
-__all__ = ["NativeCompiler"]
+__all__ = ["TRLCompiler"]
 
-_WORKER_MODULE = "xaytune.workers.native"
+_WORKER_MODULE = "xaytune.workers.trl"
+_TRAINER = "the TRL trainer"
 
 _ADAMW_DEFAULT_BETAS = (0.9, 0.999)
-"""The betas ``torch.optim.AdamW`` uses when none are passed, which is always.
+_ADAMW_DEFAULT_EPSILON = 1e-8
+"""``torch.optim.AdamW``'s defaults, which the native trainer always uses.
 
-A candidate may declare them explicitly -- that describes exactly what will
-run -- but any other value would be silently replaced by these.
+An undeclared value must mean the same number on both trainers, so it is
+pinned to the optimizer's own default rather than left to
+``TrainingArguments``, whose defaults are TRL's and transformers' to change.
 """
 
 
-class NativeCompiler:
-    """Compiles plain supervised fine-tuning for the native trainer."""
+class TRLCompiler:
+    """Compiles plain-text supervised fine-tuning for TRL's ``SFTTrainer``."""
 
     descriptor = PluginDescriptor(
         api_version=PLUGIN_API_VERSIONS[0],
-        name="native",
+        name="trl",
         plugin_version="0.1.0",
         provider="xaytune",
         xaytune_version="0.6.0",
@@ -80,11 +99,7 @@ class NativeCompiler:
         )
 
     def supports(self, candidate: CandidateSpec) -> SupportResult:
-        """Whether this compiler can run *candidate* exactly as declared.
-
-        Every reason, not the first -- a planner that learned one defect per
-        round-trip would pay for defects the compiler already knew about.
-        """
+        """Whether TRL can run *candidate* exactly as declared, with every reason."""
         reasons = tuple(_refusals(candidate))
         return SupportResult(supported=not reasons, reasons=reasons)
 
@@ -96,9 +111,8 @@ class NativeCompiler:
         Raises:
             UnsupportedCandidateError: With every reason, if ``supports()``
                 would refuse the candidate.
-            ValueError: If the context lacks the realization a run needs --
-                a seed and an output location. Neither is defaulted: a run with
-                an invented seed is not reproducible, whatever the seed is.
+            ValueError: If the context lacks a seed or an output location, or
+                the output location is not an absolute local path.
         """
         supported = self.supports(candidate)
         if not supported:
@@ -115,7 +129,7 @@ class NativeCompiler:
         if output_dir is None:
             raise ValueError(
                 f"output_uri {context.output_uri!r} is not an absolute local path; the "
-                f"native worker writes the model with save_pretrained() to a local "
+                f"TRL worker writes the model with save_pretrained() to a local "
                 f"directory, so any other location would be written somewhere else "
                 f"than the plan and the ArtifactProduced event claim"
             )
@@ -131,27 +145,27 @@ class NativeCompiler:
         assert optimization.max_grad_norm is not None
         assert optimization.optimizer.weight_decay is not None
         assert training.precision.dtype is not None
-        assert candidate.data.format is not None
         assert candidate.data.max_seq_length is not None
-        assert candidate.data.packing is not None
         dataset_path = local_path(candidate.data.dataset.uri)
         assert dataset_path is not None
         model_path = local_path(candidate.model.model.uri)
         assert model_path is not None
 
-        # Always 0 while supports() refuses checkpoint intent; kept in the wire
-        # schema so TASK-029 changes the refusal, not the contract.
-        every_steps = 0
+        schedule = optimization.lr_schedule
+        warmup_steps = schedule.warmup_steps or 0
+        scheduler = schedule.name
+        if scheduler == "constant" and warmup_steps > 0:
+            # transformers' "constant" ignores warmup. The candidate declared a
+            # warmup, and the native trainer honours one under this name, so
+            # the schedule that does what was declared is the one sent.
+            scheduler = "constant_with_warmup"
 
-        config = NativeSftConfig(
-            model=NativeModel(uri=model_path),
-            data=NativeData(
-                path=dataset_path,
-                format=candidate.data.format,
-                max_seq_length=candidate.data.max_seq_length,
-                packing=candidate.data.packing,
-            ),
-            optimization=NativeOptimization(
+        beta1, beta2 = tuple(optimization.optimizer.betas) or _ADAMW_DEFAULT_BETAS
+
+        config = TRLSftConfig(
+            model=TRLModel(uri=model_path),
+            data=TRLData(path=dataset_path, max_length=candidate.data.max_seq_length),
+            optimization=TRLOptimization(
                 learning_rate=optimization.learning_rate,
                 micro_batch_size=optimization.micro_batch_size,
                 gradient_accumulation=optimization.gradient_accumulation,
@@ -159,16 +173,14 @@ class NativeCompiler:
                 max_steps=optimization.max_steps,
                 max_grad_norm=optimization.max_grad_norm,
                 weight_decay=optimization.optimizer.weight_decay,
-                scheduler=optimization.lr_schedule.name,  # type: ignore[arg-type]
-                warmup_steps=optimization.lr_schedule.warmup_steps,
-                warmup_ratio=optimization.lr_schedule.warmup_ratio,
+                adam_beta1=beta1,
+                adam_beta2=beta2,
+                adam_epsilon=_ADAMW_DEFAULT_EPSILON,
+                scheduler=scheduler,  # type: ignore[arg-type]
+                warmup_steps=warmup_steps,
                 mixed_precision=training.precision.dtype,  # type: ignore[arg-type]
             ),
-            realization=NativeRealization(
-                seed=context.seed,
-                output_dir=output_dir,
-                checkpoint_every_optimizer_steps=every_steps,
-            ),
+            realization=TRLRealization(seed=context.seed, output_dir=output_dir),
         )
 
         return TrainingExecutionSpec(
@@ -184,11 +196,8 @@ class NativeCompiler:
             resources=ResourceRequirements(workers=1),
             checkpoint=CheckpointExecutionContract(
                 store_uri=context.checkpoint_store_uri,
-                every_optimizer_steps=every_steps or None,
+                every_optimizer_steps=None,
                 boundary="optimizer-step",
-                # The native trainer does not commit checkpoints atomically, so
-                # requiring it would be a claim the worker cannot keep. Atomic
-                # checkpoint commit is TASK-029.
                 require_atomic_commit=False,
             ),
             telemetry=TelemetryContract(protocol_version="xaytune.telemetry/v1alpha2"),
@@ -196,26 +205,37 @@ class NativeCompiler:
 
 
 def _refusals(candidate: CandidateSpec) -> Iterator[str]:
-    """Every reason this compiler cannot run *candidate* as declared."""
-    yield from sft_refusals(candidate, trainer="the native trainer")
+    """Every reason TRL cannot run *candidate* as declared."""
+    yield from sft_refusals(candidate, trainer=_TRAINER)
+
+    data = candidate.data
+    if data.format is not None and data.format != "text":
+        yield (
+            f"data.format is {data.format!r}; {_TRAINER} supports only 'text' in this "
+            f"release, because other formats make TRL choose completion-only loss, "
+            f"which the candidate cannot express"
+        )
+    if data.packing:
+        yield (
+            f"data.packing is declared; {_TRAINER} packs best-fit-decreasing, which "
+            f"is not what packing means on the native trainer, and the candidate "
+            f"cannot say which it means"
+        )
 
     optimization = candidate.training.optimization
     prefix = "training.optimization"
 
     schedule = optimization.lr_schedule
-    if (
-        schedule is not None
-        and (schedule.warmup_steps or 0) > 0
-        and (schedule.warmup_ratio or 0) > 0
-    ):
+    if schedule is not None and schedule.warmup_ratio:
         yield (
-            f"{prefix}.lr_schedule declares both warmup_steps and warmup_ratio; the "
-            f"native trainer uses warmup_steps and silently ignores the ratio"
+            f"{prefix}.lr_schedule.warmup_ratio is declared; transformers rounds a "
+            f"ratio to steps differently from the native trainer, so only "
+            f"warmup_steps means the same thing on both"
         )
 
     optimizer = optimization.optimizer
-    if optimizer is not None and optimizer.betas and tuple(optimizer.betas) != _ADAMW_DEFAULT_BETAS:
+    if optimizer is not None and optimizer.betas and len(optimizer.betas) != 2:
         yield (
-            f"{prefix}.optimizer.betas {tuple(optimizer.betas)} cannot be set; the native "
-            f"trainer always uses AdamW's defaults {_ADAMW_DEFAULT_BETAS}"
+            f"{prefix}.optimizer.betas {tuple(optimizer.betas)} is not a pair; AdamW "
+            f"takes exactly two"
         )

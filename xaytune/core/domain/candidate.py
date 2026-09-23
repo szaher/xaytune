@@ -23,8 +23,10 @@ Three things are deliberately **outside** it:
   candidate identity would mean changing a grader implies a retrain, which is
   the failure ADR-006 exists to prevent.
 * **`ExecutionFingerprint`** — compiler, runtime, GPU type, topology — never
-  enters candidate identity. Running the same candidate on different hardware
-  does not make it a different hypothesis.
+  enters candidate identity. Running the same candidate on different hardware,
+  or through a different compiler, does not make it a different hypothesis --
+  though runs through different compilers are not interchangeable replicates
+  (ADR-011 §5).
 
 The same grader can appear in both roles: used inside the training loop it is a
 reward and belongs to `RewardSpec`; used to score the artifact it is an

@@ -134,8 +134,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   was split into ADR-017 rather than leaving one document in two states.
 
   `15-implementation-plan.md` §Phase 0 holds the same table with the work each
-  still-open ADR blocks. **ADR-005 was accepted on 2026-09-21, so band B is
-  unblocked and PR-004 may start.** It was expanded before acceptance from a
+  still-open ADR blocks. ADR-005 was accepted on 2026-09-21, which unblocked
+  band B; PR-004 through PR-010 have since merged. It was expanded before acceptance from a
   single transaction rule into the full persistence transaction contract,
   because band B owns the operation journal, the Action substrate and the
   projections as well as the experiment aggregates. Nothing ready to start is
@@ -152,8 +152,9 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 The ADR gate is **per-ADR, not global** — an ADR must be settled before the work
 that depends on it, not before all work. See `15-implementation-plan.md`
 §Phase 0 for which ADRs are ratified, accepted, or still open, and what each
-still-open one blocks. **Band B is open: ADR-005 is accepted and PR-004 is the
-next implementation step.** The remaining `Proposed` ADRs gate later bands.
+still-open one blocks. **Band B is complete and band C is in progress: PR-004
+through PR-010 have merged, and PR-011 (`TRLCompiler`, SFT only) is the next
+implementation step.** The remaining `Proposed` ADRs gate later bands.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

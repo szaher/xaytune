@@ -14,6 +14,9 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uvx ruff check .
       - run: uvx ruff format --check .
+      # CI installs from pyproject.toml, so nothing else would notice a stale
+      # lock. It went unnoticed until PR-011 regenerated it.
+      - run: uv lock --check
 
   test:
     runs-on: ubuntu-latest
@@ -26,8 +29,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv pip install -e ".[dev]" --system
+      - run: uv pip install -e ".[dev,trl]" --system
+      # A skipped TRL test fails the run here (tests/conftest.py), so this job
+      # cannot go green having silently tested none of the TRL path.
       - run: python -m pytest tests/ -q --tb=short -m "not slow"
+        env:
+          XAYTUNE_REQUIRE_TRL: "1"
+      # And the suite must exist: pytest exits 5 when nothing is selected.
+      - run: python -m pytest tests/ -q --collect-only -m trl
 
   type-check:
     runs-on: ubuntu-latest
@@ -37,5 +46,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: uv pip install -e ".[dev]" --system
+      - run: uv pip install -e ".[dev,trl]" --system
       - run: mypy xaytune/ --ignore-missing-imports

@@ -284,3 +284,138 @@ def test_an_unwritable_channel_fails_before_training(
     with pytest.raises(OSError):
         main()
     assert not (tmp_path / "config.json").exists(), "it failed before reading anything"
+
+
+# ---- a declared precision is honoured or refused, never degraded ----------
+
+
+def _cpu_model():
+    import torch
+
+    return torch.nn.Linear(2, 2)
+
+
+def test_full_precision_needs_nothing_from_the_device() -> None:
+    from xaytune.workers.native import require_honourable_precision
+
+    require_honourable_precision(_cpu_model(), "fp32")
+
+
+@pytest.mark.parametrize("precision", ["bf16", "fp16"])
+def test_half_precision_on_cpu_is_refused_not_trained_in_fp32(precision: str) -> None:
+    """The loop switches autocast off on CPU and says nothing; this says no.
+
+    torch's CPU autocast would accept either dtype -- the refusal is about what
+    the native loop does, which is to not use it.
+    """
+    from xaytune.workers.native import UnsupportedPrecisionError, require_honourable_precision
+
+    with pytest.raises(UnsupportedPrecisionError, match=rf"{precision}.*cpu.*fp32"):
+        require_honourable_precision(_cpu_model(), precision)
+
+
+def test_bf16_on_a_cuda_device_without_bf16_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A GPU that runs autocast does not necessarily have bf16."""
+    import torch
+
+    import xaytune.trainer.device as device
+    from xaytune.workers.native import UnsupportedPrecisionError, require_honourable_precision
+
+    monkeypatch.setattr(device, "detect_device_type_from_model", lambda _model: "cuda")
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: False)
+
+    with pytest.raises(UnsupportedPrecisionError, match="does not support bf16"):
+        require_honourable_precision(_cpu_model(), "bf16")
+
+
+def test_a_backend_that_accepts_the_request_but_computes_otherwise_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe checks the dtype produced, not that autocast did not raise."""
+    import contextlib
+
+    import torch
+
+    import xaytune.trainer.device as device
+    from xaytune.workers.native import UnsupportedPrecisionError, require_honourable_precision
+
+    monkeypatch.setattr(device, "supports_amp", lambda _device_type: True)
+    monkeypatch.setattr(torch.amp, "autocast", lambda *a, **k: contextlib.nullcontext())
+
+    with pytest.raises(UnsupportedPrecisionError, match="computes in torch.float32"):
+        require_honourable_precision(_cpu_model(), "bf16")
+
+
+def test_an_unhonourable_precision_fails_the_run_before_training(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At the worker boundary: after the model is placed, before ``train()``.
+
+    Reported as ``TrainingFailed`` -- the run did not train, and it did not
+    train in something else either.
+    """
+    import xaytune.recipes.base as recipes
+    from xaytune.compilation import CompilationContext
+    from xaytune.compilation.native import NativeCompiler
+    from xaytune.core.domain.candidate import (
+        CandidateSpec,
+        DataSpec,
+        LRScheduleSpec,
+        ModelSpec,
+        OptimizationSpec,
+        OptimizerSpec,
+        PrecisionSpec,
+        TrainingKind,
+        TrainingSpec,
+    )
+    from xaytune.core.immutable import thaw
+    from xaytune.core.refs import DatasetRef, ModelRef
+    from xaytune.workers.native import UnsupportedPrecisionError, main
+
+    candidate = CandidateSpec(
+        model=ModelSpec(model=ModelRef(uri="/models/m")),
+        data=DataSpec(
+            dataset=DatasetRef(uri="/data/d.jsonl"), format="text", max_seq_length=8, packing=False
+        ),
+        training=TrainingSpec(
+            kind=TrainingKind.SFT,
+            optimization=OptimizationSpec(
+                optimizer=OptimizerSpec(name="adamw", weight_decay=0.0),
+                lr_schedule=LRScheduleSpec(name="constant"),
+                learning_rate=1e-3,
+                micro_batch_size=1,
+                gradient_accumulation=1,
+                epochs=1,
+                max_grad_norm=1.0,
+            ),
+            precision=PrecisionSpec(dtype="fp16"),
+        ),
+    )
+    spec = NativeCompiler().compile(
+        candidate, CompilationContext(run_id="r", seed=1, output_uri=str(tmp_path / "out"))
+    )
+    config_path = tmp_path / "worker-config.json"
+    config_path.write_text(json.dumps(thaw(spec.config)))
+    observations = tmp_path / "observations.jsonl"
+    observations.touch()
+    monkeypatch.setenv("XAYTUNE_WORKER_CONFIG_PATH", str(config_path))
+    monkeypatch.setenv("XAYTUNE_OBSERVATIONS_PATH", str(observations))
+
+    trained: list[bool] = []
+    placed = SimpleNamespace(
+        model=_cpu_model(),
+        tokenizer=None,
+        train_dataloader=[],
+        resume_state=None,
+        trainer=SimpleNamespace(train=lambda **_: trained.append(True)),
+    )
+    monkeypatch.setattr(recipes, "setup_training", lambda *_a, **_k: placed)
+
+    with pytest.raises(UnsupportedPrecisionError):
+        main()
+
+    assert trained == [], "train() must not run"
+    (failed,) = _written(observations)
+    assert failed["type"] == "TrainingFailed"
+    assert failed["reason"] == "unsupported-precision-error"
+    assert not (tmp_path / "out").exists(), "and nothing was published"

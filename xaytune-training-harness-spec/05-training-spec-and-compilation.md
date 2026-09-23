@@ -284,7 +284,7 @@ seed will not reproduce it.
 
 Execution identity:
 
-- compiler version
+- compiler name and version -- the execution implementation
 - framework versions
 - code revision
 - runtime
@@ -293,6 +293,11 @@ Execution identity:
 - topology
 - distributed mode
 - container digest
+
+The same candidate compiled by two compilers is one candidate executed two
+ways. Runs share a `CandidateFingerprint` and differ in `ExecutionFingerprint`,
+and are not treated as statistically interchangeable replicates unless a policy
+says so explicitly (ADR-011 §5).
 
 ### EvaluationFingerprint
 

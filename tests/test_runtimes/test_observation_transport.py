@@ -155,7 +155,13 @@ def test_the_last_observation_before_exit_is_not_lost(tmp_path: Path) -> None:
 
 
 def test_the_worker_receives_its_config(tmp_path: Path) -> None:
-    config = {"schema": "anything", "lr": 0.001}
+    """Nested, because every real config is.
+
+    This used a flat dict and passed while the launcher crashed on any nested
+    config -- ``dict()`` unfreezes only the top level. The first real compiler
+    found it; this is the test that should have.
+    """
+    config = {"api_version": "anything", "optimization": {"lr": 0.001, "epochs": 1}}
     status, _, directory = _run(
         tmp_path,
         "import json, os\n"

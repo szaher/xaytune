@@ -229,6 +229,24 @@ def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:
     assert positions == sorted(positions)
     assert [s for _, s in positions] == list(range(len(positions)))
 
+    # The plan declared a model output, so the run has to produce one -- and
+    # "produce" means an artifact something else can load, not a raw state
+    # dict inside a checkpoint directory. This passed without these checks
+    # while the declared output did not exist.
+    assert "ArtifactProduced" in emitted, "the declared model output was never produced"
+    assert emitted.index("ArtifactProduced") > emitted.index("TrainingCompleted")
+
+    produced = next(e for e in events if e.payload.data.type == "ArtifactProduced")
+    artifact = produced.payload.data.artifact_ref
+    declared = next(o for o in spec.outputs if o.kind == "model")
+    assert artifact.kind == "model"
+    assert artifact.uri == declared.uri
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    AutoModelForCausalLM.from_pretrained(artifact.uri, local_files_only=True)
+    AutoTokenizer.from_pretrained(artifact.uri, local_files_only=True)
+
 
 async def _run(runtime: LocalRuntime, plan: ResolvedExecutionPlan) -> tuple[object, list]:
     """Submit, wait, and read the telemetry back through the same reference.
@@ -276,3 +294,52 @@ def test_the_worker_never_sees_the_envelope() -> None:
 
     forbidden = {"RuntimeEventEnvelope", "StreamCursor", "LocalRuntime"}
     assert not (imported & forbidden), f"the worker imports {imported & forbidden}"
+
+
+def test_a_training_failure_is_reported_at_both_levels(tmp_path) -> None:
+    """Training-level and process-level evidence, and neither is a duplicate.
+
+    A dataset that does not exist compiles perfectly -- the compiler inspects
+    nothing, by design -- so the failure has to surface at execution. It must
+    be attributed there: the worker says training failed, and the launcher
+    separately says the process exited non-zero.
+    """
+    from xaytune.compilation.native import NativeCompiler
+
+    model_dir = _tiny_model(tmp_path / "tiny-model")
+    missing = tmp_path / "data" / "never-written.jsonl"
+    candidate = _sft_candidate(model_dir, missing)
+
+    spec = NativeCompiler().compile(candidate, _context(tmp_path))
+    plan = ResolvedExecutionPlan(
+        spec=spec.model_copy(
+            update={
+                "environment": {
+                    **dict(spec.environment),
+                    "HF_HUB_OFFLINE": "1",
+                    "TRANSFORMERS_OFFLINE": "1",
+                }
+            }
+        ),
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="ra_fails"),
+    )
+
+    runtime = LocalRuntime(tmp_path / "runtime")
+    try:
+        status, events = asyncio.run(_run(runtime, plan))
+    finally:
+        runtime.close()
+
+    emitted = [event.payload.data.type for event in events]
+    assert status.state == "failed"
+    assert "TrainingFailed" in emitted, "the worker must say training failed"
+    assert "TrainingCompleted" not in emitted
+    assert "ArtifactProduced" not in emitted
+
+    reasons = [
+        event.payload.data.reason
+        for event in events
+        if event.payload.data.type == "IncidentObserved"
+    ]
+    assert "nonzero-exit" in reasons, "and the launcher must say the process failed"

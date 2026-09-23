@@ -41,6 +41,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from xaytune.core.clock import utc_now
 from xaytune.core.execution import CommandEntrypoint, ResolvedExecutionPlan
+from xaytune.core.immutable import thaw
 from xaytune.core.telemetry import EvaluationObservation, TrainingObservation
 from xaytune.runtimes import (
     EvaluationEventPayload,
@@ -276,8 +277,10 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
         return 0
 
     # Written before the worker exists, so it can never start without it.
+    # thaw(), not dict(): a real config is nested, and dict() unfreezes only
+    # the top level, leaving FrozenDicts json cannot serialise.
     paths.worker_config.write_text(
-        json.dumps(dict(plan.spec.config), sort_keys=True), encoding="utf-8"
+        json.dumps(thaw(plan.spec.config), sort_keys=True), encoding="utf-8"
     )
 
     with paths.stdout.open("ab") as out, paths.stderr.open("ab") as err:

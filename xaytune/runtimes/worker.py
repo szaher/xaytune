@@ -140,6 +140,19 @@ class ObservationWriter:
         location = os.environ.get(OBSERVATIONS_PATH_ENV)
         return None if location is None else cls(Path(location))
 
+    def verify(self) -> None:
+        """Fail now if the channel cannot be written, rather than mid-training.
+
+        A worker whose runtime promised an observation channel and delivered
+        a broken one is facing an execution-contract failure, not one bad
+        metric. Training blind -- or training for an hour and then failing on
+        the first report -- would both be worse than refusing to start.
+
+        Raises:
+            OSError: If the channel cannot be opened for appending.
+        """
+        self._path.open("a", encoding="utf-8").close()
+
     def write(
         self,
         observation: object,

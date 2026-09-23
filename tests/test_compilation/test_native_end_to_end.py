@@ -34,8 +34,11 @@ from pathlib import Path
 from xaytune.core.domain.candidate import (
     CandidateSpec,
     DataSpec,
+    LRScheduleSpec,
     ModelSpec,
     OptimizationSpec,
+    OptimizerSpec,
+    PrecisionSpec,
     TrainingKind,
     TrainingSpec,
 )
@@ -133,10 +136,27 @@ def _sft_candidate(model_dir: Path, dataset: Path) -> CandidateSpec:
     """
     return CandidateSpec(
         model=ModelSpec(model=ModelRef(uri=str(model_dir.resolve()))),
-        data=DataSpec(dataset=DatasetRef(uri=str(dataset.resolve()))),
+        data=DataSpec(
+            dataset=DatasetRef(uri=str(dataset.resolve())),
+            format="alpaca",
+            # The tiny model has n_positions=32; longer would overrun it.
+            max_seq_length=32,
+            packing=False,
+        ),
         training=TrainingSpec(
             kind=TrainingKind.SFT,
-            optimization=OptimizationSpec(learning_rate=1e-3, max_steps=2),
+            optimization=OptimizationSpec(
+                optimizer=OptimizerSpec(name="adamw", weight_decay=0.0),
+                lr_schedule=LRScheduleSpec(name="constant"),
+                learning_rate=1e-3,
+                micro_batch_size=2,
+                gradient_accumulation=1,
+                epochs=1,
+                max_steps=2,
+                max_grad_norm=1.0,
+            ),
+            # CPU in CI; half-precision autocast is not what is being tested.
+            precision=PrecisionSpec(dtype="fp32"),
         ),
     )
 
@@ -193,8 +213,7 @@ def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:
 
     runtime = LocalRuntime(tmp_path / "runtime")
     try:
-        status = asyncio.run(_run(runtime, plan))
-        events = asyncio.run(_events(runtime, plan))
+        status, events = asyncio.run(_run(runtime, plan))
     finally:
         runtime.close()
 
@@ -211,16 +230,16 @@ def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:
     assert [s for _, s in positions] == list(range(len(positions)))
 
 
-async def _run(runtime: LocalRuntime, plan: ResolvedExecutionPlan) -> object:
+async def _run(runtime: LocalRuntime, plan: ResolvedExecutionPlan) -> tuple[object, list]:
+    """Submit, wait, and read the telemetry back through the same reference.
+
+    The reference is the one submission returned. A workload is keyed by the
+    operation that started it, not by the attempt it serves, so rebuilding a
+    reference from the target would name a workload that does not exist.
+    """
     ref = await runtime.submit_or_get(OperationId.generate(), plan)
-    return await _settle(runtime, ref)
-
-
-async def _events(runtime: LocalRuntime, plan: ResolvedExecutionPlan) -> list:
-    from xaytune.core.refs import RuntimeRef
-
-    ref = RuntimeRef(backend="local", external_id=plan.target.id)
-    return [event async for event in runtime.watch(ref)]
+    status = await _settle(runtime, ref)
+    return status, [event async for event in runtime.watch(ref)]
 
 
 def _context(tmp_path):

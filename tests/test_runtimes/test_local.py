@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import os
 import signal
 import subprocess
@@ -453,6 +454,95 @@ def test_a_plugin_speaking_a_supported_api_is_accepted(runtime: LocalRuntime) ->
         return await _settle(runtime, ref)
 
     assert asyncio.run(scenario()).state == "succeeded"
+
+
+# ---- placement topology comes from the runtime, not the controller's shell
+
+
+_CONTROLLER_UNDER_TORCHRUN = {
+    "WORLD_SIZE": "8",
+    "RANK": "3",
+    "LOCAL_RANK": "3",
+    "LOCAL_WORLD_SIZE": "8",
+    "MASTER_ADDR": "10.0.0.1",
+    "MASTER_PORT": "29500",
+    "TORCHELASTIC_RUN_ID": "controller-run",
+}
+
+
+def _record_environment(runtime: LocalRuntime, tmp_path: Path, **plan_env: str) -> dict:
+    """Run a worker that writes down the environment it was actually given."""
+    names = sorted({*_CONTROLLER_UNDER_TORCHRUN, "CUDA_VISIBLE_DEVICES", "NCCL_DEBUG"})
+    out = tmp_path / "seen.json"
+    source = (
+        "import json, os, sys\n"
+        f"names = {names!r}\n"
+        "json.dump({n: os.environ.get(n) for n in names}, open(sys.argv[1], 'w'))\n"
+    )
+    plan = _plan(*_python(source, str(out)), environment=plan_env)
+
+    async def scenario() -> None:
+        ref = await runtime.submit_or_get(OperationId.generate(), plan)
+        await _settle(runtime, ref)
+
+    asyncio.run(scenario())
+    return json.loads(out.read_text())
+
+
+def test_a_controller_under_torchrun_does_not_hand_its_topology_to_the_worker(
+    runtime: LocalRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker must not believe it is rank 3 of 8.
+
+    Those variables describe where the *controller* is running. Inherited, the
+    native trainer's ``init_distributed()`` would read ``WORLD_SIZE=8`` and try
+    to join a group at the controller's ``MASTER_ADDR`` -- failing, or hanging
+    for seven ranks nobody started -- and nothing in the plan would say why.
+    """
+    for name, value in _CONTROLLER_UNDER_TORCHRUN.items():
+        monkeypatch.setenv(name, value)
+
+    seen = _record_environment(runtime, tmp_path)
+
+    leaked = {name: seen[name] for name in _CONTROLLER_UNDER_TORCHRUN if seen[name] is not None}
+    assert leaked == {}, f"the worker inherited the controller's topology: {leaked}"
+
+
+def test_device_and_tuning_constraints_are_still_inherited(
+    runtime: LocalRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stripping placement must not strip everything that looks related.
+
+    An operator restricting a controller to one device is setting a constraint
+    the worker should keep; removing it would hand the worker every device on
+    the machine. NCCL tuning is behaviour, not placement.
+    """
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+    monkeypatch.setenv("NCCL_DEBUG", "INFO")
+
+    seen = _record_environment(runtime, tmp_path)
+
+    assert seen["CUDA_VISIBLE_DEVICES"] == "2"
+    assert seen["NCCL_DEBUG"] == "INFO"
+
+
+def test_a_plan_declaring_a_distributed_topology_is_refused(runtime: LocalRuntime) -> None:
+    """Refusing beats honouring half of it.
+
+    This runtime places its one worker in no group. A plan that sets
+    ``WORLD_SIZE`` is asking for a process that waits for peers this runtime
+    will never launch.
+    """
+    operation_id = OperationId.generate()
+    plan = _plan(*_python("pass"), environment={"WORLD_SIZE": "4", "RANK": "0"})
+
+    async def scenario() -> object:
+        with pytest.raises(UnsupportedPlanError, match="WORLD_SIZE"):
+            await runtime.submit_or_get(operation_id, plan)
+        return await runtime.lookup_operation(operation_id)
+
+    outcome = asyncio.run(scenario())
+    assert outcome is not None and outcome.disposition == "rejected"
 
 
 # ---- process outcomes ----------------------------------------------------

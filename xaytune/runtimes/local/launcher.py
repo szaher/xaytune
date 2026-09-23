@@ -47,6 +47,7 @@ from xaytune.runtimes import (
 )
 from xaytune.runtimes.local.paths import WorkloadPaths, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRegistry
+from xaytune.runtimes.worker import TOPOLOGY_VARIABLES
 
 __all__ = ["main", "run"]
 
@@ -90,8 +91,14 @@ def _environment(plan: ResolvedExecutionPlan) -> dict[str, str]:
     Inherited rather than replaced, because a bare environment has no ``PATH``
     and most workers would fail for a reason that has nothing to do with the
     plan.
+
+    **Except the distributed topology**, which is removed. It describes where
+    the *controller* happens to be running, not where this worker is, and a
+    worker that inherited it from a controller started under ``torchrun``
+    would try to join a process group nobody created. This runtime runs one
+    worker and places it in no group, so it sets none of them.
     """
-    environment = dict(os.environ)
+    environment = {key: value for key, value in os.environ.items() if key not in TOPOLOGY_VARIABLES}
     environment.update({key: str(value) for key, value in plan.spec.environment.items()})
     environment["XAYTUNE_TARGET_KIND"] = plan.target.kind
     environment["XAYTUNE_TARGET_ID"] = plan.target.id

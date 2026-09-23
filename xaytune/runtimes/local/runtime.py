@@ -53,6 +53,7 @@ from xaytune.runtimes import (
 from xaytune.runtimes.local.jsonl import AppendOnlyJsonlReader
 from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRecord, LocalWorkloadRegistry
+from xaytune.runtimes.worker import TOPOLOGY_VARIABLES
 
 __all__ = ["BACKEND", "LocalRuntime", "UnsupportedPlanError"]
 
@@ -569,6 +570,15 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"{plan.spec.telemetry.protocol_version!r}; a worker and a controller "
             f"that disagree about the telemetry contract should fail at submission "
             f"rather than halfway through a run"
+        )
+
+    placed = sorted(set(plan.spec.environment) & TOPOLOGY_VARIABLES)
+    if placed:
+        return (
+            f"the plan sets {', '.join(placed)}; those place a worker in a "
+            f"distributed process group, and this runtime runs one worker in "
+            f"none -- honouring them would start a process waiting for peers "
+            f"that were never launched"
         )
 
     if plan.spec.secrets:

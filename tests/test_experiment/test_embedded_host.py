@@ -224,8 +224,13 @@ def test_the_record_holds_specs_not_implementations(tmp_path: Path) -> None:
 
     experiment = asyncio.run(scenario())
 
-    assert experiment.runtime == spec.runtime
-    assert experiment.compiler == spec.compiler
+    # The request, with the implementation version resolved and recorded: the
+    # record says which implementation ran, not only which name was asked for.
+    assert experiment.runtime.model_copy(update={"version": None}) == spec.runtime
+    assert experiment.compiler.model_copy(update={"version": None}) == spec.compiler
+    assert experiment.runtime.version == "0.1.0"
+    assert experiment.compiler.version == "0.1.0"
+    assert experiment.artifact_root == spec.artifact_root
     assert experiment.controller_host.kind == "embedded"
 
 

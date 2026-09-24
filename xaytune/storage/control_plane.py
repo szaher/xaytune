@@ -57,7 +57,7 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import Actor, RuntimeRef
+from xaytune.core.refs import Actor, ArtifactRef, RuntimeRef
 from xaytune.core.state.status import (
     ExperimentNodeStatus,
     ExperimentStatus,
@@ -382,6 +382,44 @@ class ControlPlaneRepository:
             event_type,
             destinations,
         )
+
+    def record_artifact(
+        self,
+        attempt_id: RunAttemptId,
+        artifact: ArtifactRef,
+        *,
+        expected_revision: int,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> RunAttempt:
+        """Record an artifact an attempt produced, with its event, atomically.
+
+        The event carries the artifact itself, so the history answers "what
+        did this attempt produce" without reading the attempt's current row --
+        which a later revision may have moved on from.
+
+        Raises:
+            AggregateNotFoundError: If no such attempt exists.
+            ConcurrentModificationError: If it has moved since the caller read it.
+            ValueError: If the attempt already records this artifact.
+        """
+        with write_transaction(self._connection):
+            current = self.aggregates.get_attempt(str(attempt_id))
+            if current is None:
+                raise AggregateNotFoundError("RunAttempt", str(attempt_id))
+            if current.revision != expected_revision:
+                raise ConcurrentModificationError("RunAttempt", str(attempt_id), expected_revision)
+            recorded = current.with_artifact(artifact)
+            self.aggregates._update_attempt(recorded)
+            self._emit(
+                recorded,
+                "ArtifactRecorded",
+                self._owning_experiment(recorded),
+                actor,
+                destinations,
+                extra={"artifact": artifact.model_dump(mode="json")},
+            )
+        return recorded
 
     # ---- ADR-005 §4 ----------------------------------------------------
 
@@ -1093,6 +1131,8 @@ class ControlPlaneRepository:
         experiment_id: str,
         actor: Actor,
         destinations: tuple[str, ...] = (),
+        *,
+        extra: dict[str, Any] | None = None,
     ) -> DomainEvent:
         event = DomainEvent(
             id=EventId.generate(),
@@ -1103,7 +1143,10 @@ class ControlPlaneRepository:
             event_type=event_type,
             actor=actor,
             payload=FrozenDict(
-                {"status": getattr(getattr(aggregate, "status", None), "value", None)}
+                {
+                    "status": getattr(getattr(aggregate, "status", None), "value", None),
+                    **(extra or {}),
+                }
             ),
         )
         return self._write_event(event, destinations)

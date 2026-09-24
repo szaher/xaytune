@@ -32,6 +32,16 @@ from xaytune.core.domain.candidate import (
     candidate_identity_v1,
     candidate_identity_v2,
 )
+from xaytune.core.domain.evaluation import (
+    EvaluationAttempt,
+    EvaluationResult,
+    EvaluationRun,
+    EvaluationSpec,
+    EvaluatorDeterminism,
+    EvaluatorSpec,
+    MetricResult,
+    evaluation_identity_v1,
+)
 from xaytune.core.domain.event import (
     DomainEvent,
     OutboxRecord,
@@ -65,6 +75,14 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "EvaluationAttempt",
+    "EvaluationResult",
+    "EvaluationRun",
+    "EvaluationSpec",
+    "EvaluatorDeterminism",
+    "EvaluatorSpec",
+    "MetricResult",
+    "evaluation_identity_v1",
     "Action",
     "ActionOutcome",
     "ActionTarget",

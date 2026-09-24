@@ -34,6 +34,8 @@ from typing import Generic, TypeVar
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.state.status import (
     ActionStatus,
+    EvaluationAttemptStatus,
+    EvaluationRunStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -43,6 +45,8 @@ from xaytune.core.state.status import (
 __all__ = [
     "ACTION_MACHINE",
     "ATTEMPT_MACHINE",
+    "EVALUATION_ATTEMPT_MACHINE",
+    "EVALUATION_RUN_MACHINE",
     "EXPERIMENT_MACHINE",
     "NODE_MACHINE",
     "RUN_MACHINE",
@@ -253,6 +257,64 @@ ATTEMPT_MACHINE: StateMachine[RunAttemptStatus] = StateMachine(
         RunAttemptStatus.FAILED: set(),
         RunAttemptStatus.PREEMPTED: set(),
         RunAttemptStatus.CANCELLED: set(),
+    },
+)
+
+
+# ADR-015 §1. The same lifecycle principles as Run and RunAttempt -- every
+# non-terminal state reaches FAILED and CANCELLED, PREEMPTED applies from QUEUED
+# onwards -- over evaluation's own states rather than training's table.
+EVALUATION_RUN_MACHINE: StateMachine[EvaluationRunStatus] = StateMachine(
+    "EvaluationRun",
+    EvaluationRunStatus.CREATED,
+    {
+        EvaluationRunStatus.CREATED: {
+            EvaluationRunStatus.ACTIVE,
+            EvaluationRunStatus.CANCELLED,
+            EvaluationRunStatus.FAILED,
+        },
+        EvaluationRunStatus.ACTIVE: {
+            EvaluationRunStatus.SUCCEEDED,
+            EvaluationRunStatus.FAILED,
+            EvaluationRunStatus.CANCELLED,
+        },
+        EvaluationRunStatus.SUCCEEDED: set(),
+        EvaluationRunStatus.FAILED: set(),
+        EvaluationRunStatus.CANCELLED: set(),
+    },
+)
+
+EVALUATION_ATTEMPT_MACHINE: StateMachine[EvaluationAttemptStatus] = StateMachine(
+    "EvaluationAttempt",
+    EvaluationAttemptStatus.CREATED,
+    {
+        EvaluationAttemptStatus.CREATED: {
+            EvaluationAttemptStatus.QUEUED,
+            EvaluationAttemptStatus.CANCELLED,
+            EvaluationAttemptStatus.FAILED,
+        },
+        EvaluationAttemptStatus.QUEUED: {
+            EvaluationAttemptStatus.STARTING,
+            EvaluationAttemptStatus.CANCELLED,
+            EvaluationAttemptStatus.FAILED,
+            EvaluationAttemptStatus.PREEMPTED,
+        },
+        EvaluationAttemptStatus.STARTING: {
+            EvaluationAttemptStatus.RUNNING,
+            EvaluationAttemptStatus.CANCELLED,
+            EvaluationAttemptStatus.FAILED,
+            EvaluationAttemptStatus.PREEMPTED,
+        },
+        EvaluationAttemptStatus.RUNNING: {
+            EvaluationAttemptStatus.SUCCEEDED,
+            EvaluationAttemptStatus.CANCELLED,
+            EvaluationAttemptStatus.FAILED,
+            EvaluationAttemptStatus.PREEMPTED,
+        },
+        EvaluationAttemptStatus.SUCCEEDED: set(),
+        EvaluationAttemptStatus.FAILED: set(),
+        EvaluationAttemptStatus.PREEMPTED: set(),
+        EvaluationAttemptStatus.CANCELLED: set(),
     },
 )
 

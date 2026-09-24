@@ -11,6 +11,8 @@ from enum import Enum
 
 __all__ = [
     "ActionStatus",
+    "EvaluationAttemptStatus",
+    "EvaluationRunStatus",
     "ExperimentNodeStatus",
     "ExperimentStatus",
     "RunAttemptStatus",
@@ -77,6 +79,38 @@ class RunAttemptStatus(str, Enum):
     RUNNING = "running"
     CHECKPOINTING = "checkpointing"
     RECOVERING = "recovering"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    PREEMPTED = "preempted"
+    CANCELLED = "cancelled"
+
+
+class EvaluationRunStatus(str, Enum):
+    """Lifecycle of one logical evaluation (ADR-015 §1).
+
+    Coarse, like :class:`RunStatus`: infrastructure detail belongs to
+    :class:`EvaluationAttemptStatus`.
+    """
+
+    CREATED = "created"
+    ACTIVE = "active"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class EvaluationAttemptStatus(str, Enum):
+    """Lifecycle of one infrastructure attempt at an evaluation (ADR-015 §1).
+
+    Not :class:`RunAttemptStatus`: evaluation writes no checkpoints, so it has
+    no ``CHECKPOINTING``, and has nothing to recover into, so no
+    ``RECOVERING``. A failed evaluation is retried as a new attempt.
+    """
+
+    CREATED = "created"
+    QUEUED = "queued"
+    STARTING = "starting"
+    RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     PREEMPTED = "preempted"

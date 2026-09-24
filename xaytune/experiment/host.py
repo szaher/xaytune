@@ -17,12 +17,15 @@ before the runtime is asked for anything, so a crash between the two leaves
 intent with no effect -- which a later reconciler can resolve -- and never an
 effect with no intent, which nothing could find.
 
-**Durable-state-backed, not restart-reconciling.** Everything this host knows
-is in the record, so a handle from ``attach()`` in another process reads the
-same answers. But an attempt that was in flight when the submitting process
-died is not adopted by a new host: nothing here resumes its telemetry or
-settles its outcome. That is PR-012a, and until then ``wait()`` on such an
-experiment says so rather than waiting forever.
+**Restart-safe, not yet owned.** Everything this host knows is in the record,
+so when the process that submitted an experiment dies, ``attach()`` from a new
+host adopts its unsettled work (PR-012a): a live workload is observed again
+from the durable telemetry cursor, an unconfirmed submission is looked up, and
+a submission is issued only when the runtime says it never received it. What
+it does not have is ownership. Two hosts attached to one experiment *at the
+same time* would both adopt it -- no second workload, since adoption never
+issues one, but two observers whose writes would conflict. Leases that make
+one host the owner belong to the daemon host, not to this one.
 
 The controller loop only turns observations into transitions. It does not
 decide scientific outcomes: a successful run leaves the node ``ACTIVE``,
@@ -148,12 +151,10 @@ class ReconciliationEscalatedError(XaytuneError):
 
 
 class ControllerNotRunningError(XaytuneError):
-    """Work is unsettled and nothing in this process is driving it.
+    """Work is unsettled, nothing is driving it, and this host cannot adopt it.
 
-    The submitting process has gone, or never was this one. Adopting an
-    in-flight attempt -- finding its workload, resuming its telemetry, settling
-    its outcome -- is PR-012a's reconciliation, and waiting here instead would
-    wait forever.
+    The record names no runtime to adopt it with -- an experiment recorded
+    before a host drove experiments. Waiting instead would wait forever.
     """
 
 
@@ -274,7 +275,7 @@ class EmbeddedControllerHost:
 
         A controller task still running is cancelled: its workload keeps
         running, because the runtime owns it, and the record keeps the intent
-        and the reference. Picking it up again is PR-012a.
+        and the reference, so a later ``attach()`` adopts it.
         """
         for task in self._controllers.values():
             task.cancel()
@@ -307,8 +308,8 @@ class EmbeddedControllerHost:
         result = self._result(experiment_id)
         if not result.quiescent:
             raise ControllerNotRunningError(
-                f"experiment {experiment_id} has unsettled work and no controller in this "
-                f"process is driving it; adopting in-flight work after a restart is PR-012a"
+                f"experiment {experiment_id} has unsettled work, no controller is driving it, "
+                f"and this host cannot adopt it: the record names no runtime spec"
             )
         return result
 

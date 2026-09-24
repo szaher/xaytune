@@ -459,6 +459,27 @@ Implement:
   `RunAttempt`
 - cancellation leaves no executing workload
 
+As built, reconciliation runs in `attach()`, for the experiment attached to:
+
+- versions first: a runtime or compiler version other than the recorded one
+  fails closed before anything is adopted or issued
+- per unsettled attempt, its submit operation decides: CONFIRMED is adopted;
+  INTENDED/SENT is looked up; only "never received" is issued, under the
+  recorded operation id and after checking the rebuilt plan's digest -- and
+  only if the runtime can report completed operations, otherwise it escalates
+- telemetry resumes from the attempt's durable cursor
+  (`telemetry_generation`, `telemetry_sequence`), which advances only in the
+  commit of the effect an event caused
+- a dead stream over a live workload advances the generation, records
+  `TelemetryDegraded`, and reads the outcome from the runtime; an ending
+  nothing observed escalates rather than being guessed
+- an in-flight cancellation is carried on
+
+Not in scope, deliberately: **ownership**. Two hosts attached to one
+experiment at the same time would both adopt it. Neither can create a second
+workload, because adoption never issues one, but their writes would conflict.
+Leases belong to the daemon host (PR-027/PR-028).
+
 Phase exit:
 
 - SFT runs through new compile/execute path

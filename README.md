@@ -48,7 +48,7 @@ These describe the planned ecosystem, not an installed-backend support matrix.
 
 ## Development status
 
-Status as of **2026-09-24**, after PR-011 merged.
+Status as of **2026-09-24**, after PR-012 merged.
 
 ### Completed foundation
 
@@ -77,11 +77,13 @@ artifact.
 `TrainerCompiler`, `TrainingExecutionSpec` and capability resolution, the
 restart-safe `LocalRuntime`, the v1alpha2 telemetry contract, and the first
 end-to-end run -- `NativeCompiler` and `NativeWorker` -- have landed, and
-`TRLCompiler` runs a second, independent trainer behind the same contract.
+`TRLCompiler` runs a second, independent trainer behind the same contract. The
+embedded controller has landed too: `EmbeddedControllerHost.submit()` returns
+an `ExperimentHandle` with `status`, `wait`, `cancel` and `events`.
 
-Next is the embedded controller: `EmbeddedControllerHost.submit()` returning an
-`ExperimentHandle`. Runtime-operation reconciliation after a controller restart
-(PR-012a) completes this band.
+Next is runtime-operation reconciliation (PR-012a): a controller restarted
+mid-training adopts its running workload instead of orphaning or duplicating
+it. That completes this band.
 
 <details>
 <summary>Foundation implementation history</summary>
@@ -95,8 +97,9 @@ Band C so far: [CandidateSpec and fingerprints (#24)](https://github.com/szaher/
 [compile/execute contracts (#25)](https://github.com/szaher/xaytune/pull/25),
 [LocalRuntime (#26)](https://github.com/szaher/xaytune/pull/26),
 [telemetry contracts (#27)](https://github.com/szaher/xaytune/pull/27),
-[NativeCompiler and NativeWorker (#28)](https://github.com/szaher/xaytune/pull/28), and
-[TRLCompiler and TRLWorker (#29)](https://github.com/szaher/xaytune/pull/29).
+[NativeCompiler and NativeWorker (#28)](https://github.com/szaher/xaytune/pull/28),
+[TRLCompiler and TRLWorker (#29)](https://github.com/szaher/xaytune/pull/29), and
+[EmbeddedControllerHost and ExperimentHandle (#30)](https://github.com/szaher/xaytune/pull/30).
 The [implementation plan](xaytune-training-harness-spec/15-implementation-plan.md)
 defines the remaining contracts and acceptance gates.
 

@@ -342,3 +342,113 @@ def test_a_runtime_that_cannot_report_completed_operations_escalates(tmp_path: P
     (unresolved,) = asyncio.run(scenario())
     assert unresolved.state == "intended"
     assert _workloads(tmp_path) == [], "escalated, not re-issued"
+
+
+# ---- a dead stream over a live workload (ADR-014 §1a) ----------------------------
+
+
+def test_a_dead_supervisor_degrades_telemetry_without_minting_an_attempt(
+    tmp_path: Path,
+) -> None:
+    """The launcher dies mid-training; the worker it supervised runs on.
+
+    ```text
+    stream ends, workload live   ->  telemetry_generation 0 -> 1, TelemetryDegraded
+    worker exits, nothing saw it ->  outcome unknown: escalate, never guess
+    ```
+
+    Still one attempt: the workload is the same one, and a new attempt would
+    claim an execution that never happened. A second host attaching later
+    reaches the same escalation from the record, and adds nothing to it.
+    """
+    import os
+
+    from xaytune.experiment import EmbeddedControllerHost, ReconciliationEscalatedError
+
+    async def first():
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            handle = await host.submit(_spec(tmp_path))
+            repo = host.repository
+            deadline = asyncio.get_running_loop().time() + 60
+            while True:
+                (run,) = host._result(handle.experiment_id).nodes[0].runs
+                if run.attempt_status is RunAttemptStatus.RUNNING:
+                    break
+                assert asyncio.get_running_loop().time() < deadline, "never started"
+                await asyncio.sleep(0.02)
+            (attempt,) = _attempts(repo, str(handle.experiment_id))
+            (submit,) = repo.operations.for_target("training-attempt", str(attempt.id))
+            (runtime,) = host._runtimes.values()
+            workload = runtime._registry.workload(submit.runtime_ref.external_id)
+            os.kill(workload.launcher_pid, signal.SIGKILL)
+
+            with pytest.raises(ReconciliationEscalatedError, match="no recorded outcome"):
+                await asyncio.wait_for(handle.wait(), timeout=120)
+            return str(handle.experiment_id), attempt.id
+        finally:
+            await host.close()
+
+    async def second(experiment_id):
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            handle = await host.attach(experiment_id)
+            with pytest.raises(ReconciliationEscalatedError):
+                await asyncio.wait_for(handle.wait(), timeout=60)
+            repo = host.repository
+            attempts = _attempts(repo, experiment_id)
+            position = repo.aggregates.telemetry_position(str(attempts[0].id))
+            degraded = [
+                e
+                for e in repo.events.events_for_experiment(experiment_id)
+                if e.event_type == "TelemetryDegraded"
+            ]
+            return attempts, position, degraded
+        finally:
+            await host.close()
+
+    experiment_id, attempt_id = asyncio.run(first())
+    attempts, position, degraded = asyncio.run(second(experiment_id))
+
+    (attempt,) = attempts
+    assert attempt.id == attempt_id, "no new attempt was minted"
+    assert not attempt.is_terminal, "an unobserved ending is not written down as an outcome"
+    assert position == (1, -1), "the stream moved to the next generation"
+    (event,) = degraded
+    assert (event.payload["from_generation"], event.payload["to_generation"]) == (0, 1)
+    assert len(_workloads(tmp_path)) == 1
+
+
+def _attempts(repo: Any, experiment_id: str) -> list:
+    return [
+        a
+        for node in repo.aggregates.nodes_for_experiment(experiment_id)
+        for run in repo.aggregates.runs_for_node(str(node.id))
+        for a in repo.aggregates.attempts_for_run(str(run.id))
+    ]
+
+
+# ---- cancellation survives the controller -----------------------------------------
+
+
+def test_a_cancellation_recorded_before_the_crash_is_carried_out_after_it(
+    tmp_path: Path,
+) -> None:
+    """ADR-013 AC-6: the intent is in the record, so a restart knows about it.
+
+    The dead controller recorded the cancellation and its intended effect,
+    and died before issuing it. The next host issues it, observes the workload
+    stop, and only then calls the experiment CANCELLED.
+    """
+    from xaytune.core.state.status import ExperimentStatus
+
+    experiment_id = _crash(tmp_path, "cancel-intended")
+
+    result, attempt, operations = _adopt(tmp_path, experiment_id)
+
+    assert result.status is ExperimentStatus.CANCELLED
+    assert attempt.status is RunAttemptStatus.CANCELLED
+    (cancel,) = [op for op in operations if op.type == "cancel"]
+    assert cancel.state == "confirmed"
+    assert len(_workloads(tmp_path)) == 1
+    assert _CountingSubmissions.issued == [], "cancelling adopts; it never re-submits"

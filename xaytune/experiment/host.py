@@ -114,6 +114,9 @@ _ATTEMPT_PATH = (
 )
 """The non-terminal states an attempt passes through, in order."""
 
+_LIVE_STATES = frozenset({"pending", "queued", "starting", "running"})
+_OUTCOME_POLL_SECONDS = 0.5
+
 _RUNTIME_OUTCOME: Mapping[str, tuple[RunAttemptStatus, RunStatus]] = {
     "succeeded": (RunAttemptStatus.SUCCEEDED, RunStatus.SUCCEEDED),
     "failed": (RunAttemptStatus.FAILED, RunStatus.FAILED),
@@ -390,12 +393,31 @@ class EmbeddedControllerHost:
                 self._record_artifact(attempt_id, observation.artifact_ref, position)
 
         status = await runtime.get_status(reference)
+        if status.state in _LIVE_STATES:
+            # The stream ended but the workload did not: its supervisor is
+            # gone (ADR-014 §1a). The same workload, unobserved -- so the
+            # attempt's stream moves to a new generation and the gap is
+            # recorded, and no attempt is created. Its outcome is then read
+            # from the runtime alone.
+            self.repository.record_telemetry_degraded(
+                attempt_id,
+                reason=status.detail or "the telemetry stream ended while the workload ran",
+                actor=_ACTOR,
+            )
+            while status.state in _LIVE_STATES:
+                await asyncio.sleep(_OUTCOME_POLL_SECONDS)
+                status = await runtime.get_status(reference)
+
         outcome = _RUNTIME_OUTCOME.get(status.state)
         if outcome is None:
-            # The workload is live or unknown although its stream ended: the
-            # supervisor is gone. Deciding what that means -- adopt, advance
-            # the telemetry generation, escalate -- is PR-012a, so the attempt
-            # is left unsettled and wait() says so.
+            # Nothing observed how it ended. It may have succeeded and
+            # published, or failed halfway: guessing either would write a
+            # fact nobody established, so the attempt stays unsettled and
+            # wait() escalates.
+            self._escalations[str(experiment_id)] = (
+                f"attempt {attempt_id} ended with no recorded outcome "
+                f"({status.detail or status.state}); it is left unsettled rather than guessed"
+            )
             return
         self._settle(attempt_id, run_id, *outcome, status=status)
         self._reconcile_cancellations(experiment_id)

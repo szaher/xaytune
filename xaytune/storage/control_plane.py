@@ -469,6 +469,65 @@ class ControlPlaneRepository:
                 self.aggregates._advance_telemetry(str(attempt_id), telemetry_position)
         return recorded
 
+    def record_telemetry_degraded(
+        self,
+        attempt_id: RunAttemptId,
+        *,
+        reason: str,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[int, int]:
+        """A dead stream over a live workload: advance the generation, and say so.
+
+        ADR-014 §1a. The supervisor writing the attempt's telemetry is gone
+        while the workload runs on. Nothing it wrote can be continued, so the
+        attempt's stream moves to the next generation -- a later supervisor,
+        or a later controller, starts clean rather than reading old sequences
+        as new -- and a ``TelemetryDegraded`` event records the interval in
+        which the controller saw nothing. **No attempt is created**: the
+        workload is the same one, and a new attempt would claim a new
+        execution that never happened.
+
+        The attempt's revision does not change: its status and its payload
+        are what they were, and the generation is a column the controller
+        assigns (001). Idempotent per generation -- a controller that finds
+        the same dead stream again after a restart does not advance twice.
+
+        Returns:
+            The new ``(generation, sequence)`` position.
+        """
+        with write_transaction(self._connection):
+            attempt = self.aggregates.load_attempt(str(attempt_id))
+            generation, sequence = self.aggregates.telemetry_position(str(attempt_id))
+            # Already degraded into this generation, and nothing recorded from
+            # it since: the same dead stream, found again. A generation that
+            # has since carried events and then died is a new degradation.
+            already = sequence == -1 and any(
+                event.event_type == "TelemetryDegraded"
+                and event.payload.get("to_generation") == generation
+                for event in self.events.events_for_aggregate(str(attempt_id))
+            )
+            if already:
+                return generation, -1
+            self._connection.execute(
+                "UPDATE run_attempts SET telemetry_generation = ?, telemetry_sequence = -1 "
+                "WHERE id = ?",
+                (generation + 1, str(attempt_id)),
+            )
+            self._emit(
+                attempt,
+                "TelemetryDegraded",
+                self._owning_experiment(attempt),
+                actor,
+                destinations,
+                extra={
+                    "from_generation": generation,
+                    "to_generation": generation + 1,
+                    "reason": reason,
+                },
+            )
+        return generation + 1, -1
+
     # ---- ADR-005 §4 ----------------------------------------------------
 
     def create_attempt_with_submit_intent(

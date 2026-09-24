@@ -12,6 +12,9 @@ the thing a crash actually is -- at the point MODE names:
                     a workload exists.
 ``never-sent``      before the runtime is asked at all: INTENDED, and nothing
                     was started.
+``cancel-intended`` once RUNNING, after recording a cancellation and before
+                    issuing its effect: the intent is durable, the workload
+                    still runs.
 
 The workload runs in its own session, so it outlives this process, which is
 the situation PR-012a exists for.
@@ -26,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from xaytune.core.refs import Actor
 from xaytune.experiment import EmbeddedControllerHost, ExperimentSpec
 
 
@@ -59,12 +63,18 @@ async def _main(state: Path, spec: ExperimentSpec, mode: str) -> None:
         state, runtimes={"local": lambda config: _DyingAt(_local_runtime(config), mode)}
     )
     handle = await host.submit(spec)
-    if mode != "running":
+    if mode not in ("running", "cancel-intended"):
         raise AssertionError(f"mode {mode!r} should have died during submit")
     while True:
         result = host._result(handle.experiment_id)
         (run,) = result.nodes[0].runs
         if run.attempt_status is not None and run.attempt_status.value == "running":
+            if mode == "cancel-intended":
+                host.repository.request_experiment_cancellation(
+                    handle.experiment_id,
+                    reason="cancelled, then the controller died",
+                    actor=Actor(type="human", id="operator"),
+                )
             _die()
         await asyncio.sleep(0.02)
 

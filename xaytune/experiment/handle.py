@@ -84,7 +84,7 @@ class ExperimentResult(FrozenDomainModel):
 
 
 class ExperimentHandle:
-    """The public face of one experiment: status, wait, events."""
+    """The public face of one experiment: status, wait, cancel, events."""
 
     def __init__(self, experiment_id: ExperimentId, host: EmbeddedControllerHost) -> None:
         self.experiment_id = experiment_id
@@ -106,6 +106,20 @@ class ExperimentHandle:
                 submitted it has gone. Adopting that work is PR-012a.
         """
         return await self._host._wait(self.experiment_id)
+
+    async def cancel(self, reason: str = "cancelled through ExperimentHandle") -> None:
+        """Request cancellation, and issue the effects it needs.
+
+        Cancellation is intent recorded as an Action, then carried out as a
+        cancel operation for each live attempt (ADR-013 §6). The experiment
+        stays ``ACTIVE`` while that propagates -- there is no ``CANCELLING``
+        status -- and reaches ``CANCELLED`` only once no workload it owns is
+        executing. ``wait()`` returns once that is settled.
+
+        Calling it again while a cancellation is in flight returns without
+        recording a second one.
+        """
+        await self._host._cancel(self.experiment_id, reason=reason)
 
     async def events(self, *, after: int = 0) -> AsyncIterator[DomainEvent]:
         """The experiment's durable history, then everything committed after.

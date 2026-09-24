@@ -249,7 +249,7 @@ class EmbeddedControllerHost:
         self._advance_attempt(attempt.id, RunAttemptStatus.QUEUED)
 
         self._controllers[str(experiment.id)] = asyncio.create_task(
-            self._observe(attempt.id, run.id, runtime, reference),
+            self._observe(experiment.id, attempt.id, run.id, runtime, reference),
             name=f"xaytune-controller-{experiment.id}",
         )
         return ExperimentHandle(experiment.id, self)
@@ -350,6 +350,7 @@ class EmbeddedControllerHost:
 
     async def _observe(
         self,
+        experiment_id: ExperimentId,
         attempt_id: RunAttemptId,
         run_id: RunId,
         runtime: RuntimeBackend,
@@ -381,6 +382,55 @@ class EmbeddedControllerHost:
             # is left unsettled and wait() says so.
             return
         self._settle(attempt_id, run_id, *outcome, status=status)
+        self._reconcile_cancellations(experiment_id)
+
+    # ---- cancellation (ADR-013 §6) -----------------------------------------
+
+    async def _cancel(self, experiment_id: ExperimentId, *, reason: str) -> None:
+        """Record the cancellation saga, then carry out its effects.
+
+        Intent first, in one commit: the experiment's Action and a child
+        Action and cancel operation per live attempt. Then each effect,
+        confirmed once the runtime has accepted it. Nothing here moves the
+        experiment: it reaches ``CANCELLED`` when reconciliation sees that no
+        attempt is live, which for a running workload is after the controller
+        has observed it stop.
+
+        An effect that cannot be issued -- no recorded reference, a runtime
+        that raised -- is left ``INTENDED``, and the experiment stays
+        ``ACTIVE``. Never timed out into ``CANCELLED``: that would claim a
+        workload stopped exactly when it is most likely still running.
+        """
+        experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        parent, children = self.repository.request_experiment_cancellation(
+            experiment.id, reason=reason, actor=_ACTOR
+        )
+        if experiment.runtime is not None:
+            runtime = self._runtime(experiment.runtime)
+            for child, operation in children:
+                if operation is None or operation.state != "intended":
+                    continue
+                reference = self._submitted_reference(child.target.id)
+                if reference is None:
+                    continue
+                await runtime.cancel(reference, operation.id)
+                self.repository.confirm_operation(
+                    operation.id, expected_revision=operation.revision, actor=_ACTOR
+                )
+        self.repository.reconcile_experiment_cancellation(parent.id, actor=_ACTOR)
+
+    def _reconcile_cancellations(self, experiment_id: ExperimentId) -> None:
+        """Settle any experiment cancellation in flight, now an attempt has ended."""
+        for action in self.repository.actions.for_target("experiment", str(experiment_id)):
+            if action.type == "cancel-experiment" and not action.is_terminal:
+                self.repository.reconcile_experiment_cancellation(action.id, actor=_ACTOR)
+
+    def _submitted_reference(self, attempt_id: str) -> RuntimeRef | None:
+        """The runtime reference the attempt's confirmed submission recorded."""
+        for operation in self.repository.operations.for_target("training-attempt", attempt_id):
+            if operation.type == "submit" and operation.runtime_ref is not None:
+                return operation.runtime_ref
+        return None
 
     # ---- durable writes --------------------------------------------------
 

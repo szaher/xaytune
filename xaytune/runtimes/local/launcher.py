@@ -215,9 +215,14 @@ def _next_generation(events: Path) -> int:
     generation from durable controller-side attempt state; deriving it from the
     stream a replacement supervisor happens to find is a weaker rule, and two
     supervisors that both read the file before either wrote to it would pick the
-    same number. It is enough while nothing relaunches a local workload
-    automatically, and it is replaced when PR-012a wires the authoritative
-    generation through from the attempt.
+    same number. It is enough because nothing relaunches a local supervisor:
+    one launcher per workload, so this is always 0.
+
+    Since PR-012a the authoritative generation is the attempt's
+    ``telemetry_generation``, which the controller advances when a stream dies
+    over a live workload (ADR-014 §1a). Passing that into a *relaunched*
+    supervisor arrives with the first backend that relaunches one; LocalRuntime
+    does not, so there is nothing to pass it to yet.
     """
     highest = -1
     try:

@@ -109,9 +109,11 @@ class ExperimentHandle:
         """Wait until the controller is quiescent, and say where things stand.
 
         Raises:
-            ControllerNotRunningError: If work is unsettled and no controller
-                in this process is driving it -- after the process that
-                submitted it has gone. Adopting that work is PR-012a.
+            ReconciliationEscalatedError: If reconciliation reached a question
+                it must not answer by guessing -- a workload that ended with no
+                recorded outcome, or a submission a runtime cannot account for.
+            ControllerNotRunningError: If work is unsettled and this host
+                cannot adopt it, because the record names no runtime spec.
         """
         return await self._host._wait(self.experiment_id)
 

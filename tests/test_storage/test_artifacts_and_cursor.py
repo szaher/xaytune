@@ -160,3 +160,120 @@ def test_an_artifact_attributed_elsewhere_is_refused_not_overwritten(
     with pytest.raises(ProvenanceError, match="misattribute"):
         repo.record_artifact(attempt.id, foreign, expected_revision=attempt.revision, actor=ACTOR)
     assert repo.aggregates.load_attempt(str(attempt.id)).artifact_refs == ()
+
+
+# ---- the durable telemetry cursor ---------------------------------------------
+
+
+def test_nothing_recorded_means_the_start_of_generation_zero(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (0, -1)
+
+
+def test_the_cursor_advances_with_the_transition_its_event_caused(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    from xaytune.core.state.status import RunAttemptStatus
+
+    repo.transition_attempt(
+        attempt.id,
+        expected_revision=attempt.revision,
+        new_status=RunAttemptStatus.QUEUED,
+        actor=ACTOR,
+        telemetry_position=(0, 3),
+    )
+
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (0, 3)
+
+
+def test_the_cursor_never_moves_backwards(repo: ControlPlaneRepository, attempt: Any) -> None:
+    """A replayed event re-applied after a restart must not rewind it."""
+    recorded = repo.record_artifact(
+        attempt.id,
+        _artifact(),
+        expected_revision=attempt.revision,
+        actor=ACTOR,
+        telemetry_position=(1, 7),
+    )
+
+    repo.record_artifact(
+        attempt.id,
+        _artifact(),
+        expected_revision=recorded.revision,
+        actor=ACTOR,
+        telemetry_position=(0, 9),
+    )
+
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (1, 7)
+
+
+def test_the_cursor_does_not_advance_past_an_effect_that_did_not_commit(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    """Advanced in the transition's commit, so a failed transition moves nothing."""
+    from xaytune.core.errors import InvalidTransitionError
+    from xaytune.core.state.status import RunAttemptStatus
+
+    with pytest.raises(InvalidTransitionError):
+        repo.transition_attempt(
+            attempt.id,
+            expected_revision=attempt.revision,
+            new_status=RunAttemptStatus.SUCCEEDED,  # CREATED -> SUCCEEDED is not an edge
+            actor=ACTOR,
+            telemetry_position=(0, 5),
+        )
+
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (0, -1)
+
+
+def test_a_dead_stream_moves_the_attempt_to_the_next_generation(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    before = repo.aggregates.load_attempt(str(attempt.id))
+
+    position = repo.record_telemetry_degraded(attempt.id, reason="supervisor gone", actor=ACTOR)
+
+    assert position == (1, -1)
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (1, -1)
+    after = repo.aggregates.load_attempt(str(attempt.id))
+    assert after == before, "the attempt itself is unchanged: same status, same revision"
+    (event,) = [
+        e
+        for e in repo.events.events_for_aggregate(str(attempt.id))
+        if e.event_type == "TelemetryDegraded"
+    ]
+    assert event.payload["reason"] == "supervisor gone"
+
+
+def test_finding_the_same_dead_stream_again_does_not_advance_twice(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    """A controller that restarts and finds the stream still dead."""
+    repo.record_telemetry_degraded(attempt.id, reason="gone", actor=ACTOR)
+
+    assert repo.record_telemetry_degraded(attempt.id, reason="gone", actor=ACTOR) == (1, -1)
+    degraded = [
+        e
+        for e in repo.events.events_for_aggregate(str(attempt.id))
+        if e.event_type == "TelemetryDegraded"
+    ]
+    assert len(degraded) == 1
+
+
+def test_a_generation_that_carried_events_and_then_died_degrades_again(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    """Not the same dead stream: a later supervisor wrote, and then it died too."""
+    from xaytune.core.state.status import RunAttemptStatus
+
+    repo.record_telemetry_degraded(attempt.id, reason="first", actor=ACTOR)
+    repo.transition_attempt(
+        attempt.id,
+        expected_revision=attempt.revision,
+        new_status=RunAttemptStatus.QUEUED,
+        actor=ACTOR,
+        telemetry_position=(1, 4),
+    )
+
+    assert repo.record_telemetry_degraded(attempt.id, reason="second", actor=ACTOR) == (2, -1)

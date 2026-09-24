@@ -238,6 +238,39 @@ class AggregateStore:
             },
         )
 
+    def telemetry_position(self, attempt_id: str) -> tuple[int, int]:
+        """The attempt's durable telemetry cursor, as ``(generation, sequence)``.
+
+        The position of the last telemetry event whose consequences are
+        recorded (ADR-014 §4). ``(0, -1)`` for an attempt nothing has been
+        recorded from.
+
+        Raises:
+            AggregateNotFoundError: If no such attempt exists.
+        """
+        row = self._connection.execute(
+            "SELECT telemetry_generation, telemetry_sequence FROM run_attempts WHERE id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if row is None:
+            raise AggregateNotFoundError("RunAttempt", attempt_id)
+        return int(row["telemetry_generation"]), int(row["telemetry_sequence"])
+
+    def _advance_telemetry(self, attempt_id: str, position: tuple[int, int]) -> None:
+        """Move the cursor forward to *position*, or leave it if already past.
+
+        Only forward: a replayed or late event re-applied after a restart must
+        not wind the cursor back over events whose effects are recorded.
+        """
+        self._require_transaction()
+        generation, sequence = position
+        self._connection.execute(
+            "UPDATE run_attempts SET telemetry_generation = ?, telemetry_sequence = ? "
+            "WHERE id = ? AND (telemetry_generation < ? "
+            "OR (telemetry_generation = ? AND telemetry_sequence < ?))",
+            (generation, sequence, attempt_id, generation, generation, sequence),
+        )
+
     def _update_attempt(self, attempt: RunAttempt) -> None:
         self._update(
             "run_attempts",

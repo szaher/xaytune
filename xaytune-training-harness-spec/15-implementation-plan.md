@@ -459,6 +459,35 @@ Implement:
   `RunAttempt`
 - cancellation leaves no executing workload
 
+As built, reconciliation runs in `attach()`, for the experiment attached to:
+
+- implementations, only where they are used: the runtime is resolved, and a
+  version other than the recorded one fails closed, only where an external
+  effect is looked up, adopted or cancelled. The compiler is needed only to
+  rebuild a request that must be re-issued, so only that path resolves it and
+  checks its version. A running workload is adopted even if its compiler is
+  no longer installed, and a settled experiment -- or a refusal already
+  recorded -- attaches with neither
+- per unsettled attempt, its submit operation decides: CONFIRMED is adopted;
+  INTENDED/SENT is looked up; only "never received" is issued, under the
+  recorded operation id and after checking the rebuilt plan's digest -- and
+  only if the runtime can report completed operations, otherwise it escalates
+- each adopted attempt has its own observer, tracked per attempt: `wait()`
+  waits for all of them, including any adopted while it waits, and `close()`
+  stops all of them
+- telemetry resumes from the attempt's durable cursor
+  (`telemetry_generation`, `telemetry_sequence`), which advances only in the
+  commit of the effect an event caused
+- a dead stream over a live workload advances the generation, records
+  `TelemetryDegraded`, and reads the outcome from the runtime; an ending
+  nothing observed escalates rather than being guessed
+- an in-flight cancellation is carried on
+
+Not in scope, deliberately: **ownership**. Two hosts attached to one
+experiment at the same time would both adopt it. Neither can create a second
+workload, because adoption never issues one, but their writes would conflict.
+Leases belong to the daemon host (PR-027/PR-028).
+
 Phase exit:
 
 - SFT runs through new compile/execute path

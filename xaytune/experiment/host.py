@@ -17,12 +17,15 @@ before the runtime is asked for anything, so a crash between the two leaves
 intent with no effect -- which a later reconciler can resolve -- and never an
 effect with no intent, which nothing could find.
 
-**Durable-state-backed, not restart-reconciling.** Everything this host knows
-is in the record, so a handle from ``attach()`` in another process reads the
-same answers. But an attempt that was in flight when the submitting process
-died is not adopted by a new host: nothing here resumes its telemetry or
-settles its outcome. That is PR-012a, and until then ``wait()`` on such an
-experiment says so rather than waiting forever.
+**Restart-safe, not yet owned.** Everything this host knows is in the record,
+so when the process that submitted an experiment dies, ``attach()`` from a new
+host adopts its unsettled work (PR-012a): a live workload is observed again
+from the durable telemetry cursor, an unconfirmed submission is looked up, and
+a submission is issued only when the runtime says it never received it. What
+it does not have is ownership. Two hosts attached to one experiment *at the
+same time* would both adopt it -- no second workload, since adoption never
+issues one, but two observers whose writes would conflict. Leases that make
+one host the owner belong to the daemon host, not to this one.
 
 The controller loop only turns observations into transitions. It does not
 decide scientific outcomes: a successful run leaves the node ``ACTIVE``,
@@ -50,7 +53,7 @@ from xaytune.core.domain.experiment import (
     Experiment,
     ExperimentNode,
 )
-from xaytune.core.domain.operation import RuntimeOperationTarget
+from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import XaytuneError
@@ -83,13 +86,15 @@ from xaytune.experiment.handle import (
     RunOutcome,
 )
 from xaytune.experiment.spec import ExperimentSpec
-from xaytune.runtimes import RuntimeBackend, RuntimeStatus
+from xaytune.runtimes import RuntimeBackend, RuntimeStatus, StreamCursor
 from xaytune.storage.control_plane import ControlPlaneRepository
 from xaytune.storage.migrations import migrate
 
 __all__ = [
     "ControllerNotRunningError",
     "EmbeddedControllerHost",
+    "ImplementationMismatchError",
+    "ReconciliationEscalatedError",
     "UnknownImplementationError",
 ]
 
@@ -112,6 +117,9 @@ _ATTEMPT_PATH = (
 )
 """The non-terminal states an attempt passes through, in order."""
 
+_LIVE_STATES = frozenset({"pending", "queued", "starting", "running"})
+_OUTCOME_POLL_SECONDS = 0.5
+
 _RUNTIME_OUTCOME: Mapping[str, tuple[RunAttemptStatus, RunStatus]] = {
     "succeeded": (RunAttemptStatus.SUCCEEDED, RunStatus.SUCCEEDED),
     "failed": (RunAttemptStatus.FAILED, RunStatus.FAILED),
@@ -123,13 +131,38 @@ class UnknownImplementationError(XaytuneError):
     """A spec names a compiler or runtime this host cannot resolve."""
 
 
-class ControllerNotRunningError(XaytuneError):
-    """Work is unsettled and nothing in this process is driving it.
+class ImplementationMismatchError(XaytuneError):
+    """The record names a compiler or runtime version this host cannot provide.
 
-    The submitting process has gone, or never was this one. Adopting an
-    in-flight attempt -- finding its workload, resuming its telemetry, settling
-    its outcome -- is PR-012a's reconciliation, and waiting here instead would
-    wait forever.
+    Raised only where that implementation would be used, not merely because
+    the record names it:
+
+    - a **runtime** mismatch refuses interacting with the recorded external
+      effect -- looking it up, adopting it, cancelling it -- because a
+      different runtime version may track workloads differently;
+    - a **compiler** mismatch refuses rebuilding a request to re-issue it,
+      because a different compiler version may compile the same candidate
+      into a different request.
+
+    Nothing is adopted or issued when it is raised. Reading the record needs
+    neither: a settled experiment attaches with no runtime or compiler at all.
+    """
+
+
+class ReconciliationEscalatedError(XaytuneError):
+    """Reconciliation reached a question it must not answer by guessing.
+
+    The work is left exactly as recorded -- an unresolved operation stays
+    unresolved -- and a person, or a later and better-informed controller,
+    has to decide.
+    """
+
+
+class ControllerNotRunningError(XaytuneError):
+    """Work is unsettled, nothing is driving it, and this host cannot adopt it.
+
+    The record names no runtime to adopt it with -- an experiment recorded
+    before a host drove experiments. Waiting instead would wait forever.
     """
 
 
@@ -181,10 +214,17 @@ class EmbeddedControllerHost:
         self._connection = connect(state_path)
         migrate(self._connection)
         self.repository = ControlPlaneRepository(self._connection)
-        self._compilers = dict(compilers or _default_compilers())
-        self._runtime_factories = dict(runtimes or {"local": _local_runtime})
+        # ``None`` means the defaults; an empty mapping means none. Treating an
+        # empty registry as "use the defaults" would hand a caller who removed
+        # every compiler the built-in ones anyway.
+        self._compilers = dict(_default_compilers() if compilers is None else compilers)
+        self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
         self._runtimes: dict[str, RuntimeBackend] = {}
-        self._controllers: dict[str, asyncio.Task[None]] = {}
+        # One observer per attempt, keyed by experiment then attempt: an
+        # experiment can have several live attempts, and each must stay
+        # tracked -- for wait() to wait on and close() to stop.
+        self._controllers: dict[str, dict[str, asyncio.Task[None]]] = {}
+        self._escalations: dict[str, str] = {}
         self._reference = ControllerHostRef(kind="embedded", id=f"embedded-{uuid.uuid4().hex}")
 
     # ---- the public surface ---------------------------------------------
@@ -213,58 +253,38 @@ class EmbeddedControllerHost:
         run = self._record_run(node, spec.seed)
 
         attempt = RunAttempt(id=RunAttemptId.generate(), run_id=run.id, attempt_number=1)
-        plan = ResolvedExecutionPlan(
-            spec=compiler.compile(
-                spec.candidate,
-                CompilationContext(
-                    run_id=str(run.id),
-                    seed=spec.seed,
-                    output_uri=str(Path(spec.artifact_root) / str(run.id)),
-                ),
-            ),
-            runtime=spec.runtime.kind,
-            target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id)),
-        )
-
+        plan = self._plan(experiment, run, attempt.id, compiler)
         attempt, operation = self.repository.create_attempt_with_submit_intent(
             attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
         )
 
-        try:
-            reference = await runtime.submit_or_get(operation.id, plan)
-        except Exception as exc:
-            if _is_refusal(exc):
-                # A known negative: the runtime refused the plan and nothing
-                # runs. Anything else is an unknown outcome, and stays INTENDED
-                # for reconciliation rather than being written down as failed.
-                self.repository.fail_operation(
-                    operation.id, expected_revision=operation.revision, actor=_ACTOR
-                )
-                self._settle(attempt.id, run.id, RunAttemptStatus.FAILED, RunStatus.FAILED)
-                return ExperimentHandle(experiment.id, self)
-            raise
-
-        self.repository.confirm_operation(
-            operation.id,
-            expected_revision=operation.revision,
-            actor=_ACTOR,
-            runtime_ref=reference,
-        )
-        self._advance_attempt(attempt.id, RunAttemptStatus.QUEUED)
-
-        self._controllers[str(experiment.id)] = asyncio.create_task(
-            self._observe(experiment.id, attempt.id, run.id, runtime, reference),
-            name=f"xaytune-controller-{experiment.id}",
-        )
+        await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
         return ExperimentHandle(experiment.id, self)
 
     async def attach(self, experiment_id: ExperimentId | str) -> ExperimentHandle:
-        """A handle to an experiment already in the record.
+        """A handle to an experiment already in the record, adopting its work.
+
+        If nothing in this process is driving the experiment -- the process that
+        submitted it has gone -- its unsettled work is reconciled first (see
+        :meth:`_reconcile`): a live workload is adopted and observed from the
+        durable cursor, an unconfirmed submission is looked up, and only a
+        submission the runtime never received is issued, under its recorded
+        identity.
 
         Raises:
             AggregateNotFoundError: If no such experiment exists.
+            ImplementationMismatchError: If unsettled work needs the recorded
+                runtime -- to look up, adopt or cancel an effect -- and this
+                host provides a different version; or if a submission must be
+                re-issued and this host provides a different compiler version
+                to rebuild it with. Nothing is adopted or issued.
+            UnknownImplementationError: In the same cases, when this host has
+                no such runtime or compiler at all. An experiment with nothing
+                left to reconcile needs neither.
         """
         experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        if not self._driving(experiment.id):
+            await self._reconcile(experiment)
         return ExperimentHandle(experiment.id, self)
 
     async def close(self) -> None:
@@ -272,11 +292,12 @@ class EmbeddedControllerHost:
 
         A controller task still running is cancelled: its workload keeps
         running, because the runtime owns it, and the record keeps the intent
-        and the reference. Picking it up again is PR-012a.
+        and the reference, so a later ``attach()`` adopts it.
         """
-        for task in self._controllers.values():
+        tasks = [task for observers in self._controllers.values() for task in observers.values()]
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._controllers.values(), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._controllers.clear()
         for runtime in self._runtimes.values():
             close = getattr(runtime, "close", None)
@@ -294,16 +315,25 @@ class EmbeddedControllerHost:
         return self.repository.events.events_for_experiment_after(str(experiment_id), sequence)
 
     async def _wait(self, experiment_id: ExperimentId) -> ExperimentResult:
-        controller = self._controllers.get(str(experiment_id))
-        if controller is not None:
-            # Shielded: a caller that stops waiting must not stop the
-            # controller, which other handles may be waiting on too.
-            await asyncio.shield(controller)
+        # Every attempt's observer, including any adopted while waiting.
+        # Shielded: a caller that stops waiting must not stop the observers,
+        # which other handles may be waiting on too.
+        awaited: set[asyncio.Task[None]] = set()
+        while True:
+            observers = self._controllers.get(str(experiment_id), {}).values()
+            pending = [task for task in observers if task not in awaited]
+            if not pending:
+                break
+            awaited.update(pending)
+            await asyncio.gather(*(asyncio.shield(task) for task in pending))
+        escalation = self._escalations.get(str(experiment_id))
+        if escalation is not None:
+            raise ReconciliationEscalatedError(escalation)
         result = self._result(experiment_id)
         if not result.quiescent:
             raise ControllerNotRunningError(
-                f"experiment {experiment_id} has unsettled work and no controller in this "
-                f"process is driving it; adopting in-flight work after a restart is PR-012a"
+                f"experiment {experiment_id} has unsettled work, no controller is driving it, "
+                f"and this host cannot adopt it: the record names no runtime spec"
             )
         return result
 
@@ -375,25 +405,255 @@ class EmbeddedControllerHost:
         reporting ``TrainingCompleted`` (publication failed), and the outcome
         is the exit, not the last observation.
         """
-        async for envelope in runtime.watch(reference):
+        generation, sequence = self.repository.aggregates.telemetry_position(str(attempt_id))
+        cursor = StreamCursor(generation=generation, sequence=sequence)
+        async for envelope in runtime.watch(reference, cursor):
             observation = envelope.payload.data
+            position = (envelope.stream_generation, envelope.sequence)
             if isinstance(observation, WorkerReadyPayload):
-                self._advance_attempt(attempt_id, RunAttemptStatus.STARTING)
+                self._advance_attempt(attempt_id, RunAttemptStatus.STARTING, position)
             elif isinstance(observation, TrainingStartedPayload):
-                self._advance_attempt(attempt_id, RunAttemptStatus.RUNNING)
+                self._advance_attempt(attempt_id, RunAttemptStatus.RUNNING, position)
             elif isinstance(observation, ArtifactProducedPayload):
-                self._record_artifact(attempt_id, observation.artifact_ref)
+                self._record_artifact(attempt_id, observation.artifact_ref, position)
 
         status = await runtime.get_status(reference)
+        if status.state in _LIVE_STATES:
+            # The stream ended but the workload did not: its supervisor is
+            # gone (ADR-014 §1a). The same workload, unobserved -- so the
+            # attempt's stream moves to a new generation and the gap is
+            # recorded, and no attempt is created. Its outcome is then read
+            # from the runtime alone.
+            self.repository.record_telemetry_degraded(
+                attempt_id,
+                reason=status.detail or "the telemetry stream ended while the workload ran",
+                actor=_ACTOR,
+            )
+            while status.state in _LIVE_STATES:
+                await asyncio.sleep(_OUTCOME_POLL_SECONDS)
+                status = await runtime.get_status(reference)
+
         outcome = _RUNTIME_OUTCOME.get(status.state)
         if outcome is None:
-            # The workload is live or unknown although its stream ended: the
-            # supervisor is gone. Deciding what that means -- adopt, advance
-            # the telemetry generation, escalate -- is PR-012a, so the attempt
-            # is left unsettled and wait() says so.
+            # Nothing observed how it ended. It may have succeeded and
+            # published, or failed halfway: guessing either would write a
+            # fact nobody established, so the attempt stays unsettled and
+            # wait() escalates.
+            self._escalations[str(experiment_id)] = (
+                f"attempt {attempt_id} ended with no recorded outcome "
+                f"({status.detail or status.state}); it is left unsettled rather than guessed"
+            )
             return
         self._settle(attempt_id, run_id, *outcome, status=status)
         self._reconcile_cancellations(experiment_id)
+
+    # ---- issuing and reconciling submissions (ADR-013) -----------------------
+
+    def _plan(
+        self,
+        experiment: Experiment,
+        run: Run,
+        attempt_id: RunAttemptId,
+        compiler: TrainerCompiler,
+    ) -> ResolvedExecutionPlan:
+        """The attempt's execution plan, built from the durable record alone.
+
+        Submission and reconciliation both use this, so a submission re-issued
+        after a restart is the same request by construction: the same
+        candidate snapshot, seed, output location and target, compiled by the
+        same compiler version. Its digest is still checked against the
+        recorded one before anything is issued.
+        """
+        node = self.repository.aggregates.load_node(str(run.node_id))
+        assert experiment.runtime is not None and experiment.artifact_root is not None
+        assert run.seed is not None
+        return ResolvedExecutionPlan(
+            spec=compiler.compile(
+                node.candidate.candidate,
+                CompilationContext(
+                    run_id=str(run.id),
+                    seed=run.seed,
+                    output_uri=str(Path(experiment.artifact_root) / str(run.id)),
+                ),
+            ),
+            runtime=experiment.runtime.kind,
+            target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id)),
+        )
+
+    async def _issue(
+        self,
+        experiment_id: ExperimentId,
+        run_id: RunId,
+        attempt_id: RunAttemptId,
+        operation: RuntimeOperation,
+        plan: ResolvedExecutionPlan,
+        runtime: RuntimeBackend,
+    ) -> None:
+        """Issue a recorded submission, record its outcome, and observe it.
+
+        A runtime's definitive refusal fails the operation and settles the
+        attempt. Any other error leaves the operation INTENDED -- an unknown
+        outcome is for reconciliation, not to be written down as a failure.
+        """
+        try:
+            reference = await runtime.submit_or_get(operation.id, plan)
+        except Exception as exc:
+            if _is_refusal(exc):
+                self.repository.fail_operation(
+                    operation.id, expected_revision=operation.revision, actor=_ACTOR
+                )
+                self._settle(attempt_id, run_id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+                return
+            raise
+        operation = self.repository.confirm_operation(
+            operation.id,
+            expected_revision=operation.revision,
+            actor=_ACTOR,
+            runtime_ref=reference,
+        )
+        self._adopt(experiment_id, run_id, attempt_id, runtime, reference)
+
+    def _adopt(
+        self,
+        experiment_id: ExperimentId,
+        run_id: RunId,
+        attempt_id: RunAttemptId,
+        runtime: RuntimeBackend,
+        reference: RuntimeRef,
+    ) -> None:
+        """Observe a workload the runtime has, whoever issued it."""
+        self._advance_attempt(attempt_id, RunAttemptStatus.QUEUED)
+        observers = self._controllers.setdefault(str(experiment_id), {})
+        observers[str(attempt_id)] = asyncio.create_task(
+            self._observe(experiment_id, attempt_id, run_id, runtime, reference),
+            name=f"xaytune-controller-{experiment_id}-{attempt_id}",
+        )
+
+    def _driving(self, experiment_id: ExperimentId) -> bool:
+        """Whether this host is still observing any of the experiment's attempts."""
+        observers = self._controllers.get(str(experiment_id), {})
+        return any(not task.done() for task in observers.values())
+
+    async def _reconcile(self, experiment: Experiment) -> None:
+        """Adopt an experiment's unsettled work after the process driving it died.
+
+        For every attempt that has not reached an outcome, its submit
+        operation decides what happens -- and a submission is issued only when
+        the runtime positively says it never received it:
+
+        ```text
+        CONFIRMED, reference recorded      adopt the workload
+        INTENDED/SENT, lookup finds it     confirm it, then adopt
+        INTENDED/SENT, lookup: rejected    fail the operation and the attempt
+        INTENDED/SENT, lookup: nothing     issue it, under the recorded id and
+                                           digest -- or escalate, if the runtime
+                                           cannot tell "never received" from
+                                           "finished and forgotten" (ADR-013)
+        ```
+
+        Each implementation is resolved, and its version checked, only on a
+        path that uses it: the runtime where an external effect is looked up,
+        adopted or cancelled; the compiler only where a request is rebuilt.
+        An experiment with nothing unsettled needs neither, so its record can
+        be attached to after the runtime that ran it is gone. A cancellation
+        still in flight is carried on: its intended effects are issued, which
+        the runtime treats as idempotent under the same operation id.
+        """
+        if experiment.runtime is None:
+            # Recorded before a host drove experiments: nothing to adopt with.
+            return
+
+        aggregates = self.repository.aggregates
+        for node in aggregates.nodes_for_experiment(str(experiment.id)):
+            for run in aggregates.runs_for_node(str(node.id)):
+                for attempt in aggregates.attempts_for_run(str(run.id)):
+                    if attempt.is_terminal:
+                        continue
+                    await self._reconcile_attempt(experiment, run, attempt)
+
+        for action in self.repository.actions.for_target("experiment", str(experiment.id)):
+            if action.type == "cancel-experiment" and not action.is_terminal:
+                await self._cancel(experiment.id, reason=action.reason)
+
+    async def _reconcile_attempt(
+        self,
+        experiment: Experiment,
+        run: Run,
+        attempt: RunAttempt,
+    ) -> None:
+        """Adopt, settle, escalate or -- only on proven absence -- re-issue one attempt.
+
+        Settling a submission the record already shows failed needs nothing
+        but the record. Rediscovering an effect that exists needs the runtime,
+        and nothing else. The compiler becomes a dependency only when the
+        original request must be rebuilt, so that is the only branch that
+        resolves one: a workload already running is adopted even if its
+        compiler is no longer installed.
+        """
+        submissions = [
+            op
+            for op in self.repository.operations.for_target("training-attempt", str(attempt.id))
+            if op.type == "submit"
+        ]
+        if not submissions:
+            return
+        (submission,) = submissions
+
+        if submission.state == "failed":
+            # Crashed between recording the refusal and settling the attempt.
+            self._settle(attempt.id, run.id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            return
+
+        # From here on the external effect is interpreted, so the runtime that
+        # tracks it is needed -- and it must be the one that recorded it.
+        runtime = self._recorded_runtime(experiment)
+        if submission.state == "confirmed" and submission.runtime_ref is not None:
+            self._adopt(experiment.id, run.id, attempt.id, runtime, submission.runtime_ref)
+            return
+
+        outcome = await runtime.lookup_operation(submission.id)
+        if outcome is not None and outcome.disposition == "rejected":
+            self.repository.fail_operation(
+                submission.id, expected_revision=submission.revision, actor=_ACTOR
+            )
+            self._settle(attempt.id, run.id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            return
+        if outcome is not None:
+            assert outcome.runtime_ref is not None
+            self.repository.confirm_operation(
+                submission.id,
+                expected_revision=submission.revision,
+                actor=_ACTOR,
+                runtime_ref=outcome.runtime_ref,
+            )
+            self._adopt(experiment.id, run.id, attempt.id, runtime, outcome.runtime_ref)
+            return
+
+        resilience = runtime.capabilities().resilience
+        if resilience is None or resilience.reports_completed_operations is not True:
+            self._escalations[str(experiment.id)] = (
+                f"submission {submission.id} for attempt {attempt.id} is unconfirmed and the "
+                f"runtime has no record of it, but this runtime cannot report completed "
+                f"operations: it may have run and been forgotten, so it is not re-issued"
+            )
+            return
+
+        # Only now is the original request rebuilt, so only now is the
+        # compiler needed -- and it must be the one that built the original.
+        if experiment.compiler is None:
+            raise ImplementationMismatchError(
+                f"submission {submission.id} must be re-issued, but the record names no "
+                f"compiler to rebuild its request with"
+            )
+        compiler = self._compiler(experiment.compiler.name)
+        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
+        plan = self._plan(experiment, run, attempt.id, compiler)
+        if plan.request_digest("submit") != submission.request_digest:
+            raise ImplementationMismatchError(
+                f"re-issuing submission {submission.id} would send a different request than "
+                f"the one recorded; the candidate or its compilation changed"
+            )
+        await self._issue(experiment.id, run.id, attempt.id, submission, plan, runtime)
 
     # ---- cancellation (ADR-013 §6) -----------------------------------------
 
@@ -417,13 +677,15 @@ class EmbeddedControllerHost:
             experiment.id, reason=reason, actor=_ACTOR
         )
         if experiment.runtime is not None:
-            runtime = self._runtime(experiment.runtime)
             for child, operation in children:
                 if operation is None or operation.state != "intended":
                     continue
                 reference = self._submitted_reference(child.target.id)
                 if reference is None:
                     continue
+                # Resolved per effect, so cancelling an experiment with no
+                # effect left to issue needs no runtime.
+                runtime = self._recorded_runtime(experiment)
                 await runtime.cancel(reference, operation.id)
                 self.repository.confirm_operation(
                     operation.id, expected_revision=operation.revision, actor=_ACTOR
@@ -502,7 +764,12 @@ class EmbeddedControllerHost:
             run.id, expected_revision=run.revision, new_status=RunStatus.ACTIVE, actor=_ACTOR
         )
 
-    def _advance_attempt(self, attempt_id: RunAttemptId, target: RunAttemptStatus) -> RunAttempt:
+    def _advance_attempt(
+        self,
+        attempt_id: RunAttemptId,
+        target: RunAttemptStatus,
+        position: tuple[int, int] | None = None,
+    ) -> RunAttempt:
         """Move an attempt forward to *target*, through each state in between.
 
         Only ever forward: an observation that arrives late -- a
@@ -513,19 +780,34 @@ class EmbeddedControllerHost:
         if attempt.is_terminal:
             return attempt
         path = _ATTEMPT_PATH
-        position = path.index(attempt.status) if attempt.status in path else -1
-        for status in path[position + 1 : path.index(target) + 1]:
+        index = path.index(attempt.status) if attempt.status in path else -1
+        steps = path[index + 1 : path.index(target) + 1]
+        for number, status in enumerate(steps, start=1):
             attempt = self.repository.transition_attempt(
-                attempt.id, expected_revision=attempt.revision, new_status=status, actor=_ACTOR
+                attempt.id,
+                expected_revision=attempt.revision,
+                new_status=status,
+                actor=_ACTOR,
+                # The cursor moves with the last step the event caused.
+                telemetry_position=position if number == len(steps) else None,
             )
         return attempt
 
-    def _record_artifact(self, attempt_id: RunAttemptId, artifact: ArtifactRef) -> None:
+    def _record_artifact(
+        self,
+        attempt_id: RunAttemptId,
+        artifact: ArtifactRef,
+        position: tuple[int, int] | None = None,
+    ) -> None:
         attempt = self.repository.aggregates.load_attempt(str(attempt_id))
         if any(existing.id == artifact.id for existing in attempt.artifact_refs):
             return
         self.repository.record_artifact(
-            attempt.id, artifact, expected_revision=attempt.revision, actor=_ACTOR
+            attempt.id,
+            artifact,
+            expected_revision=attempt.revision,
+            actor=_ACTOR,
+            telemetry_position=position,
         )
 
     def _settle(
@@ -571,6 +853,18 @@ class EmbeddedControllerHost:
             )
         return factory()
 
+    def _recorded_runtime(self, experiment: Experiment) -> RuntimeBackend:
+        """The runtime that recorded *experiment*'s effects, at the recorded version.
+
+        For work that touches an effect already recorded. A different version
+        may track workloads differently, so it is refused rather than trusted.
+        """
+        spec = experiment.runtime
+        assert spec is not None, "only called for experiments that record a runtime"
+        runtime = self._runtime(spec)
+        _require_version("runtime", spec, runtime.descriptor.plugin_version)  # type: ignore[attr-defined]
+        return runtime
+
     def _runtime(self, spec: RuntimeSpec) -> RuntimeBackend:
         factory = self._runtime_factories.get(spec.kind)
         if factory is None:
@@ -589,3 +883,13 @@ def _is_refusal(exc: BaseException) -> bool:
     from xaytune.runtimes.local import UnsupportedPlanError
 
     return isinstance(exc, UnsupportedPlanError)
+
+
+def _require_version(kind: str, spec: CompilerSpec | RuntimeSpec, available: str) -> None:
+    """Refuse to continue work recorded against a different implementation version."""
+    if spec.version != available:
+        name = spec.name if isinstance(spec, CompilerSpec) else spec.kind
+        raise ImplementationMismatchError(
+            f"the record names {kind} {name!r} at version {spec.version}, but this host "
+            f"provides {available}; continuing its work with a different version is refused"
+        )

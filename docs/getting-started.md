@@ -29,13 +29,43 @@ pip install -e ".[all]"
 
 # Development (pytest, ruff, mypy)
 pip install -e ".[dev]"
+
+# The TRL trainer
+pip install -e ".[trl]"
 ```
+
+### Reproducible install
+
+`uv.lock` pins every package to the versions CI tests. From a clone:
+
+```bash
+uv sync --locked --extra trl            # add --extra dev to run the tests
+```
+
+`--locked` refuses to install if `uv.lock` and `pyproject.toml` disagree,
+rather than quietly resolving something else.
+
+### Supported TRL and Transformers releases
+
+The TRL trainer supports exactly one minor release of each:
+
+| Package | Supported |
+|---|---|
+| `trl` | `>=1.13,<1.14` |
+| `transformers` | `>=5.17,<5.18` |
+
+The `trl` extra pins both. This is deliberate: the TRL worker classifies every
+`SFTConfig` field -- TRL's own, and the `TrainingArguments` fields beneath them
+-- and refuses to train on behaviour nobody has decided about. Any other
+release fails before training, with `UnsupportedTrainerVersionError` naming
+what is installed and what is supported. Supporting a new release means
+classifying what changed in it first.
 
 ### Requirements
 
 - Python 3.10+
 - PyTorch 2.0+
-- Transformers 4.40+
+- Transformers 4.40+ (5.17.x with the `trl` extra; see above)
 
 ---
 

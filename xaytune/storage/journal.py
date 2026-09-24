@@ -17,6 +17,7 @@ from typing import Any
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.operation import RuntimeOperation
 from xaytune.core.errors import ConcurrentModificationError, IdempotencyConflictError
+from xaytune.core.immutable import thaw
 
 __all__ = ["IdempotencyConflictError"]
 """Re-exported from :mod:`xaytune.core.errors`, where it moved once a runtime
@@ -57,7 +58,9 @@ class EventJournal:
                 event.schema_version,
                 event.occurred_at.isoformat(),
                 json.dumps(event.actor.model_dump(mode="json"), sort_keys=True),
-                json.dumps(dict(event.payload), sort_keys=True),
+                # thaw, not dict(): the payload is frozen all the way down, and
+                # a shallow copy leaves nested FrozenDicts json cannot encode.
+                json.dumps(thaw(event.payload), sort_keys=True),
             ),
         )
         return int(cursor.lastrowid or 0)
@@ -97,6 +100,24 @@ class EventJournal:
         rows = self._connection.execute(
             "SELECT * FROM events WHERE experiment_id = ? ORDER BY sequence",
             (experiment_id,),
+        ).fetchall()
+        return tuple(_event_from_row(row) for row in rows)
+
+    def events_for_experiment_after(
+        self, experiment_id: str, after_sequence: int, *, limit: int = 500
+    ) -> tuple[DomainEvent, ...]:
+        """Return an experiment's events with ``sequence > after_sequence``.
+
+        The cursor is the database sequence, which is what makes replay and
+        follow one mechanism: a reader that remembers the last sequence it
+        delivered asks for the rest, whether "the rest" was committed a year
+        ago or a millisecond ago, and cannot miss an event committed between
+        a replay and a subscription because there is no such gap.
+        """
+        rows = self._connection.execute(
+            "SELECT * FROM events WHERE experiment_id = ? AND sequence > ? "
+            "ORDER BY sequence LIMIT ?",
+            (experiment_id, after_sequence, limit),
         ).fetchall()
         return tuple(_event_from_row(row) for row in rows)
 

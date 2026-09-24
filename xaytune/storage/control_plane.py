@@ -47,6 +47,7 @@ from xaytune.core.domain.operation import (
 )
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import (
     ActionId,
     EventId,
@@ -57,7 +58,7 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import Actor, RuntimeRef
+from xaytune.core.refs import Actor, ArtifactRef, RuntimeRef
 from xaytune.core.state.status import (
     ExperimentNodeStatus,
     ExperimentStatus,
@@ -75,7 +76,7 @@ from xaytune.storage.journal import (
 )
 from xaytune.storage.repository import AggregateStore
 
-__all__ = ["ControlPlaneRepository", "UnknownOperationTargetError"]
+__all__ = ["ControlPlaneRepository", "ProvenanceError", "UnknownOperationTargetError"]
 
 
 class _Transitionable(Protocol):
@@ -137,9 +138,11 @@ class CancellationSagaRequiredError(StorageError):
 
     ADR-013 §6: cancelling an experiment fans out to its descendants, and the
     invariant is that it must not reach ``CANCELLED`` while any descendant is
-    unresolved. That coordination is a controller concern and is not built yet.
+    unresolved. An experiment's saga is
+    :meth:`ControlPlaneRepository.request_experiment_cancellation`; a run's is
+    not built yet.
 
-    Refused rather than half-implemented. Writing the `Action` and no operation
+    Refused here rather than half-implemented. Writing the `Action` and no operation
     would leave durable intent that nothing carries out and nothing retries --
     the exact state ADR-005 §5 exists to prevent -- and minting a single
     operation against a run id would ask a runtime to cancel something it has
@@ -148,10 +151,18 @@ class CancellationSagaRequiredError(StorageError):
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        super().__init__(
-            f"cancelling a {kind} requires the descendant saga of ADR-013 §6, "
-            f"which is not implemented. Cancel its attempts individually."
+        remedy = (
+            "use request_experiment_cancellation()"
+            if kind == "experiment"
+            else "cancel its attempts individually"
         )
+        super().__init__(
+            f"cancelling a {kind} requires the descendant saga of ADR-013 §6: {remedy}"
+        )
+
+
+class ProvenanceError(StorageError):
+    """A record would attribute something to a producer that did not make it."""
 
 
 class UnknownOperationTargetError(StorageError):
@@ -383,6 +394,61 @@ class ControlPlaneRepository:
             destinations,
         )
 
+    def record_artifact(
+        self,
+        attempt_id: RunAttemptId,
+        artifact: ArtifactRef,
+        *,
+        expected_revision: int,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> RunAttempt:
+        """Record an artifact an attempt produced, with its event, atomically.
+
+        The event carries the artifact itself, so the history answers "what
+        did this attempt produce" without reading the attempt's current row --
+        which a later revision may have moved on from.
+
+        **The producer is made explicit here.** A worker reports an artifact
+        without ``producer_attempt_id``, because at that boundary attribution
+        travels on the telemetry envelope's target. Stored as reported, the
+        durable artifact would carry less provenance than the telemetry that
+        produced it, and an artifact read on its own -- in a result, an export
+        -- could not say which attempt made it. So a missing producer is filled
+        in with *attempt_id*. A different producer is refused rather than
+        overwritten: that is a claim this attempt did not make.
+
+        Raises:
+            AggregateNotFoundError: If no such attempt exists.
+            ConcurrentModificationError: If it has moved since the caller read it.
+            ProvenanceError: If the artifact names a different producing attempt.
+            ValueError: If the attempt already records this artifact.
+        """
+        if artifact.producer_attempt_id is None:
+            artifact = artifact.model_copy(update={"producer_attempt_id": attempt_id})
+        elif artifact.producer_attempt_id != attempt_id:
+            raise ProvenanceError(
+                f"artifact {artifact.id} names attempt {artifact.producer_attempt_id} as its "
+                f"producer, not {attempt_id}; recording it here would misattribute it"
+            )
+        with write_transaction(self._connection):
+            current = self.aggregates.get_attempt(str(attempt_id))
+            if current is None:
+                raise AggregateNotFoundError("RunAttempt", str(attempt_id))
+            if current.revision != expected_revision:
+                raise ConcurrentModificationError("RunAttempt", str(attempt_id), expected_revision)
+            recorded = current.with_artifact(artifact)
+            self.aggregates._update_attempt(recorded)
+            self._emit(
+                recorded,
+                "ArtifactRecorded",
+                self._owning_experiment(recorded),
+                actor,
+                destinations,
+                extra={"artifact": artifact.model_dump(mode="json")},
+            )
+        return recorded
+
     # ---- ADR-005 §4 ----------------------------------------------------
 
     def create_attempt_with_submit_intent(
@@ -584,61 +650,9 @@ class ControlPlaneRepository:
                 self._assert_same_effect_request(replayed[1], request_digest)
                 return replayed
 
-            # Each lifecycle step is persisted with its own event, rather than
-            # folded into one write ending at EXECUTING. Batching is what the
-            # aggregate writers refuse everywhere else -- the intervening
-            # transitions would have no events -- and the aggregate whose whole
-            # purpose is recording intent is the wrong place to make that
-            # exception. It all commits in this one transaction, so the
-            # atomicity ADR-005 section 5 requires is unchanged.
-            self.actions._insert(proposed)
-            self._emit_action(proposed, "ActionProposed", actor, destinations)
-
-            # Validation happens before any effect is requested, so an action
-            # that cannot be carried out never mints an operation.
-            validating = self._advance(
-                proposed, ActionStatus.VALIDATING, "ActionValidating", actor, destinations
+            return self._record_cancellation(
+                proposed, operation_id, request_digest, experiment_id, actor, destinations
             )
-            validated = self._advance(
-                validating, ActionStatus.VALIDATED, "ActionValidated", actor, destinations
-            )
-
-            settled_outcome = self._terminal_outcome(target)
-            if settled_outcome is not None:
-                executing = self._advance(
-                    validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
-                )
-                settled = executing.with_status(ActionStatus.SUCCEEDED, outcome=settled_outcome)
-                self.actions._update(settled)
-                self._emit_action(
-                    settled,
-                    f"Cancellation{settled_outcome.value.capitalize()}",
-                    actor,
-                    destinations,
-                )
-                return settled, None
-
-            executing = self._advance(
-                validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
-            )
-
-            operation = RuntimeOperation(
-                id=operation_id,
-                target=RuntimeOperationTarget.model_validate(
-                    {"kind": target.kind, "id": target.id}
-                ),
-                type="cancel",
-                request_digest=request_digest,
-                caused_by_action_id=executing.id,
-            )
-            stored = self.operations._insert(operation)
-
-            self._emit_action(executing, "CancellationRequested", actor, destinations)
-            self._emit_operation(
-                stored, "RuntimeOperationIntended", experiment_id, actor, destinations
-            )
-
-        return executing, stored
 
     def reconcile_cancellation(
         self,
@@ -704,7 +718,321 @@ class ControlPlaneRepository:
             self._emit_action(settled, f"Cancellation{label.capitalize()}", actor, destinations)
         return settled
 
+    # ---- ADR-013 §6 -------------------------------------------------------
+
+    def request_experiment_cancellation(
+        self,
+        experiment_id: ExperimentId,
+        *,
+        reason: str,
+        actor: Actor,
+        action_id: ActionId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[Action, tuple[tuple[Action, RuntimeOperation | None], ...]]:
+        """Record intent to cancel an experiment, and every effect it needs.
+
+        One commit writes the ``cancel-experiment`` Action and, for each attempt
+        still live, a ``cancel-attempt`` child Action with its cancel
+        operation. The experiment itself stays ``ACTIVE`` (ADR-013 §6): the
+        intent lives in the Action, and ``CANCELLED`` is reached only by
+        :meth:`reconcile_experiment_cancellation`, once nothing it owns is
+        executing.
+
+        **Get-or-create.** A second request while one is in flight returns the
+        first, with its children, and writes nothing: two sagas over the same
+        attempts would issue duplicate effects and race to settle one
+        experiment. Retrying with the same ``action_id`` returns what was
+        recorded, and with a different request is refused.
+
+        Returns:
+            The parent action, and each child with the operation it caused --
+            ``None`` for a child whose attempt had already ended.
+
+        Raises:
+            UnknownOperationTargetError: If the experiment does not exist.
+            IdempotencyConflictError: If *action_id* exists against a different
+                request.
+        """
+        target = ActionTarget(kind="experiment", id=str(experiment_id))
+
+        with write_transaction(self._connection):
+            experiment = self.aggregates.get_experiment(str(experiment_id))
+            if experiment is None:
+                raise UnknownOperationTargetError(target.kind, target.id)
+
+            proposed = Action(
+                id=action_id or ActionId.generate(),
+                experiment_id=experiment.id,
+                type="cancel-experiment",
+                target=target,
+                proposed_by=actor,
+                reason=reason,
+            )
+            existing = self.actions.get(str(proposed.id))
+            if existing is not None:
+                self.actions._assert_same_request(existing, proposed)
+                return existing, self._saga_children(existing)
+
+            in_flight = [
+                action
+                for action in self.actions.for_target(target.kind, target.id)
+                if action.type == "cancel-experiment" and not action.is_terminal
+            ]
+            if in_flight:
+                return in_flight[0], self._saga_children(in_flight[0])
+
+            self.actions._insert(proposed)
+            self._emit_action(proposed, "ActionProposed", actor, destinations)
+            validating = self._advance(
+                proposed, ActionStatus.VALIDATING, "ActionValidating", actor, destinations
+            )
+            validated = self._advance(
+                validating, ActionStatus.VALIDATED, "ActionValidated", actor, destinations
+            )
+            executing = self._advance(
+                validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
+            )
+
+            if experiment.is_terminal:
+                outcome = (
+                    ActionOutcome.NOOP
+                    if experiment.status is ExperimentStatus.CANCELLED
+                    else ActionOutcome.SUPERSEDED
+                )
+                settled = executing.with_status(ActionStatus.SUCCEEDED, outcome=outcome)
+                self.actions._update(settled)
+                self._emit_action(
+                    settled, f"Cancellation{outcome.value.capitalize()}", actor, destinations
+                )
+                return settled, ()
+
+            children = tuple(
+                self._record_cancellation(
+                    Action(
+                        id=ActionId.generate(),
+                        experiment_id=experiment.id,
+                        type="cancel-attempt",
+                        target=ActionTarget(kind="training-attempt", id=str(attempt.id)),
+                        proposed_by=actor,
+                        reason=reason,
+                        parent_action_id=executing.id,
+                    ),
+                    OperationId.generate(),
+                    _cancel_digest("training-attempt", str(attempt.id)),
+                    str(experiment.id),
+                    actor,
+                    destinations,
+                )
+                for attempt in self._live_attempts(str(experiment.id))
+            )
+            self._emit_action(executing, "CancellationRequested", actor, destinations)
+
+        return executing, children
+
+    def reconcile_experiment_cancellation(
+        self,
+        action_id: ActionId,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> Action:
+        """Settle an experiment cancellation from observed state, or leave it.
+
+        ```text
+        a child still in flight                    -> unchanged, wait
+        a child's effect FAILED, its attempt live  -> FAILED; experiment stays
+                                                      ACTIVE (ADR-013 AC-8)
+        no attempt of the experiment is live       -> runs, nodes and the
+                                                      experiment CANCELLED,
+                                                      and the action APPLIED
+        ```
+
+        The last row commits as one unit, and re-checks inside that commit that
+        no attempt is live: ``CANCELLED`` means Xaytune believes no owned
+        workload is executing (ADR-013 §6), so it is written only when the
+        record shows that at the moment of writing. A run that already
+        finished keeps its outcome -- cancelling an experiment does not
+        rewrite what its runs did.
+
+        There is deliberately no timeout path. A cancellation that cannot be
+        confirmed leaves the experiment ``ACTIVE``; abandoning it is a separate,
+        explicit operation that does not exist yet.
+
+        Raises:
+            AggregateNotFoundError: If no such action exists.
+            StorageError: If the action is not an experiment cancellation.
+        """
+        parent = self.actions.get(str(action_id))
+        if parent is None:
+            raise AggregateNotFoundError("Action", str(action_id))
+        if parent.type != "cancel-experiment":
+            raise StorageError(f"action {action_id} is a {parent.type}, not cancel-experiment")
+        if parent.is_terminal:
+            return parent
+
+        for child in self.actions.children(str(parent.id)):
+            if not child.is_terminal:
+                self.reconcile_cancellation(child.id, actor=actor, destinations=destinations)
+        children = self.actions.children(str(parent.id))
+        if any(not child.is_terminal for child in children):
+            return parent
+
+        experiment_id = parent.target.id
+        if self._live_attempts(experiment_id):
+            if any(child.status is ActionStatus.FAILED for child in children):
+                failed = parent.with_status(ActionStatus.FAILED)
+                with write_transaction(self._connection):
+                    self.actions._update(failed)
+                    self._emit_action(failed, "CancellationFailed", actor, destinations)
+                return failed
+            return parent
+
+        with write_transaction(self._connection):
+            if self._live_attempts(experiment_id):
+                return parent
+            for node in self.aggregates.nodes_for_experiment(experiment_id):
+                for run in self.aggregates.runs_for_node(str(node.id)):
+                    if not run.is_terminal:
+                        cancelled_run = run.with_status(RunStatus.CANCELLED)
+                        self.aggregates._update_run(cancelled_run)
+                        self._emit(
+                            cancelled_run, "RunStatusChanged", experiment_id, actor, destinations
+                        )
+                if not node.is_terminal:
+                    cancelled_node = node.with_status(ExperimentNodeStatus.CANCELLED)
+                    self.aggregates._update_node(cancelled_node)
+                    self._emit(
+                        cancelled_node,
+                        "ExperimentNodeStatusChanged",
+                        experiment_id,
+                        actor,
+                        destinations,
+                    )
+            experiment = self.aggregates.load_experiment(experiment_id)
+            if not experiment.is_terminal:
+                cancelled = experiment.with_status(ExperimentStatus.CANCELLED)
+                self.aggregates._update_experiment(cancelled)
+                self._emit(cancelled, "ExperimentStatusChanged", experiment_id, actor, destinations)
+            settled = parent.with_status(ActionStatus.SUCCEEDED, outcome=ActionOutcome.APPLIED)
+            self.actions._update(settled)
+            self._emit_action(settled, "CancellationApplied", actor, destinations)
+        return settled
+
+    def unsettled_work(
+        self, experiment_id: str
+    ) -> tuple[tuple[RuntimeOperation, ...], tuple[Action, ...]]:
+        """The experiment's control work that has not reached an outcome.
+
+        Operations still ``INTENDED`` or ``SENT`` -- an effect requested with
+        no known result -- and actions not yet terminal. A run can be terminal
+        while either remains: a cancellation that raced natural completion
+        leaves its operation unresolved after the attempt has already
+        succeeded. Whoever asks "is there anything left to do" has to ask about
+        these too, not only about runs.
+        """
+        operations = tuple(
+            operation
+            for attempt in self._attempts_of(experiment_id)
+            for operation in self.operations.for_target("training-attempt", str(attempt.id))
+            if operation.state in ("intended", "sent")
+        )
+        actions = tuple(
+            action
+            for action in self.actions.for_experiment(experiment_id)
+            if not action.is_terminal
+        )
+        return operations, actions
+
+    def _saga_children(self, parent: Action) -> tuple[tuple[Action, RuntimeOperation | None], ...]:
+        """Each child of *parent*, with the operation it caused if any."""
+        children = []
+        for child in self.actions.children(str(parent.id)):
+            caused = self.actions.caused_operation_ids(str(child.id))
+            children.append((child, self.operations.get(caused[0]) if caused else None))
+        return tuple(children)
+
+    def _live_attempts(self, experiment_id: str) -> tuple[RunAttempt, ...]:
+        """Every attempt of the experiment that has not reached a terminal state."""
+        return tuple(a for a in self._attempts_of(experiment_id) if not a.is_terminal)
+
+    def _attempts_of(self, experiment_id: str) -> tuple[RunAttempt, ...]:
+        """Every attempt of the experiment, through its nodes and runs."""
+        return tuple(
+            attempt
+            for node in self.aggregates.nodes_for_experiment(experiment_id)
+            for run in self.aggregates.runs_for_node(str(node.id))
+            for attempt in self.aggregates.attempts_for_run(str(run.id))
+        )
+
     # ---- machinery ------------------------------------------------------
+
+    def _record_cancellation(
+        self,
+        proposed: Action,
+        operation_id: OperationId,
+        request_digest: str,
+        experiment_id: str,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> tuple[Action, RuntimeOperation | None]:
+        """Write one attempt cancellation: the Action and, if live, its effect.
+
+        Runs inside the caller's transaction. Shared by a direct attempt
+        cancellation and each child of an experiment saga, so the two cannot
+        record the same intent differently.
+        """
+        target = proposed.target
+
+        # Each lifecycle step is persisted with its own event, rather than
+        # folded into one write ending at EXECUTING. Batching is what the
+        # aggregate writers refuse everywhere else -- the intervening
+        # transitions would have no events -- and the aggregate whose whole
+        # purpose is recording intent is the wrong place to make that
+        # exception. It all commits in the caller's one transaction, so the
+        # atomicity ADR-005 section 5 requires is unchanged.
+        self.actions._insert(proposed)
+        self._emit_action(proposed, "ActionProposed", actor, destinations)
+
+        # Validation happens before any effect is requested, so an action
+        # that cannot be carried out never mints an operation.
+        validating = self._advance(
+            proposed, ActionStatus.VALIDATING, "ActionValidating", actor, destinations
+        )
+        validated = self._advance(
+            validating, ActionStatus.VALIDATED, "ActionValidated", actor, destinations
+        )
+
+        settled_outcome = self._terminal_outcome(target)
+        if settled_outcome is not None:
+            executing = self._advance(
+                validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
+            )
+            settled = executing.with_status(ActionStatus.SUCCEEDED, outcome=settled_outcome)
+            self.actions._update(settled)
+            self._emit_action(
+                settled,
+                f"Cancellation{settled_outcome.value.capitalize()}",
+                actor,
+                destinations,
+            )
+            return settled, None
+
+        executing = self._advance(
+            validated, ActionStatus.EXECUTING, "ActionExecuting", actor, destinations
+        )
+
+        operation = RuntimeOperation(
+            id=operation_id,
+            target=RuntimeOperationTarget.model_validate({"kind": target.kind, "id": target.id}),
+            type="cancel",
+            request_digest=request_digest,
+            caused_by_action_id=executing.id,
+        )
+        stored = self.operations._insert(operation)
+
+        self._emit_action(executing, "CancellationRequested", actor, destinations)
+        self._emit_operation(stored, "RuntimeOperationIntended", experiment_id, actor, destinations)
+        return executing, stored
 
     def _transition(
         self,
@@ -1093,6 +1421,8 @@ class ControlPlaneRepository:
         experiment_id: str,
         actor: Actor,
         destinations: tuple[str, ...] = (),
+        *,
+        extra: dict[str, Any] | None = None,
     ) -> DomainEvent:
         event = DomainEvent(
             id=EventId.generate(),
@@ -1103,7 +1433,10 @@ class ControlPlaneRepository:
             event_type=event_type,
             actor=actor,
             payload=FrozenDict(
-                {"status": getattr(getattr(aggregate, "status", None), "value", None)}
+                {
+                    "status": getattr(getattr(aggregate, "status", None), "value", None),
+                    **(extra or {}),
+                }
             ),
         )
         return self._write_event(event, destinations)
@@ -1149,3 +1482,12 @@ class ControlPlaneRepository:
                 )
             )
         return event
+
+
+def _cancel_digest(kind: str, target_id: str) -> str:
+    """The request digest of a saga's cancel operation.
+
+    Derived from the target alone: cancelling an attempt is the same request
+    however many times it is made, so a retry's digest matches.
+    """
+    return fingerprint({"type": "cancel", "target": {"kind": kind, "id": target_id}})

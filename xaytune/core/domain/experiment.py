@@ -15,6 +15,7 @@ from pydantic import AliasChoices, Field
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
 from xaytune.core.domain.objective import BudgetSpec, Objective
+from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.ids import (
     DecisionId,
     EvaluationId,
@@ -74,6 +75,14 @@ class Experiment(AggregateModel):
     best_node_id: ExperimentNodeId | None = None
 
     controller_host: ControllerHostRef
+
+    # ADR-016: what executes this experiment, as specs a restarted controller
+    # resolves again, never as implementation objects. Optional only because
+    # experiments recorded before a host drove them have none; a host refuses
+    # to drive an experiment that lacks them.
+    compiler: CompilerSpec | None = None
+    runtime: RuntimeSpec | None = None
+    artifact_root: str | None = None
 
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

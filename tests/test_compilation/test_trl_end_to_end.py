@@ -21,7 +21,7 @@ built on a trainer Xaytune does not own and whose defaults it does not choose,
 held to the same observable contract -- the same runtime, the same telemetry
 vocabulary, the same artifact rules, and the same failure attribution.
 
-Same fixtures as the native test, deliberately (see ``conftest.py``).
+Same fixtures as the native test, deliberately (see ``tests/training_fixtures.py``).
 """
 
 from __future__ import annotations
@@ -32,9 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from xaytune.core.execution import TrainingExecutionSpec
-
-from .conftest import (
+from tests.training_fixtures import (
     assert_fixture_is_a_real_artifact,
     compilation_context,
     emitted_types,
@@ -46,6 +44,7 @@ from .conftest import (
     tiny_dataset,
     tiny_model,
 )
+from xaytune.core.execution import TrainingExecutionSpec
 
 pytestmark = pytest.mark.trl
 

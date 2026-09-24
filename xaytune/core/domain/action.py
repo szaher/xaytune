@@ -162,6 +162,10 @@ class Action(AggregateModel):
 
     policy_decision_id: str | None = None
 
+    # The action this one carries out part of: a cancel-attempt under a
+    # cancel-experiment saga (ADR-013 §6). ``None`` for a top-level intent.
+    parent_action_id: ActionId | None = None
+
     revision: int = 0
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

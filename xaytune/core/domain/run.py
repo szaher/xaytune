@@ -176,6 +176,26 @@ class RunAttempt(AggregateModel):
 
         return self._validated_copy(update)
 
+    def with_artifact(self, artifact: ArtifactRef) -> RunAttempt:
+        """Return a copy that records *artifact*, with the revision bumped.
+
+        Not a status change, but still a change to durable state, so it takes
+        a revision like any other: two writers recording concurrently must
+        not both believe they appended to the same list.
+
+        Raises:
+            ValueError: If this attempt already records an artifact with the
+                same id -- a replayed telemetry event, recorded once.
+        """
+        if any(existing.id == artifact.id for existing in self.artifact_refs):
+            raise ValueError(f"attempt {self.id} already records artifact {artifact.id}")
+        return self._validated_copy(
+            {
+                "artifact_refs": (*self.artifact_refs, artifact),
+                "revision": self.revision + 1,
+            }
+        )
+
     @property
     def is_terminal(self) -> bool:
         """Whether this attempt has reached a final state."""

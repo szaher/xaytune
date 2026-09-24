@@ -65,6 +65,22 @@ class ActionStore:
         ).fetchall()
         return tuple(str(row["id"]) for row in rows)
 
+    def for_experiment(self, experiment_id: str) -> tuple[Action, ...]:
+        """Return every action in an experiment, whatever its target, oldest first."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM actions WHERE experiment_id = ? ORDER BY created_at, id",
+            (experiment_id,),
+        ).fetchall()
+        return tuple(Action.model_validate_json(row["payload_json"]) for row in rows)
+
+    def children(self, action_id: str) -> tuple[Action, ...]:
+        """Return the actions carrying out part of *action_id*, oldest first."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM actions WHERE parent_action_id = ? ORDER BY created_at, id",
+            (action_id,),
+        ).fetchall()
+        return tuple(Action.model_validate_json(row["payload_json"]) for row in rows)
+
     @staticmethod
     def _assert_same_request(existing: Action, requested: Action) -> None:
         """Refuse a reused action id whose request differs.
@@ -84,7 +100,15 @@ class ActionStore:
         """
         differing = tuple(
             field
-            for field in ("type", "target", "experiment_id", "proposed_by", "reason", "payload")
+            for field in (
+                "type",
+                "target",
+                "experiment_id",
+                "proposed_by",
+                "reason",
+                "payload",
+                "parent_action_id",
+            )
             if getattr(existing, field) != getattr(requested, field)
         )
         if differing:
@@ -95,8 +119,8 @@ class ActionStore:
         self._connection.execute(
             "INSERT INTO actions (id, experiment_id, type, status, outcome, "
             "target_kind, target_id, proposed_by_json, reason, payload_json, "
-            "policy_decision_id, revision, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "policy_decision_id, revision, created_at, updated_at, parent_action_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(action.id),
                 str(action.experiment_id),
@@ -112,6 +136,7 @@ class ActionStore:
                 action.revision,
                 action.created_at.isoformat(),
                 action.updated_at.isoformat(),
+                str(action.parent_action_id) if action.parent_action_id else None,
             ),
         )
 

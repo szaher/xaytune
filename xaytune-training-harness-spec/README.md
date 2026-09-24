@@ -153,8 +153,8 @@ The ADR gate is **per-ADR, not global** — an ADR must be settled before the wo
 that depends on it, not before all work. See `15-implementation-plan.md`
 §Phase 0 for which ADRs are ratified, accepted, or still open, and what each
 still-open one blocks. **Band B is complete and band C is in progress: PR-004
-through PR-010 have merged, and PR-011 (`TRLCompiler`, SFT only) is the next
-implementation step.** The remaining `Proposed` ADRs gate later bands.
+through PR-011 have merged, and PR-012 (`ExperimentHandle` and
+`EmbeddedControllerHost`) is the next implementation step.** The remaining `Proposed` ADRs gate later bands.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

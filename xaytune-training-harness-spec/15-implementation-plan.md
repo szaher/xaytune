@@ -135,8 +135,8 @@ be acted on: ADR-001 is now `Accepted` because everything after it assumes it,
 ADR-007 because ADR-015 depends on it, and ADR-006's genuinely open half became
 ADR-017 rather than a second status on one document.
 
-ADR-005 was accepted on 2026-09-21, which unblocked band B. (Status as of
-2026-09-23: PR-004 through PR-010 have merged and PR-011 is next.) It was expanded before acceptance rather than accepted as written: the
+ADR-005 was accepted on 2026-09-21, which unblocked band B. (Current status is
+kept in the spec README, not here, so this history does not go stale.) It was expanded before acceptance rather than accepted as written: the
 original fifteen lines covered one transaction, which was adequate when band B
 owned the experiment aggregates and the outbox. Band B also owns
 `RuntimeOperation`, the Action substrate and its linkage, operation and
@@ -413,6 +413,30 @@ wait
 cancel
 events
 ```
+
+Not `pause`/`resume`. Decided before implementation:
+
+- **Training success is not candidate success.** A successful run moves the
+  `Run` and its final `RunAttempt` to `SUCCEEDED` and records the artifact. The
+  node stays `ACTIVE`, because its next legal phase is `EVALUATING`, and the
+  experiment stays `ACTIVE`, because terminalizing it is a controller/planner
+  decision. No training-only state-machine edges are added.
+- **`wait()` means controller quiescence**, not a terminal experiment: it
+  returns when all work the embedded controller can currently execute is
+  settled and telemetry is drained. The result says so explicitly
+  (`quiescent`, and the stage that would run next), so returning is never read
+  as experiment success. PR-013 makes evaluation executable, which extends what
+  `wait()` waits through without changing what it means.
+- **`events()` is the durable control-plane history**: `DomainEvent`s for the
+  experiment, replayed and then followed using the database `sequence` as the
+  cursor, so a handle from `attach()` sees the same stream. Runtime telemetry
+  stays behind `RuntimeBackend.watch()`. Its controller-significant
+  consequences are persisted; per-step metrics are not copied into the event
+  table.
+- **`cancel()` goes through the Action substrate** as the ADR-013 §6 saga, and
+  `CANCELLED` still means no owned workload is executing.
+- **Not restart-reconciling.** The host is backed by durable state but does not
+  adopt an in-flight attempt after its process dies; that is PR-012a.
 
 ### PR-012a — runtime-operation reconciliation
 

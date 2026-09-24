@@ -48,7 +48,7 @@ These describe the planned ecosystem, not an installed-backend support matrix.
 
 ## Development status
 
-Status as of **2026-09-23**, after PR-010 merged.
+Status as of **2026-09-24**, after PR-011 merged.
 
 ### Completed foundation
 
@@ -76,11 +76,12 @@ artifact.
 
 `TrainerCompiler`, `TrainingExecutionSpec` and capability resolution, the
 restart-safe `LocalRuntime`, the v1alpha2 telemetry contract, and the first
-end-to-end run -- `NativeCompiler` and `NativeWorker` -- have landed.
+end-to-end run -- `NativeCompiler` and `NativeWorker` -- have landed, and
+`TRLCompiler` runs a second, independent trainer behind the same contract.
 
-Next is `TRLCompiler`: a second, independent trainer behind the same contract.
-The embedded controller (`ExperimentHandle`) and runtime-operation
-reconciliation follow within this band.
+Next is the embedded controller: `EmbeddedControllerHost.submit()` returning an
+`ExperimentHandle`. Runtime-operation reconciliation after a controller restart
+(PR-012a) completes this band.
 
 <details>
 <summary>Foundation implementation history</summary>
@@ -93,8 +94,9 @@ Band B landed through [SQLite repository (#18)](https://github.com/szaher/xaytun
 Band C so far: [CandidateSpec and fingerprints (#24)](https://github.com/szaher/xaytune/pull/24),
 [compile/execute contracts (#25)](https://github.com/szaher/xaytune/pull/25),
 [LocalRuntime (#26)](https://github.com/szaher/xaytune/pull/26),
-[telemetry contracts (#27)](https://github.com/szaher/xaytune/pull/27), and
-[NativeCompiler and NativeWorker (#28)](https://github.com/szaher/xaytune/pull/28).
+[telemetry contracts (#27)](https://github.com/szaher/xaytune/pull/27),
+[NativeCompiler and NativeWorker (#28)](https://github.com/szaher/xaytune/pull/28), and
+[TRLCompiler and TRLWorker (#29)](https://github.com/szaher/xaytune/pull/29).
 The [implementation plan](xaytune-training-harness-spec/15-implementation-plan.md)
 defines the remaining contracts and acceptance gates.
 

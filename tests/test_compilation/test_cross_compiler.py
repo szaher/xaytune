@@ -32,9 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from xaytune.core.execution import TrainingExecutionSpec
-
-from .conftest import (
+from tests.training_fixtures import (
     compilation_context,
     offline_plan,
     run_to_completion,
@@ -42,6 +40,7 @@ from .conftest import (
     tiny_dataset,
     tiny_model,
 )
+from xaytune.core.execution import TrainingExecutionSpec
 
 pytestmark = pytest.mark.trl
 

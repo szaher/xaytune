@@ -1,7 +1,7 @@
-"""Shared fixtures for the end-to-end compiler tests.
+"""Shared fixtures for the end-to-end tests: compilers, and the controller above them.
 
-Every compiler is held to one contract, so every compiler's end-to-end test
-runs on the same fixtures: the same tiny offline model, the same candidate
+Every compiler is held to one contract, so every end-to-end test runs on the
+same fixtures: the same tiny offline model, the same candidate
 shape, the same runtime and the same way of reading telemetry back. A fixture
 that differed per compiler would let a difference in the fixture pass for a
 difference in the compiler.

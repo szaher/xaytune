@@ -31,9 +31,7 @@ import json
 import math
 from pathlib import Path
 
-from xaytune.core.execution import TrainingExecutionSpec
-
-from .conftest import (
+from tests.training_fixtures import (
     assert_fixture_is_a_real_artifact,
     compilation_context,
     emitted_types,
@@ -45,6 +43,7 @@ from .conftest import (
     tiny_dataset,
     tiny_model,
 )
+from xaytune.core.execution import TrainingExecutionSpec
 
 
 def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:

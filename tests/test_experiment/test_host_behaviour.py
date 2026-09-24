@@ -140,11 +140,12 @@ def test_a_relative_artifact_root_is_refused(tmp_path: Path) -> None:
 # ---- a failed run ----------------------------------------------------------
 
 
-def test_a_failed_run_leaves_the_candidate_awaiting_a_decision(tmp_path: Path) -> None:
-    """Failure is recorded on the run; what it means for the candidate is a decision.
+def test_a_failed_run_leaves_the_candidate_awaiting_failure_handling(tmp_path: Path) -> None:
+    """Failure is recorded on the run; what it means for the candidate is not decided here.
 
-    The node does not fail because one run did -- retrying, rejecting or
-    trying another candidate is what a decision is for.
+    The node does not fail because one run did: retrying, recovering or giving
+    up is failure handling, which does not exist yet. ``next_stage`` names that
+    work, and it is not ``DECIDING`` -- the node never went through evaluation.
     """
     from xaytune.experiment import EmbeddedControllerHost
 
@@ -160,7 +161,7 @@ def test_a_failed_run_leaves_the_candidate_awaiting_a_decision(tmp_path: Path) -
 
     assert result.status is ExperimentStatus.ACTIVE
     assert result.quiescent is True
-    assert result.next_stage == "decision"
+    assert result.next_stage == "failure-handling"
     (node,) = result.nodes
     assert node.status is ExperimentNodeStatus.ACTIVE
     (run,) = node.runs

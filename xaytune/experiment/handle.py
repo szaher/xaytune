@@ -38,7 +38,13 @@ if TYPE_CHECKING:
 
 __all__ = ["ExperimentHandle", "ExperimentResult", "NodeOutcome", "RunOutcome"]
 
-NextStage = Literal["evaluation", "decision"]
+NextStage = Literal["evaluation", "failure-handling"]
+"""Advisory: the controller work that would move the experiment on.
+
+Deliberately not named after a status. ``"evaluation"`` is not
+``ExperimentNodeStatus.EVALUATING`` -- nothing has entered it -- and there is
+no ``"decision"``, because ``DECIDING`` means something specific (a node
+reached through evaluation) and a failed training run has not been there."""
 
 _FOLLOW_INTERVAL_SECONDS = 0.05
 
@@ -70,10 +76,12 @@ class ExperimentResult(FrozenDomainModel):
         quiescent: Whether all executable work is settled. Always true for a
             result ``wait()`` returns; carried so the result says so rather
             than leaving it implied.
-        next_stage: What would move the experiment on, if it could run:
-            ``"evaluation"`` for a trained candidate, ``"decision"`` for one
-            whose runs all failed or were cancelled. ``None`` once the
-            experiment is terminal.
+        next_stage: Advisory controller work that would move the experiment
+            on, if it could run -- never a status any aggregate is in:
+            ``"evaluation"`` for a trained candidate, ``"failure-handling"``
+            for one whose runs all failed or were cancelled (retry, recover or
+            give up: none exists yet). ``None`` once the experiment is
+            terminal.
     """
 
     experiment_id: ExperimentId

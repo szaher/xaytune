@@ -340,7 +340,7 @@ class EmbeddedControllerHost:
         elif trained:
             next_stage = "evaluation"
         else:
-            next_stage = "decision"
+            next_stage = "failure-handling"
 
         return ExperimentResult(
             experiment_id=experiment.id,

@@ -151,7 +151,7 @@ def test_a_training_failure_is_recorded_identically_on_both_trainers(tmp_path: P
 
     assert _shape(runs["native"]["result"]) == _shape(runs["trl"]["result"])
     assert _history(runs["native"]["history"]) == _history(runs["trl"]["history"])
-    assert runs["native"]["result"].next_stage == "decision"
+    assert runs["native"]["result"].next_stage == "failure-handling"
 
 
 def test_cancellation_settles_identically_on_both_trainers(tmp_path: Path) -> None:

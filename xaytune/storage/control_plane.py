@@ -76,7 +76,7 @@ from xaytune.storage.journal import (
 )
 from xaytune.storage.repository import AggregateStore
 
-__all__ = ["ControlPlaneRepository", "UnknownOperationTargetError"]
+__all__ = ["ControlPlaneRepository", "ProvenanceError", "UnknownOperationTargetError"]
 
 
 class _Transitionable(Protocol):
@@ -159,6 +159,10 @@ class CancellationSagaRequiredError(StorageError):
         super().__init__(
             f"cancelling a {kind} requires the descendant saga of ADR-013 §6: {remedy}"
         )
+
+
+class ProvenanceError(StorageError):
+    """A record would attribute something to a producer that did not make it."""
 
 
 class UnknownOperationTargetError(StorageError):
@@ -405,11 +409,28 @@ class ControlPlaneRepository:
         did this attempt produce" without reading the attempt's current row --
         which a later revision may have moved on from.
 
+        **The producer is made explicit here.** A worker reports an artifact
+        without ``producer_attempt_id``, because at that boundary attribution
+        travels on the telemetry envelope's target. Stored as reported, the
+        durable artifact would carry less provenance than the telemetry that
+        produced it, and an artifact read on its own -- in a result, an export
+        -- could not say which attempt made it. So a missing producer is filled
+        in with *attempt_id*. A different producer is refused rather than
+        overwritten: that is a claim this attempt did not make.
+
         Raises:
             AggregateNotFoundError: If no such attempt exists.
             ConcurrentModificationError: If it has moved since the caller read it.
+            ProvenanceError: If the artifact names a different producing attempt.
             ValueError: If the attempt already records this artifact.
         """
+        if artifact.producer_attempt_id is None:
+            artifact = artifact.model_copy(update={"producer_attempt_id": attempt_id})
+        elif artifact.producer_attempt_id != attempt_id:
+            raise ProvenanceError(
+                f"artifact {artifact.id} names attempt {artifact.producer_attempt_id} as its "
+                f"producer, not {attempt_id}; recording it here would misattribute it"
+            )
         with write_transaction(self._connection):
             current = self.aggregates.get_attempt(str(attempt_id))
             if current is None:
@@ -897,6 +918,31 @@ class ControlPlaneRepository:
             self._emit_action(settled, "CancellationApplied", actor, destinations)
         return settled
 
+    def unsettled_work(
+        self, experiment_id: str
+    ) -> tuple[tuple[RuntimeOperation, ...], tuple[Action, ...]]:
+        """The experiment's control work that has not reached an outcome.
+
+        Operations still ``INTENDED`` or ``SENT`` -- an effect requested with
+        no known result -- and actions not yet terminal. A run can be terminal
+        while either remains: a cancellation that raced natural completion
+        leaves its operation unresolved after the attempt has already
+        succeeded. Whoever asks "is there anything left to do" has to ask about
+        these too, not only about runs.
+        """
+        operations = tuple(
+            operation
+            for attempt in self._attempts_of(experiment_id)
+            for operation in self.operations.for_target("training-attempt", str(attempt.id))
+            if operation.state in ("intended", "sent")
+        )
+        actions = tuple(
+            action
+            for action in self.actions.for_experiment(experiment_id)
+            if not action.is_terminal
+        )
+        return operations, actions
+
     def _saga_children(self, parent: Action) -> tuple[tuple[Action, RuntimeOperation | None], ...]:
         """Each child of *parent*, with the operation it caused if any."""
         children = []
@@ -907,12 +953,15 @@ class ControlPlaneRepository:
 
     def _live_attempts(self, experiment_id: str) -> tuple[RunAttempt, ...]:
         """Every attempt of the experiment that has not reached a terminal state."""
+        return tuple(a for a in self._attempts_of(experiment_id) if not a.is_terminal)
+
+    def _attempts_of(self, experiment_id: str) -> tuple[RunAttempt, ...]:
+        """Every attempt of the experiment, through its nodes and runs."""
         return tuple(
             attempt
             for node in self.aggregates.nodes_for_experiment(experiment_id)
             for run in self.aggregates.runs_for_node(str(node.id))
             for attempt in self.aggregates.attempts_for_run(str(run.id))
-            if not attempt.is_terminal
         )
 
     # ---- machinery ------------------------------------------------------

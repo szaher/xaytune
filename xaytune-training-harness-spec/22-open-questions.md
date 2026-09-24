@@ -137,3 +137,38 @@ without mutating training state, and has neither lifecycle.
 Revisit when a third workload type appears. The likely candidates are a
 data-preparation job or a reward-model scoring pass. Unifying before then would
 mean carrying training-only concepts into evaluation and weakening both types.
+
+## 15. Two representations of topology, one of which is stale
+
+Raised in PR-012 review. The aggregates carry child lists that duplicate the
+normalized relationships:
+
+```text
+Experiment.active_node_ids
+ExperimentNode.run_ids
+Run.attempt_ids
+Run.final_attempt_id
+```
+
+Nothing writes them. The repository creates nodes, runs and attempts in their
+own tables with a foreign key to the parent, and the controller reads
+topology from those (`nodes_for_experiment`, `runs_for_node`,
+`attempts_for_run`). So a submitted experiment has nodes, runs and attempts in
+the tables while these fields stay empty. Nothing reads them yet, so nothing is
+wrong yet; but one representation is out of date, and the first code to trust
+it would be wrong without knowing.
+
+Decide before planner, retry or multi-node work, which are the first to read
+topology in bulk:
+
+- **A.** Maintain them transactionally: every child creation also rewrites the
+  parent at a new revision. This couples a child's creation to a write on its
+  parent, which then contends with every other writer to that parent.
+- **B.** (leaning) Remove them, or reclassify them as derived projections that
+  are never stored. The normalized relationship stays the single source of
+  truth, which is the rule the rest of the persistence layer already follows
+  (ADR-005: aggregates from their own tables, events as provenance, derived
+  data rebuildable).
+
+`best_node_id` is not in this list. It records a decision, not a structural
+relationship, and B would not remove it.

@@ -246,3 +246,42 @@ async def _replay(host, handle):
         yield event
         if event.sequence >= last:
             return
+
+
+def test_a_recorded_artifact_names_the_attempt_that_produced_it(tmp_path: Path) -> None:
+    """Attribution survives the crossing from telemetry into the record.
+
+    The worker reports the artifact without a producer -- on the wire that is
+    the envelope's target -- so the controller's record has to say it, or an
+    artifact read on its own could not say which attempt made it.
+    """
+    from xaytune.experiment import EmbeddedControllerHost
+
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            handle = await host.submit(_spec(tmp_path))
+            result = await asyncio.wait_for(handle.wait(), timeout=180)
+            repo = host.repository
+            (attempt,) = [
+                a
+                for node in repo.aggregates.nodes_for_experiment(str(handle.experiment_id))
+                for run in repo.aggregates.runs_for_node(str(node.id))
+                for a in repo.aggregates.attempts_for_run(str(run.id))
+            ]
+            (recorded,) = [
+                e
+                for e in repo.events.events_for_aggregate(str(attempt.id))
+                if e.event_type == "ArtifactRecorded"
+            ]
+            return result, attempt, recorded
+        finally:
+            await host.close()
+
+    result, attempt, recorded = asyncio.run(scenario())
+
+    (stored,) = attempt.artifact_refs
+    assert stored.producer_attempt_id == attempt.id
+    assert recorded.payload["artifact"]["producer_attempt_id"] == str(attempt.id)
+    (reported,) = result.nodes[0].runs[0].artifacts
+    assert reported.producer_attempt_id == attempt.id

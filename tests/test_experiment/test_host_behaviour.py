@@ -11,7 +11,7 @@ from tests.training_fixtures import sft_candidate, tiny_dataset, tiny_model
 from xaytune.core.domain.event import DomainEvent
 from xaytune.core.domain.objective import Objective, ObjectiveMetric
 from xaytune.core.ids import EventId, ExperimentId
-from xaytune.core.refs import Actor
+from xaytune.core.refs import Actor, RuntimeRef
 from xaytune.core.state.status import (
     ExperimentNodeStatus,
     ExperimentStatus,
@@ -254,3 +254,85 @@ def test_replaying_a_long_history_does_not_starve_the_controller() -> None:
         return ran_during_replay
 
     assert asyncio.run(scenario()), "the controller never ran while history was replayed"
+
+
+# ---- quiescence covers control work, not only runs -------------------------
+
+
+def test_a_finished_run_with_unresolved_control_work_is_not_quiescent(tmp_path: Path) -> None:
+    """A cancellation raced natural completion, and its effect has no outcome.
+
+    ```text
+    cancel Action            EXECUTING
+    cancel RuntimeOperation  INTENDED
+    attempt, run             SUCCEEDED
+    ```
+
+    Every run is terminal, and yet an effect was requested that nothing has
+    resolved. "Nothing left to do" would be false, so the result is not
+    quiescent -- and with no controller here to resolve it, ``wait()`` says so
+    rather than returning.
+    """
+    from tests.test_storage.conftest import make_attempt, make_experiment, make_node, make_run
+    from xaytune.experiment import ControllerNotRunningError, EmbeddedControllerHost
+
+    actor = Actor(type="system", id="test")
+
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            repo = host.repository
+            experiment = repo.create_experiment(make_experiment(), actor=actor)
+            experiment = repo.transition_experiment(
+                experiment.id, expected_revision=0, new_status=ExperimentStatus.ACTIVE, actor=actor
+            )
+            node = repo.create_node(make_node(experiment), actor=actor)
+            run = repo.create_run(make_run(node), actor=actor)
+            run = repo.transition_run(
+                run.id, expected_revision=run.revision, new_status=RunStatus.ACTIVE, actor=actor
+            )
+            attempt, submit = repo.create_attempt_with_submit_intent(
+                make_attempt(run), request_digest="sha256:x", actor=actor
+            )
+            repo.confirm_operation(
+                submit.id,
+                expected_revision=submit.revision,
+                actor=actor,
+                runtime_ref=RuntimeRef(backend="local", external_id="op_x"),
+            )
+            for status in (
+                RunAttemptStatus.QUEUED,
+                RunAttemptStatus.STARTING,
+                RunAttemptStatus.RUNNING,
+            ):
+                attempt = repo.transition_attempt(
+                    attempt.id, expected_revision=attempt.revision, new_status=status, actor=actor
+                )
+
+            # The cancellation is recorded while the attempt is live...
+            repo.request_experiment_cancellation(experiment.id, reason="stop", actor=actor)
+            # ...and the attempt finishes on its own before the effect resolves.
+            repo.transition_attempt(
+                attempt.id,
+                expected_revision=attempt.revision,
+                new_status=RunAttemptStatus.SUCCEEDED,
+                actor=actor,
+            )
+            repo.transition_run(
+                run.id, expected_revision=run.revision, new_status=RunStatus.SUCCEEDED, actor=actor
+            )
+
+            result = host._result(experiment.id)
+            handle = await host.attach(experiment.id)
+            with pytest.raises(ControllerNotRunningError):
+                await handle.wait()
+            return result
+        finally:
+            await host.close()
+
+    result = asyncio.run(scenario())
+
+    (node,) = result.nodes
+    (run,) = node.runs
+    assert run.status is RunStatus.SUCCEEDED, "every run is terminal..."
+    assert result.quiescent is False, "...and there is still work nobody has resolved"

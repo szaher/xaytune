@@ -56,7 +56,9 @@ def test_an_artifact_is_recorded_with_its_event_in_one_commit(
         attempt.id, artifact, expected_revision=attempt.revision, actor=ACTOR
     )
 
-    assert recorded.artifact_refs == (artifact,)
+    assert recorded.artifact_refs == (
+        artifact.model_copy(update={"producer_attempt_id": attempt.id}),
+    )
     assert recorded.revision == attempt.revision + 1
     assert repo.aggregates.load_attempt(str(attempt.id)) == recorded
 
@@ -132,3 +134,29 @@ def test_the_cursor_is_bounded_per_call(repo: ControlPlaneRepository, attempt: A
     first = repo.events.events_for_experiment_after(experiment_id, 0, limit=2)
 
     assert [e.id for e in first] == [e.id for e in everything[:2]]
+
+
+def test_an_unattributed_artifact_is_attributed_to_the_attempt_recording_it(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    artifact = _artifact()
+    assert artifact.producer_attempt_id is None
+
+    recorded = repo.record_artifact(
+        attempt.id, artifact, expected_revision=attempt.revision, actor=ACTOR
+    )
+
+    assert recorded.artifact_refs[0].producer_attempt_id == attempt.id
+
+
+def test_an_artifact_attributed_elsewhere_is_refused_not_overwritten(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    from xaytune.core.ids import RunAttemptId
+    from xaytune.storage.control_plane import ProvenanceError
+
+    foreign = _artifact().model_copy(update={"producer_attempt_id": RunAttemptId.generate()})
+
+    with pytest.raises(ProvenanceError, match="misattribute"):
+        repo.record_artifact(attempt.id, foreign, expected_revision=attempt.revision, actor=ACTOR)
+    assert repo.aggregates.load_attempt(str(attempt.id)).artifact_refs == ()

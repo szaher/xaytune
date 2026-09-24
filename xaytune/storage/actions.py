@@ -65,6 +65,14 @@ class ActionStore:
         ).fetchall()
         return tuple(str(row["id"]) for row in rows)
 
+    def for_experiment(self, experiment_id: str) -> tuple[Action, ...]:
+        """Return every action in an experiment, whatever its target, oldest first."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM actions WHERE experiment_id = ? ORDER BY created_at, id",
+            (experiment_id,),
+        ).fetchall()
+        return tuple(Action.model_validate_json(row["payload_json"]) for row in rows)
+
     def children(self, action_id: str) -> tuple[Action, ...]:
         """Return the actions carrying out part of *action_id*, oldest first."""
         rows = self._connection.execute(

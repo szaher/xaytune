@@ -334,6 +334,13 @@ class EmbeddedControllerHost:
                 )
             nodes.append(NodeOutcome(node_id=node.id, status=node.status, runs=tuple(runs)))
 
+        # Quiescent means no control work is unresolved -- not only that every
+        # run has ended. An effect with no known outcome, or an action still in
+        # flight, is work somebody has to finish, and a run can be terminal
+        # while it remains (a cancellation that raced natural completion).
+        operations, actions = self.repository.unsettled_work(str(experiment_id))
+        settled = settled and not operations and not actions
+
         next_stage: NextStage | None
         if experiment.is_terminal:
             next_stage = None

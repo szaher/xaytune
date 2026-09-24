@@ -269,27 +269,48 @@ def test_a_submission_the_runtime_never_received_is_issued_once_under_its_own_id
 # ---- fail closed ---------------------------------------------------------------
 
 
-def test_a_runtime_version_the_host_cannot_provide_fails_closed(tmp_path: Path) -> None:
-    """The record says which implementation ran it; a different one does not adopt it."""
-    from xaytune.experiment import EmbeddedControllerHost, ImplementationMismatchError
+class _RenumberedRuntime:
+    """LocalRuntime, claiming a version other than the one recorded."""
+
+    constructed = 0
+
+    def __init__(self, runtime: Any) -> None:
+        _RenumberedRuntime.constructed += 1
+        self._runtime = runtime
+        self.descriptor = runtime.descriptor.model_copy(update={"plugin_version": "9.9.9"})
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runtime, name)
+
+
+def _renumbered_runtimes() -> dict[str, Any]:
     from xaytune.experiment.host import _local_runtime
 
-    class Newer:
-        def __init__(self, runtime: Any) -> None:
-            self._runtime = runtime
-            self.descriptor = runtime.descriptor.model_copy(update={"plugin_version": "9.9.9"})
+    _RenumberedRuntime.constructed = 0
+    return {"local": lambda config: _RenumberedRuntime(_local_runtime(config))}
 
-        def __getattr__(self, name: str) -> Any:
-            return getattr(self._runtime, name)
+
+@pytest.mark.parametrize(
+    ("runtimes", "error"),
+    [
+        (lambda: {}, "UnknownImplementationError"),
+        (_renumbered_runtimes, "ImplementationMismatchError"),
+    ],
+    ids=["runtime-unavailable", "runtime-renumbered"],
+)
+def test_a_live_workload_without_its_recorded_runtime_fails_closed(
+    tmp_path: Path, runtimes: Any, error: str
+) -> None:
+    """The record says which implementation ran it; a different one does not adopt it."""
+    import xaytune.experiment as experiment_module
+    from xaytune.experiment import EmbeddedControllerHost
 
     experiment_id = _crash(tmp_path, "running")
 
     async def scenario():
-        host = EmbeddedControllerHost(
-            tmp_path / "state.db", runtimes={"local": lambda c: Newer(_local_runtime(c))}
-        )
+        host = EmbeddedControllerHost(tmp_path / "state.db", runtimes=runtimes())
         try:
-            with pytest.raises(ImplementationMismatchError, match="9.9.9"):
+            with pytest.raises(getattr(experiment_module, error)):
                 await host.attach(experiment_id)
         finally:
             await host.close()
@@ -552,4 +573,94 @@ def test_re_issuing_without_the_original_compiler_fails_closed(
     (unresolved,) = asyncio.run(scenario())
     assert unresolved.state == "intended", "left exactly as recorded"
     assert _CountingSubmissions.issued == []
+    assert _workloads(tmp_path) == []
+
+
+# ---- the runtime is a dependency of touching an effect, not of the record ----------
+
+
+@pytest.mark.parametrize(
+    "runtimes",
+    [lambda: {}, _renumbered_runtimes],
+    ids=["runtime-unavailable", "runtime-renumbered"],
+)
+def test_a_settled_experiment_attaches_without_its_runtime(tmp_path: Path, runtimes: Any) -> None:
+    """A handle asks the durable record, and a settled record needs no runtime to read.
+
+    Training finished under one host; a later host that has no local runtime,
+    or a different version of it, attaches, reads the status, the result and
+    the history, and waits -- and never resolves a runtime to do it.
+    """
+    from xaytune.core.state.status import ExperimentStatus
+    from xaytune.experiment import EmbeddedControllerHost
+
+    async def train() -> str:
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            handle = await host.submit(_spec(tmp_path))
+            await asyncio.wait_for(handle.wait(), timeout=180)
+            return str(handle.experiment_id)
+        finally:
+            await host.close()
+
+    experiment_id = asyncio.run(train())
+    registry = runtimes()
+    _RenumberedRuntime.constructed = 0
+
+    async def reattach():
+        host = EmbeddedControllerHost(tmp_path / "state.db", runtimes=registry)
+        try:
+            handle = await host.attach(experiment_id)
+            status = await handle.status()
+            result = await asyncio.wait_for(handle.wait(), timeout=10)
+            first = await asyncio.wait_for(anext(aiter(handle.events())), timeout=10)
+            return status, result, first
+        finally:
+            await host.close()
+
+    status, result, first = asyncio.run(reattach())
+
+    assert status is ExperimentStatus.ACTIVE, "next_stage decides what follows, not this host"
+    assert result.quiescent
+    (node,) = result.nodes
+    (run,) = node.runs
+    assert run.status is RunStatus.SUCCEEDED
+    assert first.sequence == 1, "the history is readable from its start"
+    assert _RenumberedRuntime.constructed == 0, "no runtime was resolved"
+    assert len(_workloads(tmp_path)) == 1
+
+
+def test_a_recorded_refusal_is_settled_without_the_runtime(tmp_path: Path) -> None:
+    """The controller died after recording the submission failed, before settling.
+
+    The record already says what happened; settling it is bookkeeping, and
+    needs no runtime -- this host has none.
+    """
+    from xaytune.core.refs import Actor
+    from xaytune.experiment import EmbeddedControllerHost
+
+    experiment_id = _crash(tmp_path, "never-sent")
+
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db", runtimes={})
+        try:
+            # What the dead controller recorded before dying, had the runtime
+            # refused the request.
+            (submission,) = host.repository.operations.unresolved()
+            host.repository.fail_operation(
+                submission.id,
+                expected_revision=submission.revision,
+                actor=Actor(type="system", id="test"),
+            )
+            handle = await host.attach(experiment_id)
+            result = await asyncio.wait_for(handle.wait(), timeout=10)
+            return result, _attempts(host.repository, experiment_id)
+        finally:
+            await host.close()
+
+    result, (attempt,) = asyncio.run(scenario())
+    (node,) = result.nodes
+    (run,) = node.runs
+    assert attempt.status is RunAttemptStatus.FAILED
+    assert run.status is RunStatus.FAILED
     assert _workloads(tmp_path) == []

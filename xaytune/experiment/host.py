@@ -134,10 +134,18 @@ class UnknownImplementationError(XaytuneError):
 class ImplementationMismatchError(XaytuneError):
     """The record names a compiler or runtime version this host cannot provide.
 
-    Work one implementation started is not continued by another: a different
-    runtime version may track workloads differently, and a different compiler
-    version may compile the same candidate into a different request. Refused
-    before anything is adopted or issued.
+    Raised only where that implementation would be used, not merely because
+    the record names it:
+
+    - a **runtime** mismatch refuses interacting with the recorded external
+      effect -- looking it up, adopting it, cancelling it -- because a
+      different runtime version may track workloads differently;
+    - a **compiler** mismatch refuses rebuilding a request to re-issue it,
+      because a different compiler version may compile the same candidate
+      into a different request.
+
+    Nothing is adopted or issued when it is raised. Reading the record needs
+    neither: a settled experiment attaches with no runtime or compiler at all.
     """
 
 
@@ -262,10 +270,14 @@ class EmbeddedControllerHost:
 
         Raises:
             AggregateNotFoundError: If no such experiment exists.
-            ImplementationMismatchError: If this host cannot provide the
-                compiler or runtime version the record names. Nothing is
-                adopted or issued: work started by one implementation is not
-                silently continued by another.
+            ImplementationMismatchError: If unsettled work needs the recorded
+                runtime -- to look up, adopt or cancel an effect -- and this
+                host provides a different version; or if a submission must be
+                re-issued and this host provides a different compiler version
+                to rebuild it with. Nothing is adopted or issued.
+            UnknownImplementationError: In the same cases, when this host has
+                no such runtime or compiler at all. An experiment with nothing
+                left to reconcile needs neither.
         """
         experiment = self.repository.aggregates.load_experiment(str(experiment_id))
         controller = self._controllers.get(str(experiment.id))
@@ -524,19 +536,17 @@ class EmbeddedControllerHost:
                                            "finished and forgotten" (ADR-013)
         ```
 
-        The runtime's version is checked first, for every path; the
-        compiler's only on the path that rebuilds a request. A cancellation
+        Each implementation is resolved, and its version checked, only on a
+        path that uses it: the runtime where an external effect is looked up,
+        adopted or cancelled; the compiler only where a request is rebuilt.
+        An experiment with nothing unsettled needs neither, so its record can
+        be attached to after the runtime that ran it is gone. A cancellation
         still in flight is carried on: its intended effects are issued, which
         the runtime treats as idempotent under the same operation id.
         """
         if experiment.runtime is None:
             # Recorded before a host drove experiments: nothing to adopt with.
             return
-        # Every path below talks to the runtime, so its version is checked for
-        # all of them. The compiler is not: only re-issuing a submission needs
-        # one, and that branch resolves and checks it itself.
-        runtime = self._runtime(experiment.runtime)
-        _require_version("runtime", experiment.runtime, runtime.descriptor.plugin_version)  # type: ignore[attr-defined]
 
         aggregates = self.repository.aggregates
         for node in aggregates.nodes_for_experiment(str(experiment.id)):
@@ -544,7 +554,7 @@ class EmbeddedControllerHost:
                 for attempt in aggregates.attempts_for_run(str(run.id)):
                     if attempt.is_terminal:
                         continue
-                    await self._reconcile_attempt(experiment, run, attempt, runtime)
+                    await self._reconcile_attempt(experiment, run, attempt)
 
         for action in self.repository.actions.for_target("experiment", str(experiment.id)):
             if action.type == "cancel-experiment" and not action.is_terminal:
@@ -555,15 +565,15 @@ class EmbeddedControllerHost:
         experiment: Experiment,
         run: Run,
         attempt: RunAttempt,
-        runtime: RuntimeBackend,
     ) -> None:
         """Adopt, settle, escalate or -- only on proven absence -- re-issue one attempt.
 
-        Rediscovering an effect that already exists needs the runtime and
-        nothing else. The compiler becomes a dependency only when the original
-        request must be rebuilt, so that is the only branch that resolves one:
-        a workload already running is adopted even if its compiler is no longer
-        installed.
+        Settling a submission the record already shows failed needs nothing
+        but the record. Rediscovering an effect that exists needs the runtime,
+        and nothing else. The compiler becomes a dependency only when the
+        original request must be rebuilt, so that is the only branch that
+        resolves one: a workload already running is adopted even if its
+        compiler is no longer installed.
         """
         submissions = [
             op
@@ -574,12 +584,16 @@ class EmbeddedControllerHost:
             return
         (submission,) = submissions
 
-        if submission.state == "confirmed" and submission.runtime_ref is not None:
-            self._adopt(experiment.id, run.id, attempt.id, runtime, submission.runtime_ref)
-            return
         if submission.state == "failed":
             # Crashed between recording the refusal and settling the attempt.
             self._settle(attempt.id, run.id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            return
+
+        # From here on the external effect is interpreted, so the runtime that
+        # tracks it is needed -- and it must be the one that recorded it.
+        runtime = self._recorded_runtime(experiment)
+        if submission.state == "confirmed" and submission.runtime_ref is not None:
+            self._adopt(experiment.id, run.id, attempt.id, runtime, submission.runtime_ref)
             return
 
         outcome = await runtime.lookup_operation(submission.id)
@@ -648,13 +662,15 @@ class EmbeddedControllerHost:
             experiment.id, reason=reason, actor=_ACTOR
         )
         if experiment.runtime is not None:
-            runtime = self._runtime(experiment.runtime)
             for child, operation in children:
                 if operation is None or operation.state != "intended":
                     continue
                 reference = self._submitted_reference(child.target.id)
                 if reference is None:
                     continue
+                # Resolved per effect, so cancelling an experiment with no
+                # effect left to issue needs no runtime.
+                runtime = self._recorded_runtime(experiment)
                 await runtime.cancel(reference, operation.id)
                 self.repository.confirm_operation(
                     operation.id, expected_revision=operation.revision, actor=_ACTOR
@@ -822,6 +838,18 @@ class EmbeddedControllerHost:
             )
         return factory()
 
+    def _recorded_runtime(self, experiment: Experiment) -> RuntimeBackend:
+        """The runtime that recorded *experiment*'s effects, at the recorded version.
+
+        For work that touches an effect already recorded. A different version
+        may track workloads differently, so it is refused rather than trusted.
+        """
+        spec = experiment.runtime
+        assert spec is not None, "only called for experiments that record a runtime"
+        runtime = self._runtime(spec)
+        _require_version("runtime", spec, runtime.descriptor.plugin_version)  # type: ignore[attr-defined]
+        return runtime
+
     def _runtime(self, spec: RuntimeSpec) -> RuntimeBackend:
         factory = self._runtime_factories.get(spec.kind)
         if factory is None:
@@ -848,5 +876,5 @@ def _require_version(kind: str, spec: CompilerSpec | RuntimeSpec, available: str
         name = spec.name if isinstance(spec, CompilerSpec) else spec.kind
         raise ImplementationMismatchError(
             f"the record names {kind} {name!r} at version {spec.version}, but this host "
-            f"provides {available}; adopting its work with a different version is refused"
+            f"provides {available}; continuing its work with a different version is refused"
         )

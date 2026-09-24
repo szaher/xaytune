@@ -174,6 +174,10 @@ class EmbeddedControllerHost:
         compilers: Mapping[str, Callable[[], TrainerCompiler]] | None = None,
         runtimes: Mapping[str, Callable[[Mapping[str, Any]], RuntimeBackend]] | None = None,
     ) -> None:
+        if str(state_path) != ":memory:":
+            # A new state database is a normal first run, not an error: SQLite
+            # creates the file but not the directory it lives in.
+            Path(state_path).parent.mkdir(parents=True, exist_ok=True)
         self._connection = connect(state_path)
         migrate(self._connection)
         self.repository = ControlPlaneRepository(self._connection)

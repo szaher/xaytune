@@ -100,8 +100,36 @@ def _workloads(tmp_path: Path) -> list[Path]:
     return sorted(root.iterdir()) if root.exists() else []
 
 
+class _CountingSubmissions:
+    """LocalRuntime, counting what the adopting host issues.
+
+    The one-workload check alone cannot tell adoption from re-issue:
+    LocalRuntime's own get-or-create would return the same workload for a
+    second submit under the same operation id. The invariant is about the
+    controller, so the controller's calls are what is counted.
+    """
+
+    issued: list[Any] = []
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runtime, name)
+
+    async def submit_or_get(self, operation_id: Any, plan: Any) -> Any:
+        _CountingSubmissions.issued.append(operation_id)
+        return await self._runtime.submit_or_get(operation_id, plan)
+
+
 def _adopt(tmp_path: Path, experiment_id: str, **host_options: Any):
     from xaytune.experiment import EmbeddedControllerHost
+    from xaytune.experiment.host import _local_runtime
+
+    _CountingSubmissions.issued = []
+    host_options.setdefault(
+        "runtimes", {"local": lambda config: _CountingSubmissions(_local_runtime(config))}
+    )
 
     async def scenario():
         host = EmbeddedControllerHost(tmp_path / "state.db", **host_options)
@@ -146,6 +174,7 @@ def test_a_restarted_host_adopts_the_live_workload_instead_of_starting_another(
 
     _settled_once(result, attempt)
     assert len(_workloads(tmp_path)) == 1, "adopted, not duplicated"
+    assert _CountingSubmissions.issued == [], "a confirmed workload is adopted, never re-issued"
     (submit,) = operations
     assert submit.state == "confirmed"
 
@@ -211,6 +240,7 @@ def test_a_lost_submit_response_is_found_by_lookup_not_reissued(tmp_path: Path) 
 
     _settled_once(result, attempt)
     assert len(_workloads(tmp_path)) == 1
+    assert _CountingSubmissions.issued == [], "found by lookup, not re-issued"
     (submit,) = operations
     assert submit.state == "confirmed" and submit.runtime_ref is not None
 
@@ -231,6 +261,7 @@ def test_a_submission_the_runtime_never_received_is_issued_once_under_its_own_id
 
     _settled_once(result, attempt)
     (submit,) = operations
+    assert _CountingSubmissions.issued == [submit.id], "issued exactly once, under its own id"
     (workload,) = _workloads(tmp_path)
     assert workload.name == str(submit.id), "issued under the recorded operation id"
 
@@ -286,8 +317,10 @@ def test_a_runtime_that_cannot_report_completed_operations_escalates(tmp_path: P
 
         def capabilities(self) -> Any:
             document = self._runtime.capabilities()
-            runtime = document.runtime.model_copy(update={"reports_completed_operations": False})
-            return document.model_copy(update={"runtime": runtime})
+            resilience = document.resilience.model_copy(
+                update={"reports_completed_operations": False}
+            )
+            return document.model_copy(update={"resilience": resilience})
 
         async def lookup_operation(self, _operation_id: Any) -> None:
             return None

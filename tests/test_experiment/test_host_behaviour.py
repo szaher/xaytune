@@ -172,15 +172,16 @@ def test_a_failed_run_leaves_the_candidate_awaiting_failure_handling(tmp_path: P
 # ---- what the host does not claim ------------------------------------------
 
 
-def test_waiting_on_work_no_controller_is_driving_says_so(tmp_path: Path) -> None:
-    """Not restart reconciliation: a new host cannot settle an orphaned attempt.
+def test_work_left_by_a_closed_host_is_adopted_by_the_next(tmp_path: Path) -> None:
+    """PR-012 raised ControllerNotRunningError here; PR-012a adopts instead.
 
-    The first host is closed while training is still running, which cancels
-    its controller task. A second host on the record finds an unsettled run
-    and nothing driving it -- and says that, rather than waiting forever for
-    an outcome nobody will record. Adopting it is PR-012a.
+    The first host is closed while training runs, which cancels its
+    controller task. A second host's attach() finds the unsettled attempt,
+    adopts its workload and settles it. (Killing the process rather than
+    closing the host is the harder version of this, in
+    ``test_restart_reconciliation``.)
     """
-    from xaytune.experiment import ControllerNotRunningError, EmbeddedControllerHost
+    from xaytune.experiment import EmbeddedControllerHost
 
     async def orphan():
         host = EmbeddedControllerHost(tmp_path / "state.db")
@@ -192,13 +193,48 @@ def test_waiting_on_work_no_controller_is_driving_says_so(tmp_path: Path) -> Non
         host = EmbeddedControllerHost(tmp_path / "state.db")
         try:
             handle = await host.attach(experiment_id)
-            with pytest.raises(ControllerNotRunningError, match="PR-012a"):
-                await handle.wait()
+            return await asyncio.wait_for(handle.wait(), timeout=120)
         finally:
             await host.close()
 
     experiment_id = asyncio.run(orphan())
-    asyncio.run(attach(experiment_id))
+    result = asyncio.run(attach(experiment_id))
+
+    (node,) = result.nodes
+    (run,) = node.runs
+    assert (run.status, run.attempt_status) == (RunStatus.SUCCEEDED, RunAttemptStatus.SUCCEEDED)
+    assert result.quiescent is True
+
+
+def test_a_record_no_host_can_adopt_still_says_so(tmp_path: Path) -> None:
+    """Without a persisted runtime spec there is nothing to adopt with.
+
+    Experiments recorded before a host drove them have no ``RuntimeSpec``.
+    Their unsettled work cannot be adopted, and wait() says so rather than
+    waiting forever -- ControllerNotRunningError, as in PR-012.
+    """
+    from tests.test_storage.conftest import make_attempt, make_experiment, make_node, make_run
+    from xaytune.experiment import ControllerNotRunningError, EmbeddedControllerHost
+
+    actor = Actor(type="system", id="test")
+
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            repo = host.repository
+            experiment = repo.create_experiment(make_experiment(), actor=actor)
+            node = repo.create_node(make_node(experiment), actor=actor)
+            run = repo.create_run(make_run(node), actor=actor)
+            repo.create_attempt_with_submit_intent(
+                make_attempt(run), request_digest="sha256:x", actor=actor
+            )
+            handle = await host.attach(experiment.id)
+            with pytest.raises(ControllerNotRunningError, match="unsettled work"):
+                await handle.wait()
+        finally:
+            await host.close()
+
+    asyncio.run(scenario())
 
 
 # ---- events() shares the loop ----------------------------------------------

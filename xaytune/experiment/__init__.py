@@ -20,6 +20,8 @@ from xaytune.experiment.handle import (
 from xaytune.experiment.host import (
     ControllerNotRunningError,
     EmbeddedControllerHost,
+    ImplementationMismatchError,
+    ReconciliationEscalatedError,
     UnknownImplementationError,
 )
 from xaytune.experiment.spec import CompilerSpec, ExperimentSpec, RuntimeSpec
@@ -31,7 +33,9 @@ __all__ = [
     "ExperimentHandle",
     "ExperimentResult",
     "ExperimentSpec",
+    "ImplementationMismatchError",
     "NodeOutcome",
+    "ReconciliationEscalatedError",
     "RunOutcome",
     "RuntimeSpec",
     "UnknownImplementationError",

@@ -31,6 +31,14 @@ that is neither, an inert default that has moved, or a controlled value that
 ``SFTConfig`` rewrote after construction stops the run. That makes a TRL
 upgrade fail loudly until someone has decided what its new or changed fields
 mean -- a tripwire rather than a test that happened to pass once.
+
+**The classification is of particular releases**, so the worker checks them
+first. :data:`SUPPORTED_VERSIONS` names the TRL and transformers minors it was
+made against -- the same ranges the ``trl`` extra pins, so the locked
+environment is the classified one -- and :func:`verify_versions` refuses any
+other before ``trl`` is imported, naming what is installed and what is
+supported. The classification check stays behind it, for a patch release
+that changes a default.
 """
 
 from __future__ import annotations
@@ -70,11 +78,14 @@ if TYPE_CHECKING:
 
 __all__ = [
     "INERT_FIELDS",
+    "SUPPORTED_VERSIONS",
     "TRLObservations",
     "UnclassifiedBehaviourError",
+    "UnsupportedTrainerVersionError",
     "main",
     "sft_arguments",
     "verify_classification",
+    "verify_versions",
 ]
 
 
@@ -86,6 +97,69 @@ class UnclassifiedBehaviourError(RuntimeError):
     to classify it -- control it, or record why it is inert -- not to relax
     the check.
     """
+
+
+class UnsupportedTrainerVersionError(RuntimeError):
+    """The installed TRL or transformers is not a release this worker classified.
+
+    Raised before training, and before ``trl`` is imported. The fix is an
+    environment with the supported versions -- ``uv sync --locked --extra
+    trl`` gives one -- or, to support a new release, classifying it and then
+    widening :data:`SUPPORTED_VERSIONS` and the ``trl`` extra together.
+    """
+
+
+# ---- the supported releases -------------------------------------------------
+
+# The releases INERT_FIELDS and sft_arguments were classified against: TRL's
+# SFTConfig fields, and transformers' TrainingArguments underneath them. Equal
+# to the ``trl`` extra in pyproject.toml, which a test enforces.
+SUPPORTED_VERSIONS: Mapping[str, str] = {
+    "trl": ">=1.13,<1.14",
+    "transformers": ">=5.17,<5.18",
+}
+
+
+def verify_versions(installed: Mapping[str, str | None] | None = None) -> None:
+    """Refuse to train on a TRL or transformers release nobody classified.
+
+    Args:
+        installed: Package name to installed version, ``None`` when absent.
+            Read from the environment when omitted.
+
+    Raises:
+        UnsupportedTrainerVersionError: Naming each package whose installed
+            version is missing or outside :data:`SUPPORTED_VERSIONS`.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    from packaging.specifiers import SpecifierSet
+    from packaging.version import Version
+
+    if installed is None:
+        found: dict[str, str | None] = {}
+        for name in SUPPORTED_VERSIONS:
+            try:
+                found[name] = version(name)
+            except PackageNotFoundError:
+                found[name] = None
+        installed = found
+
+    problems: list[str] = []
+    for name, supported in SUPPORTED_VERSIONS.items():
+        actual = installed.get(name)
+        if actual is None:
+            problems.append(f"{name} is not installed (supported: {supported})")
+        # A prerelease is refused explicitly: whether a range admits one by
+        # default has changed between packaging releases.
+        elif not SpecifierSet(supported).contains(Version(actual), prereleases=False):
+            problems.append(f"{name} {actual} is installed (supported: {supported})")
+    if problems:
+        raise UnsupportedTrainerVersionError(
+            "this worker's SFTConfig classification was made for other releases: "
+            + "; ".join(problems)
+            + ". Install the supported versions, e.g. `uv sync --locked --extra trl`"
+        )
 
 
 # ---- the classification ---------------------------------------------------
@@ -478,6 +552,9 @@ def main(*_arguments: str) -> int:
 
 
 def _train(spec: TRLSftConfig, trainer_dir: str, observations: TRLObservations) -> Any:
+    # Before importing trl: an unsupported release may not import cleanly,
+    # and its error would not say that the release is the problem.
+    verify_versions()
     # Heavy imports here, so the classification above stays importable.
     from datasets import Dataset
     from transformers import AutoModelForCausalLM, AutoTokenizer

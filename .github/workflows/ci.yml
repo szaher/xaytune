@@ -38,6 +38,22 @@ jobs:
       # And the suite must exist: pytest exits 5 when nothing is selected.
       - run: python -m pytest tests/ -q --collect-only -m trl
 
+  # The environment a fresh clone gets from `uv sync`: resolved from uv.lock,
+  # on the Python .python-version names. The test job installs from
+  # pyproject.toml and resolves the newest releases, so it could not notice
+  # a lock resolving a release the TRL worker refuses -- which is how the
+  # lock came to install transformers 5.9 while CI tested 5.17.
+  locked:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --locked --extra dev --extra trl
+      - run: uv run --locked python -m pytest tests/ -q --tb=short -m "not slow"
+        env:
+          XAYTUNE_REQUIRE_TRL: "1"
+      - run: uv run --locked python -m pytest tests/ -q --collect-only -m trl
+
   type-check:
     runs-on: ubuntu-latest
     steps:

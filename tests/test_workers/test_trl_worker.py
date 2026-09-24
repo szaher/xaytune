@@ -276,3 +276,32 @@ def test_the_worker_refuses_to_run_without_its_runtime(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match=WORKER_CONFIG_PATH_ENV):
         main()
+
+
+def test_an_unsupported_release_is_reported_as_the_failure_before_training(
+    monkeypatch, tmp_path
+) -> None:
+    """The run fails naming the release, not as an unclassified field or an import error."""
+    import importlib.metadata
+
+    from xaytune.runtimes.worker import OBSERVATIONS_PATH_ENV, WORKER_CONFIG_PATH_ENV
+    from xaytune.workers.trl import UnsupportedTrainerVersionError, main
+
+    real_version = importlib.metadata.version
+    monkeypatch.setattr(
+        importlib.metadata,
+        "version",
+        lambda name: "5.9.0" if name == "transformers" else real_version(name),
+    )
+    config = tmp_path / "config.json"
+    config.write_text(_spec().model_dump_json())
+    observations = tmp_path / "observations.jsonl"
+    monkeypatch.setenv(WORKER_CONFIG_PATH_ENV, str(config))
+    monkeypatch.setenv(OBSERVATIONS_PATH_ENV, str(observations))
+
+    with pytest.raises(UnsupportedTrainerVersionError, match="transformers 5.9.0"):
+        main()
+
+    (failed,) = _written(observations)
+    assert failed["type"] == "TrainingFailed"
+    assert failed["reason"] == "unsupported-trainer-version-error"

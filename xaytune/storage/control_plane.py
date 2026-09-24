@@ -380,8 +380,15 @@ class ControlPlaneRepository:
         actor: Actor,
         event_type: str | None = None,
         destinations: tuple[str, ...] = (),
+        telemetry_position: tuple[int, int] | None = None,
     ) -> RunAttempt:
-        """Move an attempt to *new_status*, with its event, atomically."""
+        """Move an attempt to *new_status*, with its event, atomically.
+
+        *telemetry_position* is the ``(generation, sequence)`` of the
+        telemetry event that caused this transition. The attempt's durable
+        cursor advances to it in the same commit, so after a restart the
+        controller resumes from the last event whose effect is recorded.
+        """
         return self._transition(
             "RunAttempt",
             str(attempt_id),
@@ -392,6 +399,13 @@ class ControlPlaneRepository:
             actor,
             event_type,
             destinations,
+            after_write=(
+                None
+                if telemetry_position is None
+                else lambda moved: self.aggregates._advance_telemetry(
+                    str(moved.id), telemetry_position
+                )
+            ),
         )
 
     def record_artifact(
@@ -402,8 +416,12 @@ class ControlPlaneRepository:
         expected_revision: int,
         actor: Actor,
         destinations: tuple[str, ...] = (),
+        telemetry_position: tuple[int, int] | None = None,
     ) -> RunAttempt:
         """Record an artifact an attempt produced, with its event, atomically.
+
+        *telemetry_position*, if given, advances the attempt's durable cursor
+        in the same commit (see :meth:`transition_attempt`).
 
         The event carries the artifact itself, so the history answers "what
         did this attempt produce" without reading the attempt's current row --
@@ -447,6 +465,8 @@ class ControlPlaneRepository:
                 destinations,
                 extra={"artifact": artifact.model_dump(mode="json")},
             )
+            if telemetry_position is not None:
+                self.aggregates._advance_telemetry(str(attempt_id), telemetry_position)
         return recorded
 
     # ---- ADR-005 §4 ----------------------------------------------------
@@ -1045,8 +1065,13 @@ class ControlPlaneRepository:
         actor: Actor,
         event_type: str | None,
         destinations: tuple[str, ...],
+        *,
+        after_write: Callable[[AggregateT], None] | None = None,
     ) -> AggregateT:
         """Load, transition and persist an aggregate, with its event.
+
+        *after_write* runs inside the same transaction, for a write that must
+        commit with the transition and nowhere else.
 
         The aggregate is **loaded inside the transaction**, never accepted from
         the caller. A caller-supplied object can carry a real id and revision
@@ -1073,6 +1098,8 @@ class ControlPlaneRepository:
 
             moved: AggregateT = current.with_status(new_status)
             writer(moved)
+            if after_write is not None:
+                after_write(moved)
             self._emit(
                 moved,
                 event_type or f"{kind}StatusChanged",

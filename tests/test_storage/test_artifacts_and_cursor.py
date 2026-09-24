@@ -160,3 +160,68 @@ def test_an_artifact_attributed_elsewhere_is_refused_not_overwritten(
     with pytest.raises(ProvenanceError, match="misattribute"):
         repo.record_artifact(attempt.id, foreign, expected_revision=attempt.revision, actor=ACTOR)
     assert repo.aggregates.load_attempt(str(attempt.id)).artifact_refs == ()
+
+
+# ---- the durable telemetry cursor ---------------------------------------------
+
+
+def test_nothing_recorded_means_the_start_of_generation_zero(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (0, -1)
+
+
+def test_the_cursor_advances_with_the_transition_its_event_caused(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    from xaytune.core.state.status import RunAttemptStatus
+
+    repo.transition_attempt(
+        attempt.id,
+        expected_revision=attempt.revision,
+        new_status=RunAttemptStatus.QUEUED,
+        actor=ACTOR,
+        telemetry_position=(0, 3),
+    )
+
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (0, 3)
+
+
+def test_the_cursor_never_moves_backwards(repo: ControlPlaneRepository, attempt: Any) -> None:
+    """A replayed event re-applied after a restart must not rewind it."""
+    recorded = repo.record_artifact(
+        attempt.id,
+        _artifact(),
+        expected_revision=attempt.revision,
+        actor=ACTOR,
+        telemetry_position=(1, 7),
+    )
+
+    repo.record_artifact(
+        attempt.id,
+        _artifact(),
+        expected_revision=recorded.revision,
+        actor=ACTOR,
+        telemetry_position=(0, 9),
+    )
+
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (1, 7)
+
+
+def test_the_cursor_does_not_advance_past_an_effect_that_did_not_commit(
+    repo: ControlPlaneRepository, attempt: Any
+) -> None:
+    """Advanced in the transition's commit, so a failed transition moves nothing."""
+    from xaytune.core.errors import InvalidTransitionError
+    from xaytune.core.state.status import RunAttemptStatus
+
+    with pytest.raises(InvalidTransitionError):
+        repo.transition_attempt(
+            attempt.id,
+            expected_revision=attempt.revision,
+            new_status=RunAttemptStatus.SUCCEEDED,  # CREATED -> SUCCEEDED is not an edge
+            actor=ACTOR,
+            telemetry_position=(0, 5),
+        )
+
+    assert repo.aggregates.telemetry_position(str(attempt.id)) == (0, -1)

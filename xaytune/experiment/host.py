@@ -220,7 +220,10 @@ class EmbeddedControllerHost:
         self._compilers = dict(_default_compilers() if compilers is None else compilers)
         self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
         self._runtimes: dict[str, RuntimeBackend] = {}
-        self._controllers: dict[str, asyncio.Task[None]] = {}
+        # One observer per attempt, keyed by experiment then attempt: an
+        # experiment can have several live attempts, and each must stay
+        # tracked -- for wait() to wait on and close() to stop.
+        self._controllers: dict[str, dict[str, asyncio.Task[None]]] = {}
         self._escalations: dict[str, str] = {}
         self._reference = ControllerHostRef(kind="embedded", id=f"embedded-{uuid.uuid4().hex}")
 
@@ -280,8 +283,7 @@ class EmbeddedControllerHost:
                 left to reconcile needs neither.
         """
         experiment = self.repository.aggregates.load_experiment(str(experiment_id))
-        controller = self._controllers.get(str(experiment.id))
-        if controller is None or controller.done():
+        if not self._driving(experiment.id):
             await self._reconcile(experiment)
         return ExperimentHandle(experiment.id, self)
 
@@ -292,9 +294,10 @@ class EmbeddedControllerHost:
         running, because the runtime owns it, and the record keeps the intent
         and the reference, so a later ``attach()`` adopts it.
         """
-        for task in self._controllers.values():
+        tasks = [task for observers in self._controllers.values() for task in observers.values()]
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._controllers.values(), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._controllers.clear()
         for runtime in self._runtimes.values():
             close = getattr(runtime, "close", None)
@@ -312,11 +315,17 @@ class EmbeddedControllerHost:
         return self.repository.events.events_for_experiment_after(str(experiment_id), sequence)
 
     async def _wait(self, experiment_id: ExperimentId) -> ExperimentResult:
-        controller = self._controllers.get(str(experiment_id))
-        if controller is not None:
-            # Shielded: a caller that stops waiting must not stop the
-            # controller, which other handles may be waiting on too.
-            await asyncio.shield(controller)
+        # Every attempt's observer, including any adopted while waiting.
+        # Shielded: a caller that stops waiting must not stop the observers,
+        # which other handles may be waiting on too.
+        awaited: set[asyncio.Task[None]] = set()
+        while True:
+            observers = self._controllers.get(str(experiment_id), {}).values()
+            pending = [task for task in observers if task not in awaited]
+            if not pending:
+                break
+            awaited.update(pending)
+            await asyncio.gather(*(asyncio.shield(task) for task in pending))
         escalation = self._escalations.get(str(experiment_id))
         if escalation is not None:
             raise ReconciliationEscalatedError(escalation)
@@ -514,10 +523,16 @@ class EmbeddedControllerHost:
     ) -> None:
         """Observe a workload the runtime has, whoever issued it."""
         self._advance_attempt(attempt_id, RunAttemptStatus.QUEUED)
-        self._controllers[str(experiment_id)] = asyncio.create_task(
+        observers = self._controllers.setdefault(str(experiment_id), {})
+        observers[str(attempt_id)] = asyncio.create_task(
             self._observe(experiment_id, attempt_id, run_id, runtime, reference),
-            name=f"xaytune-controller-{experiment_id}",
+            name=f"xaytune-controller-{experiment_id}-{attempt_id}",
         )
+
+    def _driving(self, experiment_id: ExperimentId) -> bool:
+        """Whether this host is still observing any of the experiment's attempts."""
+        observers = self._controllers.get(str(experiment_id), {})
+        return any(not task.done() for task in observers.values())
 
     async def _reconcile(self, experiment: Experiment) -> None:
         """Adopt an experiment's unsettled work after the process driving it died.

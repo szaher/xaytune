@@ -472,6 +472,9 @@ As built, reconciliation runs in `attach()`, for the experiment attached to:
   INTENDED/SENT is looked up; only "never received" is issued, under the
   recorded operation id and after checking the rebuilt plan's digest -- and
   only if the runtime can report completed operations, otherwise it escalates
+- each adopted attempt has its own observer, tracked per attempt: `wait()`
+  waits for all of them, including any adopted while it waits, and `close()`
+  stops all of them
 - telemetry resumes from the attempt's durable cursor
   (`telemetry_generation`, `telemetry_sequence`), which advances only in the
   commit of the effect an event caused

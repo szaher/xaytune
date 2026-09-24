@@ -664,3 +664,176 @@ def test_a_recorded_refusal_is_settled_without_the_runtime(tmp_path: Path) -> No
     assert attempt.status is RunAttemptStatus.FAILED
     assert run.status is RunStatus.FAILED
     assert _workloads(tmp_path) == []
+
+
+# ---- every live attempt is adopted, and each stays tracked --------------------------
+
+
+def _two_live_runs(tmp_path: Path) -> str:
+    """An experiment with two runs training at once, whose host has gone.
+
+    One candidate per experiment still means one run from ``submit()``; the
+    second is recorded and issued the way ``submit()`` issues the first. The
+    first host closes without stopping either: the runtime owns them.
+    """
+    from xaytune.core.domain.run import RunAttempt
+    from xaytune.core.ids import RunAttemptId
+    from xaytune.experiment import EmbeddedControllerHost
+    from xaytune.experiment.host import _ACTOR
+
+    async def scenario() -> str:
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            handle = await host.submit(_spec(tmp_path))
+            repo = host.repository
+            experiment = repo.aggregates.load_experiment(str(handle.experiment_id))
+            (node,) = repo.aggregates.nodes_for_experiment(str(experiment.id))
+            run = host._record_run(node, seed=8)
+            attempt = RunAttempt(id=RunAttemptId.generate(), run_id=run.id, attempt_number=1)
+            plan = host._plan(experiment, run, attempt.id, host._compiler("native"))
+            attempt, operation = repo.create_attempt_with_submit_intent(
+                attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
+            )
+            assert experiment.runtime is not None
+            runtime = host._runtime(experiment.runtime)
+            await host._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
+            return str(experiment.id)
+        finally:
+            await host.close()
+
+    return asyncio.run(scenario())
+
+
+class _HoldingTheFirst:
+    """LocalRuntime, holding the first stream it serves open until *release* returns.
+
+    Whichever attempt reconciliation adopts first is held, so the other one
+    settles first -- whatever order the record lists them in.
+    """
+
+    def __init__(self, runtime: Any, release: Any) -> None:
+        self._runtime = runtime
+        self._release = release
+        self._held: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runtime, name)
+
+    async def submit_or_get(self, operation_id: Any, plan: Any) -> Any:
+        _CountingSubmissions.issued.append(operation_id)
+        return await self._runtime.submit_or_get(operation_id, plan)
+
+    async def watch(self, reference: Any, cursor: Any = None) -> Any:
+        if self._held is None:
+            self._held = reference
+        async for envelope in self._runtime.watch(reference, cursor):
+            yield envelope
+        if reference == self._held:
+            await self._release()
+
+
+def test_every_live_attempt_is_adopted_and_waited_for(tmp_path: Path) -> None:
+    """Two live attempts, two observers -- and wait() waits for both.
+
+    The attempt adopted first finishes last. A host that tracked one observer
+    per experiment would wait only for the one adopted last, find the other
+    still unsettled, and report that nothing was driving it.
+    """
+    from xaytune.experiment import EmbeddedControllerHost
+    from xaytune.experiment.host import _local_runtime
+
+    experiment_id = _two_live_runs(tmp_path)
+    assert len(_workloads(tmp_path)) == 2
+    _CountingSubmissions.issued = []
+    hosts: list[Any] = []
+
+    async def other_run_settled() -> None:
+        repo = hosts[0].repository
+        while sum(r.is_terminal for r in _runs(repo, experiment_id)) < 1:
+            await asyncio.sleep(0.05)
+
+    async def scenario():
+        host = EmbeddedControllerHost(
+            tmp_path / "state.db",
+            runtimes={"local": lambda c: _HoldingTheFirst(_local_runtime(c), other_run_settled)},
+        )
+        hosts.append(host)
+        try:
+            handle = await host.attach(experiment_id)
+            observers = dict(host._controllers[experiment_id])
+            result = await asyncio.wait_for(handle.wait(), timeout=180)
+            return observers, result, _attempts(host.repository, experiment_id)
+        finally:
+            await host.close()
+
+    observers, result, attempts = asyncio.run(scenario())
+
+    assert len(observers) == 2, "one observer per live attempt"
+    assert {str(a.id) for a in attempts} == set(observers)
+    assert result.quiescent
+    (node,) = result.nodes
+    assert [run.status for run in node.runs] == [RunStatus.SUCCEEDED] * 2
+    assert [a.status for a in attempts] == [RunAttemptStatus.SUCCEEDED] * 2
+    assert all(a.attempt_number == 1 for a in attempts), "the same attempts, not new ones"
+    assert len(_workloads(tmp_path)) == 2, "one workload per attempt"
+    assert _CountingSubmissions.issued == []
+
+
+def test_close_stops_every_adopted_observer(tmp_path: Path) -> None:
+    """Not only the one adopted last: none may outlive the host's database.
+
+    Both streams are held open, so both observers are live when the host
+    closes. A later host then adopts both again and sees them through.
+    """
+    from xaytune.experiment import EmbeddedControllerHost
+    from xaytune.experiment.host import _local_runtime
+
+    experiment_id = _two_live_runs(tmp_path)
+
+    class HoldingBoth(_HoldingTheFirst):
+        async def watch(self, reference: Any, cursor: Any = None) -> Any:
+            await asyncio.Event().wait()
+            yield  # pragma: no cover
+
+    async def scenario():
+        host = EmbeddedControllerHost(
+            tmp_path / "state.db",
+            runtimes={"local": lambda c: HoldingBoth(_local_runtime(c), None)},
+        )
+        await host.attach(experiment_id)
+        observers = list(host._controllers[experiment_id].values())
+        assert len(observers) == 2 and not any(task.done() for task in observers)
+        await host.close()
+        # Checked here, in the loop: asyncio.run() cancels whatever is left
+        # when it returns, which would hide an observer close() missed.
+        return [task.done() for task in observers]
+
+    assert asyncio.run(scenario()) == [True, True], "close() stopped every observer"
+
+    result = _adopt_all(tmp_path, experiment_id)
+    (node,) = result.nodes
+    assert [run.status for run in node.runs] == [RunStatus.SUCCEEDED] * 2
+    assert len(_workloads(tmp_path)) == 2
+
+
+def _runs(repo: Any, experiment_id: str) -> list:
+    return [
+        run
+        for node in repo.aggregates.nodes_for_experiment(experiment_id)
+        for run in repo.aggregates.runs_for_node(str(node.id))
+    ]
+
+
+def _adopt_all(tmp_path: Path, experiment_id: str):
+    from xaytune.experiment import EmbeddedControllerHost
+
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            handle = await host.attach(experiment_id)
+            result = await asyncio.wait_for(handle.wait(), timeout=180)
+            return result
+        finally:
+            await host.close()
+
+    return asyncio.run(scenario())

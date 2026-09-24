@@ -206,8 +206,11 @@ class EmbeddedControllerHost:
         self._connection = connect(state_path)
         migrate(self._connection)
         self.repository = ControlPlaneRepository(self._connection)
-        self._compilers = dict(compilers or _default_compilers())
-        self._runtime_factories = dict(runtimes or {"local": _local_runtime})
+        # ``None`` means the defaults; an empty mapping means none. Treating an
+        # empty registry as "use the defaults" would hand a caller who removed
+        # every compiler the built-in ones anyway.
+        self._compilers = dict(_default_compilers() if compilers is None else compilers)
+        self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
         self._runtimes: dict[str, RuntimeBackend] = {}
         self._controllers: dict[str, asyncio.Task[None]] = {}
         self._escalations: dict[str, str] = {}
@@ -521,17 +524,19 @@ class EmbeddedControllerHost:
                                            "finished and forgotten" (ADR-013)
         ```
 
-        Versions are checked first. A cancellation still in flight is carried
-        on: its intended effects are issued, which the runtime treats as
-        idempotent under the same operation id.
+        The runtime's version is checked first, for every path; the
+        compiler's only on the path that rebuilds a request. A cancellation
+        still in flight is carried on: its intended effects are issued, which
+        the runtime treats as idempotent under the same operation id.
         """
-        if experiment.runtime is None or experiment.compiler is None:
+        if experiment.runtime is None:
             # Recorded before a host drove experiments: nothing to adopt with.
             return
+        # Every path below talks to the runtime, so its version is checked for
+        # all of them. The compiler is not: only re-issuing a submission needs
+        # one, and that branch resolves and checks it itself.
         runtime = self._runtime(experiment.runtime)
-        compiler = self._compiler(experiment.compiler.name)
         _require_version("runtime", experiment.runtime, runtime.descriptor.plugin_version)  # type: ignore[attr-defined]
-        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
 
         aggregates = self.repository.aggregates
         for node in aggregates.nodes_for_experiment(str(experiment.id)):
@@ -539,7 +544,7 @@ class EmbeddedControllerHost:
                 for attempt in aggregates.attempts_for_run(str(run.id)):
                     if attempt.is_terminal:
                         continue
-                    await self._reconcile_attempt(experiment, run, attempt, runtime, compiler)
+                    await self._reconcile_attempt(experiment, run, attempt, runtime)
 
         for action in self.repository.actions.for_target("experiment", str(experiment.id)):
             if action.type == "cancel-experiment" and not action.is_terminal:
@@ -551,8 +556,15 @@ class EmbeddedControllerHost:
         run: Run,
         attempt: RunAttempt,
         runtime: RuntimeBackend,
-        compiler: TrainerCompiler,
     ) -> None:
+        """Adopt, settle, escalate or -- only on proven absence -- re-issue one attempt.
+
+        Rediscovering an effect that already exists needs the runtime and
+        nothing else. The compiler becomes a dependency only when the original
+        request must be rebuilt, so that is the only branch that resolves one:
+        a workload already running is adopted even if its compiler is no longer
+        installed.
+        """
         submissions = [
             op
             for op in self.repository.operations.for_target("training-attempt", str(attempt.id))
@@ -597,6 +609,15 @@ class EmbeddedControllerHost:
             )
             return
 
+        # Only now is the original request rebuilt, so only now is the
+        # compiler needed -- and it must be the one that built the original.
+        if experiment.compiler is None:
+            raise ImplementationMismatchError(
+                f"submission {submission.id} must be re-issued, but the record names no "
+                f"compiler to rebuild its request with"
+            )
+        compiler = self._compiler(experiment.compiler.name)
+        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
         plan = self._plan(experiment, run, attempt.id, compiler)
         if plan.request_digest("submit") != submission.request_digest:
             raise ImplementationMismatchError(

@@ -452,3 +452,104 @@ def test_a_cancellation_recorded_before_the_crash_is_carried_out_after_it(
     assert cancel.state == "confirmed"
     assert len(_workloads(tmp_path)) == 1
     assert _CountingSubmissions.issued == [], "cancelling adopts; it never re-submits"
+
+
+# ---- the compiler is a dependency of re-issue only -----------------------------------
+
+
+class _RenumberedCompiler:
+    """The native compiler, claiming a version other than the one recorded."""
+
+    def __init__(self) -> None:
+        from xaytune.compilation.native import NativeCompiler
+
+        self._compiler = NativeCompiler()
+        self.descriptor = self._compiler.descriptor.model_copy(update={"plugin_version": "9.9.9"})
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._compiler, name)
+
+
+_NO_COMPILERS: dict[str, Any] = {}
+_RENUMBERED = {"native": _RenumberedCompiler}
+
+
+@pytest.mark.parametrize(
+    "compilers", [_NO_COMPILERS, _RENUMBERED], ids=["compiler-unavailable", "compiler-renumbered"]
+)
+def test_a_running_workload_is_adopted_without_its_compiler(
+    tmp_path: Path, compilers: dict
+) -> None:
+    """Rediscovering an effect that exists needs the runtime, not the compiler.
+
+    The unavailable case is the strong one: with no compiler registered at
+    all, adoption can only succeed if nothing on its path resolves one.
+    """
+    experiment_id = _crash(tmp_path, "running")
+
+    result, attempt, _ = _adopt(tmp_path, experiment_id, compilers=compilers)
+
+    _settled_once(result, attempt)
+    assert _CountingSubmissions.issued == []
+    assert len(_workloads(tmp_path)) == 1
+
+
+@pytest.mark.parametrize(
+    "compilers", [_NO_COMPILERS, _RENUMBERED], ids=["compiler-unavailable", "compiler-renumbered"]
+)
+def test_a_workload_found_by_lookup_is_adopted_without_its_compiler(
+    tmp_path: Path, compilers: dict
+) -> None:
+    """Not "confirmed operations skip the compiler": finding an existing effect does.
+
+    The submission was never confirmed, so this goes through lookup -- and the
+    lookup finding the workload is what makes the compiler irrelevant.
+    """
+    experiment_id = _crash(tmp_path, "lost-response")
+
+    result, attempt, operations = _adopt(tmp_path, experiment_id, compilers=compilers)
+
+    _settled_once(result, attempt)
+    (submit,) = operations
+    assert submit.state == "confirmed"
+    assert _CountingSubmissions.issued == []
+
+
+@pytest.mark.parametrize(
+    ("compilers", "error"),
+    [(_NO_COMPILERS, "UnknownImplementationError"), (_RENUMBERED, "ImplementationMismatchError")],
+    ids=["compiler-unavailable", "compiler-renumbered"],
+)
+def test_re_issuing_without_the_original_compiler_fails_closed(
+    tmp_path: Path, compilers: dict, error: str
+) -> None:
+    """Rebuilding the request is where the compiler matters, so that is where it is required.
+
+    Nothing was started, so the submission would have to be issued -- which
+    means rebuilding it, which needs the compiler that built the original. An
+    unavailable one or a different version refuses, and nothing is submitted.
+    """
+    import xaytune.experiment as experiment_module
+    from xaytune.experiment import EmbeddedControllerHost
+    from xaytune.experiment.host import _local_runtime
+
+    experiment_id = _crash(tmp_path, "never-sent")
+    _CountingSubmissions.issued = []
+
+    async def scenario():
+        host = EmbeddedControllerHost(
+            tmp_path / "state.db",
+            compilers=compilers,
+            runtimes={"local": lambda c: _CountingSubmissions(_local_runtime(c))},
+        )
+        try:
+            with pytest.raises(getattr(experiment_module, error)):
+                await host.attach(experiment_id)
+            return host.repository.operations.unresolved()
+        finally:
+            await host.close()
+
+    (unresolved,) = asyncio.run(scenario())
+    assert unresolved.state == "intended", "left exactly as recorded"
+    assert _CountingSubmissions.issued == []
+    assert _workloads(tmp_path) == []

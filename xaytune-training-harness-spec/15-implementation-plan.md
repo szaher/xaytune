@@ -461,8 +461,11 @@ Implement:
 
 As built, reconciliation runs in `attach()`, for the experiment attached to:
 
-- versions first: a runtime or compiler version other than the recorded one
-  fails closed before anything is adopted or issued
+- versions, where they are needed: a runtime version other than the recorded
+  one fails closed before anything is adopted or issued. The compiler is
+  needed only to rebuild a request that must be re-issued, so only that path
+  resolves it and checks its version -- a running workload is adopted even if
+  its compiler is no longer installed
 - per unsettled attempt, its submit operation decides: CONFIRMED is adopted;
   INTENDED/SENT is looked up; only "never received" is issued, under the
   recorded operation id and after checking the rebuilt plan's digest -- and

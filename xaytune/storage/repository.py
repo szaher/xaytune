@@ -43,6 +43,7 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.evaluation import EvaluationAttempt, EvaluationResult, EvaluationRun
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
@@ -53,6 +54,13 @@ from xaytune.storage.payloads import decode_node_payload, decode_payload
 __all__ = ["AggregateStore"]
 
 AggregateT = TypeVar("AggregateT", bound=AggregateModel)
+
+_ATTEMPT_TABLES: dict[str, str] = {
+    "training-attempt": "run_attempts",
+    "evaluation-attempt": "evaluation_attempts",
+}
+"""Where each kind of attempt keeps its telemetry cursor. Both tables carry
+the same (generation, sequence) pair with the same meaning (005, 006)."""
 
 
 class AggregateStore:
@@ -113,6 +121,75 @@ class AggregateStore:
             AggregateNotFoundError: If it does not exist.
         """
         return self._require(self.get_attempt(attempt_id), "RunAttempt", attempt_id)
+
+    def get_evaluation_run(self, run_id: str) -> EvaluationRun | None:
+        """Return the evaluation run, or ``None`` if it does not exist."""
+        return self._get("evaluation_runs", run_id, EvaluationRun)
+
+    def get_evaluation_attempt(self, attempt_id: str) -> EvaluationAttempt | None:
+        """Return the evaluation attempt, or ``None`` if it does not exist."""
+        return self._get("evaluation_attempts", attempt_id, EvaluationAttempt)
+
+    def load_evaluation_run(self, run_id: str) -> EvaluationRun:
+        """Return the evaluation run.
+
+        Raises:
+            AggregateNotFoundError: If it does not exist.
+        """
+        return self._require(self.get_evaluation_run(run_id), "EvaluationRun", run_id)
+
+    def load_evaluation_attempt(self, attempt_id: str) -> EvaluationAttempt:
+        """Return the evaluation attempt.
+
+        Raises:
+            AggregateNotFoundError: If it does not exist.
+        """
+        return self._require(
+            self.get_evaluation_attempt(attempt_id), "EvaluationAttempt", attempt_id
+        )
+
+    def evaluation_runs_for_node(
+        self, node_id: str, *, cycle: int | None = None
+    ) -> tuple[EvaluationRun, ...]:
+        """Return the node's evaluation runs in creation order -- of one cycle, if given."""
+        if cycle is None:
+            rows = self._connection.execute(
+                "SELECT payload_json FROM evaluation_runs WHERE node_id = ? "
+                "ORDER BY created_at, id",
+                (node_id,),
+            ).fetchall()
+        else:
+            rows = self._connection.execute(
+                "SELECT payload_json FROM evaluation_runs "
+                "WHERE node_id = ? AND evaluation_cycle = ? ORDER BY created_at, id",
+                (node_id, cycle),
+            ).fetchall()
+        return tuple(EvaluationRun.model_validate_json(row["payload_json"]) for row in rows)
+
+    def evaluation_attempts_for_run(self, run_id: str) -> tuple[EvaluationAttempt, ...]:
+        """Return the evaluation run's attempts in attempt-number order."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM evaluation_attempts "
+            "WHERE evaluation_run_id = ? ORDER BY attempt_number",
+            (run_id,),
+        ).fetchall()
+        return tuple(EvaluationAttempt.model_validate_json(row["payload_json"]) for row in rows)
+
+    def evaluation_result_for_run(self, run_id: str) -> EvaluationResult | None:
+        """Return the result the evaluation run produced, if it produced one."""
+        row = self._connection.execute(
+            "SELECT payload_json FROM evaluation_results WHERE evaluation_run_id = ?",
+            (run_id,),
+        ).fetchone()
+        return None if row is None else EvaluationResult.model_validate_json(row["payload_json"])
+
+    def evaluation_results_for_node(self, node_id: str) -> tuple[EvaluationResult, ...]:
+        """Return every result recorded for the node, oldest first."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM evaluation_results WHERE node_id = ? ORDER BY created_at, id",
+            (node_id,),
+        ).fetchall()
+        return tuple(EvaluationResult.model_validate_json(row["payload_json"]) for row in rows)
 
     def nodes_for_experiment(self, experiment_id: str) -> tuple[ExperimentNode, ...]:
         """Return the experiment's nodes in creation order."""
@@ -215,6 +292,66 @@ class AggregateStore:
             updated_at=utc_now(),
         )
 
+    def _insert_evaluation_run(self, run: EvaluationRun) -> None:
+        self._insert(
+            "evaluation_runs",
+            run,
+            {
+                "experiment_id": str(run.experiment_id),
+                "node_id": str(run.node_id),
+                "evaluation_cycle": run.evaluation_cycle,
+                "subject_artifact_id": str(run.subject.id),
+                "subject_digest": run.subject.digest,
+                "evaluation_fingerprint": run.evaluation_fingerprint,
+                "seed": run.seed,
+                "replicate": run.replicate,
+                "status": run.status.value,
+            },
+        )
+
+    def _insert_evaluation_attempt(self, attempt: EvaluationAttempt) -> None:
+        self._insert(
+            "evaluation_attempts",
+            attempt,
+            {
+                "evaluation_run_id": str(attempt.evaluation_run_id),
+                "attempt_number": attempt.attempt_number,
+                "status": attempt.status.value,
+            },
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+
+    def _insert_evaluation_result(self, result: EvaluationResult) -> None:
+        """Write a result. There is no update: a result is a historical fact."""
+        self._require_transaction()
+        self._connection.execute(
+            "INSERT INTO evaluation_results (id, evaluation_run_id, node_id, "
+            "evaluation_fingerprint, subject_digest, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(result.id),
+                str(result.evaluation_run_id),
+                str(result.node_id),
+                result.evaluation_fingerprint,
+                result.subject.digest,
+                json.dumps(
+                    result.model_dump(mode="json", by_alias=True),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                _stamp(result.created_at),
+            ),
+        )
+
+    def _update_evaluation_run(self, run: EvaluationRun) -> None:
+        self._update("evaluation_runs", run, {"status": run.status.value})
+
+    def _update_evaluation_attempt(self, attempt: EvaluationAttempt) -> None:
+        self._update(
+            "evaluation_attempts", attempt, {"status": attempt.status.value}, updated_at=utc_now()
+        )
+
     def _update_experiment(self, experiment: Experiment) -> None:
         self._update("experiments", experiment, {"status": experiment.status.value})
 
@@ -238,34 +375,41 @@ class AggregateStore:
             },
         )
 
-    def telemetry_position(self, attempt_id: str) -> tuple[int, int]:
+    def telemetry_position(
+        self, attempt_id: str, *, kind: str = "training-attempt"
+    ) -> tuple[int, int]:
         """The attempt's durable telemetry cursor, as ``(generation, sequence)``.
 
         The position of the last telemetry event whose consequences are
         recorded (ADR-014 §4). ``(0, -1)`` for an attempt nothing has been
-        recorded from.
+        recorded from. *kind* is the attempt's operation target kind; training
+        and evaluation attempts keep the same cursor in their own tables.
 
         Raises:
             AggregateNotFoundError: If no such attempt exists.
         """
+        table = _ATTEMPT_TABLES[kind]
         row = self._connection.execute(
-            "SELECT telemetry_generation, telemetry_sequence FROM run_attempts WHERE id = ?",
+            f"SELECT telemetry_generation, telemetry_sequence FROM {table} WHERE id = ?",  # noqa: S608
             (attempt_id,),
         ).fetchone()
         if row is None:
-            raise AggregateNotFoundError("RunAttempt", attempt_id)
+            raise AggregateNotFoundError(kind, attempt_id)
         return int(row["telemetry_generation"]), int(row["telemetry_sequence"])
 
-    def _advance_telemetry(self, attempt_id: str, position: tuple[int, int]) -> None:
+    def _advance_telemetry(
+        self, attempt_id: str, position: tuple[int, int], *, kind: str = "training-attempt"
+    ) -> None:
         """Move the cursor forward to *position*, or leave it if already past.
 
         Only forward: a replayed or late event re-applied after a restart must
         not wind the cursor back over events whose effects are recorded.
         """
         self._require_transaction()
+        table = _ATTEMPT_TABLES[kind]
         generation, sequence = position
         self._connection.execute(
-            "UPDATE run_attempts SET telemetry_generation = ?, telemetry_sequence = ? "
+            f"UPDATE {table} SET telemetry_generation = ?, telemetry_sequence = ? "  # noqa: S608
             "WHERE id = ? AND (telemetry_generation < ? "
             "OR (telemetry_generation = ? AND telemetry_sequence < ?))",
             (generation, sequence, attempt_id, generation, generation, sequence),

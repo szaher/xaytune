@@ -54,9 +54,11 @@ class TestEvaluate:
         mock_load_model.assert_called_once()
 
     def test_evaluate_with_model_object(self):
+        # Two tokens: one next-token target. A one-token sequence has none,
+        # so its loss is not a mean over anything.
         results = evaluate(
             model=_mock_model(0.3),
-            dataset=[_batch(seq_len=1)],
+            dataset=[_batch(seq_len=2)],
             metrics=["loss"],
         )
 

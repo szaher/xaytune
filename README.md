@@ -192,8 +192,10 @@ pip install "xaytune[trl]==1.0.0a1"     # adds the TRL trainer
 ```
 
 `1.0.0a1` is a pre-release, so pip installs it only when asked: by version, as
-above, or with `pip install --pre xaytune`. A plain `pip install xaytune` still
-installs **0.6.0, the legacy trainer API** alone.
+above, or unpinned with `pip install --upgrade --pre xaytune` (`--upgrade`
+matters where `0.6.0` is already installed, which pip would otherwise keep). A
+plain `pip install xaytune` still installs **0.6.0, the legacy trainer API**
+alone.
 
 To install exactly what CI tests, or to work on Xaytune, install from a clone:
 

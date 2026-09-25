@@ -13,7 +13,7 @@ adopted by a second process, evaluated, and decided. Every step has a runnable s
 ## Install
 
 ```bash
-pip install "xaytune==1.0.0a1"           # or: pip install --pre xaytune
+pip install "xaytune==1.0.0a1"           # or, unpinned: pip install --upgrade --pre xaytune
 pip install "xaytune[trl]==1.0.0a1"      # the TRL trainer as well
 ```
 

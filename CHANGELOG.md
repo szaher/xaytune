@@ -4,7 +4,8 @@
 
 The first release of the experiment control plane, and a **pre-release**:
 `pip install xaytune` still installs `0.6.0`; install this one with
-`pip install "xaytune==1.0.0a1"` or `pip install --pre xaytune`. It closes one
+`pip install "xaytune==1.0.0a1"` (unpinned, and upgrading an existing
+install: `pip install --upgrade --pre xaytune`). It closes one
 loop end to end: declare an experiment and a candidate, train it, evaluate
 the trained model, and make a durable, deterministic decision, with every
 step on a record that a restarted controller resumes from.

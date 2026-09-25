@@ -133,13 +133,27 @@ The evaluation spec is orchestration, not identity: it never enters the
 candidate or its fingerprint, so changing how you evaluate never means
 retraining.
 
-**No evaluator is built in yet.** The next step wraps Xaytune's metrics and
-lm-eval behind the `Evaluator` contract. Until then, you pass your own to
-`EmbeddedControllerHost(..., evaluators={"name": factory})`.
+An evaluator declares how far its results can be trusted to repeat:
+`DETERMINISTIC`, `SEEDED` or `STOCHASTIC`. The host records that declaration,
+with the evaluator's version, when the experiment is submitted. It also asks
+the evaluator whether it can run the spec exactly as declared (`supports()`),
+so an impossible evaluation is refused then, not after training. If the
+evaluator refuses the trained model itself when preparing, the evaluation run
+fails with its reasons, and the cycle is reported stalled.
+
+The built-in evaluator is `native`: next-token loss, perplexity and token
+accuracy on a local held-out file pinned by its content digest. It is
+`SEEDED`. Floating-point results depend on the device and library versions,
+so it does not promise the same number everywhere. Other evaluators are
+registered with `EmbeddedControllerHost(..., evaluators={"name": factory})`.
+
+**No result stands in for a run.** Evaluating the same model the same way
+twice runs twice. Reusing an earlier result (ADR-015's reuse lookup) is a
+separate, later decision.
 
 ## Not yet
 
 These are designed in the specification and planned, but **not
-implemented**: deciding what an evaluated candidate becomes, policy and
-budgets, checkpoints and semantic recovery, planners and branching, daemon
+implemented**: deciding what an evaluated candidate becomes, an lm-eval
+evaluator, reusing earlier evaluation results, policy and budgets, checkpoints and semantic recovery, planners and branching, daemon
 hosting, and runtimes other than local.

@@ -14,8 +14,9 @@ uv sync --locked --extra trl     # for --compiler trl; or: pip install -e ".[trl
 | `02_train.py` | Submit, follow events, wait, and read the result; `--compiler native` or `trl` | A local model and dataset |
 | `03_cancel.py` | Cancel while training; the record says `CANCELLED` only once the workload has stopped | As above |
 | `04_restart_and_attach.py` | `start` submits and exits while training continues; `attach` adopts it from a new process | As above |
+| `05_train_and_evaluate.py` | Train, then evaluate the trained model with the built-in `native` evaluator; the candidate reaches `DECIDING` | As above, plus a held-out JSONL file |
 
-`sft_experiment.py` is the experiment the last three share.
+`sft_experiment.py` is the experiment 02 to 05 share.
 
 **The model** is a local Hugging Face directory (`save_pretrained` output).
 A hub name is refused, because without a pinned revision it names whatever
@@ -28,8 +29,8 @@ with a `text` field per line:
 
 Everything an experiment writes goes under `--workdir` (default
 `xaytune-workdir/`): the control-plane database `state.db`, the local runtime's
-registry and logs in `runtime/`, and trained models in `artifacts/`.
+registry and logs in `runtime/`, and trained models and evaluation reports in
+`artifacts/`.
 
-Evaluation is not shown yet. The lifecycle exists, but no evaluator is built
-in until the next release step. [Control-plane getting started](https://szaher.github.io/xaytune/control-plane/getting-started/)
+[Control-plane getting started](https://szaher.github.io/xaytune/control-plane/getting-started/)
 walks through all of this.

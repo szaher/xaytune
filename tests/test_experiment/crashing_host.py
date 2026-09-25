@@ -46,6 +46,7 @@ from typing import Any
 from tests.evaluation_fixtures import EVALUATORS
 from xaytune.core.refs import Actor
 from xaytune.core.state.status import EvaluationAttemptStatus
+from xaytune.evaluation.native import NativeEvaluator
 from xaytune.experiment import EmbeddedControllerHost, ExperimentSpec
 
 _EVALUATION_MODES = (
@@ -101,7 +102,7 @@ async def _main(state: Path, spec: ExperimentSpec, mode: str) -> None:
     host = EmbeddedControllerHost(
         state,
         runtimes={"local": lambda config: _DyingAt(_local_runtime(config), mode)},
-        evaluators=EVALUATORS,
+        evaluators={**EVALUATORS, "native": NativeEvaluator},
     )
     handle = await host.submit(spec)
     if mode in _EVALUATION_MODES:

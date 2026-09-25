@@ -34,7 +34,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Experiment lifecycle and durable controller state | Available |
 | Candidate identity and scientific lineage | Available |
 | Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
-| Evaluation orchestration | Lifecycle available; built-in evaluators are next |
+| Evaluation orchestration | Available: the built-in native evaluator; lm-eval planned |
 | Decisions and branching | Planned |
 | Resilience policy and semantic recovery | Planned |
 | Policy gates, budgets and agent-driven control | Planned |
@@ -46,7 +46,7 @@ topology, not GPU count**.
 
 ## Available today
 
-Status as of **2026-09-25**, after PR-013:
+Status as of **2026-09-25**, after PR-014:
 
 - **A durable record**: SQLite persistence, versioned migrations, atomic
   state + event + outbox transactions, a `RuntimeOperation` journal that
@@ -62,13 +62,15 @@ Status as of **2026-09-25**, after PR-013:
 - **An embedded controller**: `EmbeddedControllerHost` and `ExperimentHandle`
   (`submit`, `status`, `wait`, `cancel`, `events`, `attach`). A restarted
   process adopts running work and never submits it twice.
-- **The durable evaluation lifecycle**: evaluation runs, attempts, results and
-  cycles, recorded and restart-safe. No evaluator is built in yet; you register
-  your own `Evaluator` until the next PR.
+- **Durable evaluation, with a built-in evaluator**: evaluation runs, attempts,
+  results and cycles, recorded and restart-safe. The `native` evaluator
+  measures next-token loss, perplexity and token accuracy on a local held-out
+  file pinned by its content digest.
 
 ## Planned
 
-Production evaluators (next), then the DecisionEngine, policy and budgets,
+An lm-eval evaluator with pinned task and dataset versions, then the
+DecisionEngine, policy and budgets,
 checkpoints and semantic recovery, a rule-based planner and branching, daemon
 hosting, an LLM planner, and Ray / TorchFT / Training Hub integrations. None of
 these exist yet.
@@ -78,7 +80,7 @@ these exist yet.
 Solid green boxes are implemented; dashed boxes are planned. The runtime
 feedback path is separate from the path that submits work.
 
-![Xaytune target architecture: experiment control plane, trainer compilation, capability resolution, runtime backends, and infrastructure, with implementation status after PR-013.](assets/architecture-overview.svg)
+![Xaytune target architecture: experiment control plane, trainer compilation, capability resolution, runtime backends, and infrastructure, with implementation status after PR-014.](assets/architecture-overview.svg)
 
 The [architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/02-architecture.md)
 defines the contracts and dependency boundaries, and the
@@ -92,7 +94,7 @@ the order the remaining work lands in.
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | **Current**: lifecycle complete; evaluators and DecisionEngine next |
+| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; lm-eval and DecisionEngine next |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

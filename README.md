@@ -32,7 +32,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Experiment lifecycle and durable controller state | Available |
 | Candidate identity and scientific lineage | Available |
 | Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
-| Evaluation orchestration | Lifecycle available; built-in evaluators are next |
+| Evaluation orchestration | Available: the built-in native evaluator; lm-eval planned |
 | Decisions and branching | Planned |
 | Resilience policy and semantic recovery | Planned |
 | Policy gates, budgets and agent-driven control | Planned |
@@ -50,7 +50,7 @@ distributed tensor execution and for recovering individual workers.
 
 ## Available today
 
-Status as of **2026-09-25**, after PR-013.
+Status as of **2026-09-25**, after PR-014.
 
 - **A durable record.** SQLite persistence with versioned migrations and
   optimistic concurrency. Every state change commits in one transaction with
@@ -74,12 +74,14 @@ Status as of **2026-09-25**, after PR-013.
   `ExperimentHandle` with `status`, `wait`, `cancel` and `events`. A new
   process can `attach()` to the experiment and adopt its running workload,
   without orphaning it or submitting it twice.
-- **The durable evaluation lifecycle.** An `ExperimentSpec` can name an
-  `EvaluationSpec`. After training, the host runs the evaluation through the
-  same journal and telemetry, records the result, and moves the candidate to
-  `DECIDING`. Evaluation runs, attempts, results and cycles survive a restart.
-  **No evaluator is built in yet**: until the next PR you register your own
-  `Evaluator`.
+- **Durable evaluation, with a built-in evaluator.** An `ExperimentSpec` can
+  name an `EvaluationSpec`. After training, the host evaluates the trained
+  model through the same journal, runtime and telemetry, records the result,
+  and moves the candidate to `DECIDING`. Evaluation runs, attempts, results
+  and cycles survive a restart. The built-in `native` evaluator measures
+  next-token loss, perplexity and token accuracy on a local held-out file
+  pinned by its content digest. An evaluation it cannot run exactly as
+  declared is refused at submission, before anything trains.
 - **A reproducible environment.** `uv.lock` pins every dependency, and a CI job
   tests the locked environment. The TRL worker refuses any TRL or Transformers
   release it has not been classified against.
@@ -105,8 +107,8 @@ run next, if any. See
 In the order the [implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
 builds them:
 
-1. **Production evaluators**: Xaytune's own metrics and lm-eval, wrapped
-   behind the `Evaluator` contract (next).
+1. **An lm-eval evaluator**, with each task's definition and dataset pinned
+   to immutable versions when the experiment is submitted.
 2. **DecisionEngine**: turning evaluation results into a recorded decision.
 3. **Policy and budgets** over the Action substrate.
 4. **Checkpoints, semantic recovery and interventions.**
@@ -125,7 +127,7 @@ resolution and execution separate. Solid green boxes are implemented; dashed
 boxes are planned. The runtime feedback path is separate from the path that
 submits work.
 
-![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure, with implementation status after PR-013.](https://szaher.github.io/xaytune/assets/architecture-overview.svg)
+![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure, with implementation status after PR-014.](https://szaher.github.io/xaytune/assets/architecture-overview.svg)
 
 See the [architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/02-architecture.md)
 for protocol and dependency boundaries.
@@ -160,7 +162,7 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | **Current**: lifecycle complete; evaluators and DecisionEngine next |
+| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; lm-eval and DecisionEngine next |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

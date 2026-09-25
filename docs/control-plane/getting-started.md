@@ -1,8 +1,8 @@
 # Getting started with the control plane
 
 This page takes one fine-tuning candidate from a description to a trained
-model, through the control plane: compiled, submitted, observed, cancelled, and
-adopted by a second process. Every step has a runnable script in
+model, through the control plane: compiled, submitted, observed, cancelled,
+adopted by a second process, and evaluated. Every step has a runnable script in
 [`examples/control_plane/`](https://github.com/szaher/xaytune/tree/main/examples/control_plane).
 
 !!! note "Pre-release"
@@ -162,19 +162,55 @@ safely raises `ReconciliationEscalatedError` rather than guessing.
 Run it: `python examples/control_plane/04_restart_and_attach.py start ...`,
 then `... attach <experiment-id>`.
 
-## Evaluating the trained model
+## 5. Evaluate the trained model
 
 `ExperimentSpec.evaluation` takes an `EvaluationSpec` naming one evaluator.
 When it is set, the host evaluates the trained model after training, through
-the same journal and telemetry, records the result, and moves the candidate to
-`DECIDING` with `next_stage="decision"`.
+the same journal, runtime and telemetry, records the result, and moves the
+candidate to `DECIDING` with `next_stage="decision"`.
 
-**No evaluator is built in yet.** Evaluators that wrap Xaytune's metrics and
-lm-eval are the next step. Until then, evaluation needs an `Evaluator` you
-register with `EmbeddedControllerHost(..., evaluators={...})`. See
-[concepts](concepts.md#evaluation).
+The built-in `native` evaluator measures next-token loss, perplexity and token
+accuracy on a local JSONL file of held-out text:
 
-## What a candidate may not do yet
+```python
+from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec
+from xaytune.evaluation.native import local_dataset
+
+evaluation = EvaluationSpec(
+    evaluator=EvaluatorSpec(
+        name="native",
+        config={
+            "format": "text",                 # each record's "text" field
+            "max_seq_length": 512,            # truncation, in tokens
+            "batch_size": 8,
+            "metrics": ["loss", "perplexity", "token_accuracy"],
+            "precision": "fp32",
+        },
+    ),
+    dataset=local_dataset("/abs/data/held-out.jsonl"),   # pinned by content digest
+)
+result = await (await host.submit(spec.model_copy(update={"evaluation": evaluation}))).wait()
+print(result.next_stage)                                 # "decision"
+for metric in result.nodes[0].evaluations[0].result.metrics:
+    print(metric.name, metric.value, metric.seed)
+```
+
+Everything that changes a number is declared, and nothing is defaulted.
+`local_dataset()` records the file's digest when you build the spec; the
+worker checks the file still holds those bytes, and the evaluation fails if
+it does not. An evaluation the evaluator cannot run exactly as declared (an
+unpinned dataset, a format it does not read, a precision it does not use) is
+refused by `submit()` with every reason, before anything trains.
+
+The metrics are next-token and token-weighted: the logits at position *i* are
+scored against the token at *i + 1*, averaged over tokens rather than batches.
+The evaluator is **seeded**, not deterministic: the run's seed is applied and
+recorded, and the report beside the result names the device and library
+versions it ran with.
+
+Run it: `python examples/control_plane/05_train_and_evaluate.py --model ... --dataset ... --held-out ...`.
+
+## What is not supported yet
 
 Both compilers run **full-parameter SFT on one worker** from local files.
 They refuse, with reasons: adapters (LoRA/QLoRA), checkpoint intent,
@@ -182,3 +218,7 @@ algorithm variants, rewards, hub model names, and any training-relevant
 value left undeclared. The TRL compiler also refuses data formats other than
 `text`, and packing. The legacy trainer API still does all of these, outside
 the control plane.
+
+The `native` evaluator, likewise, reads only local plain text and evaluates in
+`fp32`. It refuses slices, a dataset revision or split, and dataset
+fingerprints it cannot verify.

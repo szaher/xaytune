@@ -12,6 +12,7 @@ uses the experiment control plane on `main`. See
 | [02_train.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/02_train.py) | Submit, follow events, wait, read the result (`--compiler native` or `trl`) | A local model and JSONL dataset |
 | [03_cancel.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/03_cancel.py) | Cancel a running experiment | As above |
 | [04_restart_and_attach.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/04_restart_and_attach.py) | Submit, end the process, adopt the running workload from another | As above |
+| [05_train_and_evaluate.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/05_train_and_evaluate.py) | Train, evaluate the trained model with the built-in `native` evaluator, reach `DECIDING` | As above, plus a held-out JSONL file |
 
 ## Legacy trainer API
 

@@ -115,7 +115,7 @@ from xaytune.core.telemetry import (
     TrainingStartedPayload,
     WorkerReadyPayload,
 )
-from xaytune.evaluation import EvaluationContext, Evaluator
+from xaytune.evaluation import EvaluationContext, Evaluator, UnsupportedEvaluationError
 from xaytune.experiment.handle import (
     EvaluationOutcome,
     ExperimentHandle,
@@ -231,8 +231,9 @@ def _default_compilers() -> dict[str, Callable[[], TrainerCompiler]]:
 
 
 def _default_evaluators() -> dict[str, Callable[[], Evaluator]]:
-    """None yet: the evaluators wrapping Xaytune's metrics and lm-eval are PR-014's."""
-    return {}
+    from xaytune.evaluation.native import NativeEvaluator
+
+    return {"native": NativeEvaluator}
 
 
 def _local_runtime(config: Mapping[str, Any]) -> RuntimeBackend:
@@ -261,7 +262,8 @@ class EmbeddedControllerHost:
         runtimes: Runtime factories by kind, each taking the spec's config.
             Defaults to ``local``.
         evaluators: Evaluator factories by name, the registry a recorded
-            ``EvaluatorSpec`` resolves through. None are built in yet.
+            ``EvaluatorSpec`` resolves through. Defaults to the built-in
+            ``native``.
     """
 
     def __init__(
@@ -305,8 +307,11 @@ class EmbeddedControllerHost:
             UnknownImplementationError: If the spec names a compiler, runtime
                 or evaluator this host cannot resolve.
             UnsupportedCandidateError: If the compiler cannot run the candidate
-                exactly as declared. Nothing is recorded in either case: a spec
-                that cannot run is refused at submission, not after.
+                exactly as declared.
+            UnsupportedEvaluationError: If the evaluator cannot run the
+                evaluation exactly as declared. Nothing is recorded in any of
+                these cases: a spec that cannot run is refused at submission,
+                not after.
         """
         compiler = self._compiler(spec.compiler.name)
         support = compiler.supports(spec.candidate)
@@ -952,7 +957,23 @@ class EmbeddedControllerHost:
             evaluation_run_id=run.id,
             attempt_number=len(aggregates.evaluation_attempts_for_run(str(run.id))) + 1,
         )
-        plan = self._evaluation_plan(experiment, run, attempt.id, evaluator)
+        try:
+            plan = self._evaluation_plan(experiment, run, attempt.id, evaluator)
+        except UnsupportedEvaluationError as refusal:
+            # Definitive, and before any effect: the spec passed at submission,
+            # so what is refused now is the subject or the run. Nothing was
+            # issued, so there is no attempt to record -- the run fails with
+            # the evaluator's reasons, and the node's cycle is reconciled,
+            # which reports it stalled rather than leaving it waiting forever.
+            self.repository.transition_evaluation_run(
+                run.id,
+                expected_revision=run.revision,
+                new_status=EvaluationRunStatus.FAILED,
+                actor=_ACTOR,
+                reason=f"evaluator refused: {'; '.join(refusal.reasons)}",
+            )
+            self._reconcile_node(run.node_id)
+            return
         attempt, operation = self.repository.create_evaluation_attempt_with_submit_intent(
             attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
         )
@@ -1299,8 +1320,17 @@ class EmbeddedControllerHost:
         The version and determinism are the evaluator's own declarations, read
         now, so the record says which evaluator measured -- and a restarted
         host rebuilding the request can check it has the same one.
+
+        Raises:
+            UnsupportedEvaluationError: If the evaluator cannot run the spec as
+                declared. Asked here, at submission, so an evaluation that
+                would be refused is refused before hours of training rather
+                than after them.
         """
         evaluator = self._evaluator(spec.evaluator.name)
+        support = evaluator.supports(spec)
+        if not support:
+            raise UnsupportedEvaluationError(evaluator.descriptor.name, support.reasons)
         bound = EvaluatorSpec(
             name=spec.evaluator.name,
             version=evaluator.descriptor.plugin_version,

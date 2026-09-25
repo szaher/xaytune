@@ -107,15 +107,18 @@ run next, if any. See
 In the order the [implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
 builds them:
 
-1. **An lm-eval evaluator**, with each task's definition and dataset pinned
-   to immutable versions when the experiment is submitted.
-2. **DecisionEngine**: turning evaluation results into a recorded decision.
-3. **Policy and budgets** over the Action substrate.
-4. **Checkpoints, semantic recovery and interventions.**
-5. **A rule-based planner and experiment branching.**
-6. **Daemon hosting** and whole-controller restart.
-7. **An LLM planner** proposing candidates under policy.
-8. **Ray, TorchFT and Training Hub** integrations.
+1. **DecisionEngine** (next): turning evaluation results into a recorded
+   decision.
+2. **Policy and budgets** over the Action substrate.
+3. **Checkpoints, semantic recovery and interventions.**
+4. **A rule-based planner and experiment branching.**
+5. **Daemon hosting** and whole-controller restart.
+6. **An LLM planner** proposing candidates under policy.
+7. **Ray, TorchFT and Training Hub** integrations.
+
+Alongside them, an **lm-eval evaluator** is a planned integration, with each
+task's definition and dataset pinned to immutable versions when the
+experiment is submitted.
 
 None of these exist yet, and nothing in this repository should be read as
 claiming they do.
@@ -162,7 +165,7 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; lm-eval and DecisionEngine next |
+| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; DecisionEngine next |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

@@ -614,7 +614,9 @@ into PR-014b:
 
 ### PR-014b — lm-eval evaluator
 
-Split from PR-014 because it needs a resolution step the contract does not
+After PR-015, or alongside it: not a prerequisite for the DecisionEngine, and
+not a `1.0.0a1` blocker unless that release is decided to need benchmark
+evaluation. Split from PR-014 because it needs a resolution step the contract does not
 have yet. An lm-eval task names a mutable definition and a hub dataset. Pinning
 them (task name, version and config digest; lm-eval version, `==0.4.13`
 exactly; dataset path, name and immutable revision SHA; few-shot count;

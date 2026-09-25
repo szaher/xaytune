@@ -69,11 +69,11 @@ Status as of **2026-09-25**, after PR-014:
 
 ## Planned
 
-An lm-eval evaluator with pinned task and dataset versions, then the
-DecisionEngine, policy and budgets,
-checkpoints and semantic recovery, a rule-based planner and branching, daemon
-hosting, an LLM planner, and Ray / TorchFT / Training Hub integrations. None of
-these exist yet.
+The DecisionEngine (next), then policy and budgets, checkpoints and semantic
+recovery, a rule-based planner and branching, daemon hosting, an LLM planner,
+and Ray / TorchFT / Training Hub integrations. An lm-eval evaluator, with
+pinned task and dataset versions, is a planned integration alongside them.
+None of these exist yet.
 
 ## Architecture
 
@@ -94,7 +94,7 @@ the order the remaining work lands in.
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; lm-eval and DecisionEngine next |
+| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; DecisionEngine next |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

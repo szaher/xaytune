@@ -6,8 +6,8 @@
         --held-out /abs/path/to/held-out.jsonl \\
         --target 2.5            # the held-out loss that counts as good enough
 
-The control plane is not on PyPI yet, so install from a clone of main
-(``uv sync --locked``, or ``pip install -e .``).
+Install the control plane first: ``pip install "xaytune==1.0.0a1"``, or from
+a clone with ``uv sync --locked``.
 
 After training succeeds, the host evaluates the trained model with the
 built-in ``native`` evaluator: next-token loss, perplexity and token accuracy

@@ -3,7 +3,7 @@
 ## Control plane
 
 [`examples/control_plane/`](https://github.com/szaher/xaytune/tree/main/examples/control_plane)
-uses the experiment control plane on `main`. See
+uses the experiment control plane, first released in `1.0.0a1`. See
 [Control-plane getting started](control-plane/getting-started.md) for a walkthrough.
 
 | Script | What it shows | Needs |
@@ -17,8 +17,8 @@ uses the experiment control plane on `main`. See
 ## Legacy trainer API
 
 The notebooks and configs below use the **legacy trainer API**, the
-`finetune()` / `align()` / CLI library in the `0.6.0` package. They remain
-supported.
+`finetune()` / `align()` / CLI library in the `0.6.0` package, still included
+in `1.0.0a1`. They remain supported.
 
 ### Jupyter Notebooks
 

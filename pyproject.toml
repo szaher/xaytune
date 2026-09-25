@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xaytune"
-version = "0.6.0"
+version = "1.0.0a1"
 description = "Agent-native experiment control plane for model post-training and adaptation"
 readme = "README.md"
 license = "Apache-2.0"

@@ -90,8 +90,8 @@ def test_the_current_version_releases_under_its_own_tag() -> None:
 
 @pytest.mark.parametrize(
     "tag",
-    ["v0.1.0", "0.6.0", "v0.6", "v1.0.0a1", "release-0.6.0", ""],
-    ids=["old-tag", "no-v", "short", "future", "prefix", "empty"],
+    ["v0.1.0", "v0.6.0", "1.0.0a1", "v1.0", "v1.0.0-alpha.1", "v1.0.0a2", "release-1.0.0a1", ""],
+    ids=["old-tag", "previous", "no-v", "short", "unnormalized", "future", "prefix", "empty"],
 )
 def test_any_other_tag_is_refused(tag: str) -> None:
     if tag == f"v{gate.project_version()}":

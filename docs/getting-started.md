@@ -2,8 +2,9 @@
 
 !!! note "This page covers the legacy trainer API"
     `finetune()`, `align()`, the `xaytune` CLI and pipelines: the library the
-    `0.6.0` package on PyPI contains. For the experiment control plane on
-    `main` (compile, submit, observe, cancel, attach), see
+    `0.6.0` package on PyPI contains, still included in `1.0.0a1`. For the
+    experiment control plane (compile, submit, observe, cancel, attach,
+    evaluate, decide), see
     [Control-plane getting started](control-plane/getting-started.md). The
     reproducible install and the supported TRL releases below apply to both.
 

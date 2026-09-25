@@ -12,4 +12,4 @@ other, so the release gate (``scripts/check_release_version.py``) refuses to
 publish when they disagree, and ``tests/test_release_version.py`` fails first.
 """
 
-__version__ = "0.6.0"
+__version__ = "1.0.0a1"

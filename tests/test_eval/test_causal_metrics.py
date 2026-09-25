@@ -172,12 +172,22 @@ def test_the_loss_is_the_mean_over_every_target(model: Any) -> None:
 
 
 def test_a_batch_with_no_target_contributes_nothing(model: Any) -> None:
-    """A one-token sequence has no next token: its loss is not a mean over anything."""
-    alone = evaluate(model=model, dataset=[_padded(SEQUENCES)], metrics=["loss"])
-    with_empty = evaluate(
-        model=model, dataset=[_padded(SEQUENCES), _padded([[5]])], metrics=["loss"]
-    )
-    assert with_empty["loss"] == pytest.approx(alone["loss"], rel=1e-6)
+    """A one-token sequence has no next token: its loss -- NaN from the model -- is dropped.
+
+    Neither a loss nor a weight is recorded for it, in either evaluation path.
+    """
+    with torch.no_grad():
+        unscorable = model(**_padded([[5]]), return_dict=True).loss
+    assert unscorable is None or not math.isfinite(unscorable.item()), "the premise"
+
+    for measure in (
+        lambda b: evaluate(model=model, dataset=b, metrics=["loss", "perplexity"]),
+        lambda b: _callback_metrics(model, b, ["loss", "perplexity"]),
+    ):
+        alone = measure([_padded(SEQUENCES)])
+        with_empty = measure([_padded(SEQUENCES), _padded([[5]])])
+        assert math.isfinite(with_empty["loss"]) and math.isfinite(with_empty["perplexity"])
+        assert with_empty["loss"] == pytest.approx(alone["loss"], rel=1e-6)
 
 
 # ---- the metric functions ---------------------------------------------------------
@@ -188,11 +198,32 @@ def test_losses_are_weighted_by_their_target_counts() -> None:
     assert compute_perplexity([1.0, 4.0], weights=[3, 1]) == pytest.approx(math.exp(7 / 4))
 
 
-def test_without_counts_the_losses_are_averaged_plainly() -> None:
+def test_without_weights_the_losses_are_averaged_exactly_as_before() -> None:
     """For losses that arrive with no labels to count targets from."""
-    assert compute_loss([1.0, 4.0]) == pytest.approx(2.5)
+    assert compute_loss([1.0, 4.0]) == 2.5
+    assert compute_perplexity([1.0, 4.0]) == math.exp(2.5)
+    assert compute_loss([]) == 0.0
+    assert compute_perplexity([]) == 0.0
 
 
-def test_mismatched_weights_are_refused() -> None:
-    with pytest.raises(ValueError, match="weights"):
-        compute_loss([1.0, 4.0], weights=[3])
+@pytest.mark.parametrize(
+    ("losses", "weights"),
+    [([1.0, 4.0], [3]), ([1.0], [3, 1]), ([], [3])],
+    ids=["fewer-weights", "more-weights", "weights-without-losses"],
+)
+def test_weights_must_pair_one_to_one_with_losses(losses: list, weights: list) -> None:
+    """Never truncated to fit: a mismatch is a caller's bug."""
+    for metric in (compute_loss, compute_perplexity):
+        with pytest.raises(ValueError, match="weights"):
+            metric(losses, weights=weights)
+
+
+def test_a_negative_weight_is_refused() -> None:
+    for metric in (compute_loss, compute_perplexity):
+        with pytest.raises(ValueError, match="negative"):
+            metric([1.0, 4.0], weights=[3, -1])
+
+
+def test_weights_that_count_no_target_report_zero_as_no_losses_always_have() -> None:
+    for metric in (compute_loss, compute_perplexity):
+        assert metric([1.0, 4.0], weights=[0, 0]) == 0.0

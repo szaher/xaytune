@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import torch
+
 from xaytune.trainer.callbacks import CallbackManager, TrainState
 from xaytune.trainer.eval_callback import register_eval_callbacks
 
@@ -10,13 +12,20 @@ def _make_eval_dataloader(n=3):
     mock_output = MagicMock()
     mock_output.loss = MagicMock()
     mock_output.loss.item.return_value = 0.5
+    mock_output.logits = torch.zeros(1, 3, 8)
 
     model = MagicMock()
     model.training = True
     model.return_value = mock_output
 
-    batches = [{"input_ids": MagicMock(), "labels": MagicMock()} for _ in range(n)]
+    # Real labels: a loss is weighted by its batch's next-token targets, and
+    # scoring needs something to count. Two targets in each batch.
+    batches = [{"input_ids": _ids(), "labels": _ids()} for _ in range(n)]
     return model, batches
+
+
+def _ids() -> torch.Tensor:
+    return torch.tensor([[1, 2, 3]])
 
 
 class TestPeriodicEval:
@@ -219,6 +228,7 @@ class TestPeriodicEval:
             loss_mock = MagicMock()
             loss_mock.item.return_value = losses[call_idx["i"]]
             out.loss = loss_mock
+            out.logits = torch.zeros(1, 3, 8)
             call_idx["i"] += 1
             return out
 
@@ -230,11 +240,9 @@ class TestPeriodicEval:
         # Override __call__ to use side_effect
         model.__call__ = _side_effect
 
-        dl = [
-            {"input_ids": MagicMock(), "labels": MagicMock()},
-            {"input_ids": MagicMock(), "labels": MagicMock()},
-            {"input_ids": MagicMock(), "labels": MagicMock()},
-        ]
+        # Equal target counts per batch, so the token-weighted mean is the
+        # plain mean of the three losses.
+        dl = [{"input_ids": _ids(), "labels": _ids()} for _ in range(3)]
 
         register_eval_callbacks(
             callback_manager=cb,

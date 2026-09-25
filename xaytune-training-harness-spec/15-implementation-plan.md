@@ -593,10 +593,11 @@ into PR-014b:
   so they are in the `EvaluationFingerprint`. The tokenizer is the model's own,
   so it is part of the subject. Slices, dataset revisions and splits, and
   dataset fingerprints the worker cannot verify are refused.
-- **It reuses the trainer's text pipeline, not `xaytune.eval.evaluate()`.** The
-  existing function scores the logits at *i* against the token at *i*, not at
-  *i + 1*, and averages losses per batch. Its numbers would describe neither
-  next-token prediction nor the data independent of batching.
+- **It reuses the trainer's text pipeline, not `xaytune.eval.evaluate()`.** At
+  the time, that function scored the logits at *i* against the token at *i*,
+  not at *i + 1*, and averaged losses per batch. Its numbers described neither
+  next-token prediction nor the data independent of batching. It was
+  corrected separately (issue #36).
 - **`SEEDED`, never `DETERMINISTIC`.** Floating-point results depend on the
   device and library versions. The run's seed is applied and recorded on
   every metric, and the report names the environment.

@@ -15,9 +15,8 @@ measurement of something else.
 
 The text pipeline is the native trainer's own -- ``load_dataset`` with the
 ``text`` format, then ``tokenize_dataset`` and ``collate_tokenized`` -- so an
-evaluation reads a file the way training reads one. The metrics are not
-:func:`xaytune.eval.evaluate`'s; see :mod:`xaytune.evaluation.native` for
-what they mean and why.
+evaluation reads a file the way training reads one. The metrics are defined
+in :mod:`xaytune.evaluation.native`.
 """
 
 from __future__ import annotations

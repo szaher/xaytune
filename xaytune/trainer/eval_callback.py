@@ -48,7 +48,17 @@ def register_eval_callbacks(
         if hasattr(model, "eval"):
             model.eval()
 
+        # Lazily, for the reason _metric_registry() is.
+        from xaytune.eval.causal import next_token_pairs, next_token_targets
+
+        # Loss and perplexity come from the model's own loss; only other metrics
+        # need the predictions, and an argmax over the vocabulary for metrics
+        # nobody asked for is wasted work.
+        scores_tokens = any(name not in ("loss", "perplexity") for name in metrics)
         losses: list[float] = []
+        # Each loss's target count, so the mean does not depend on batching
+        # (issue #36); None once a loss arrives with no labels to count.
+        weights: list[int] | None = []
         all_preds: list[Any] = []
         all_refs: list[Any] = []
         try:
@@ -65,23 +75,29 @@ def register_eval_callbacks(
                     outputs = model(**batch)
                 else:
                     outputs = model(batch)
+                labels = batch.get("labels") if isinstance(batch, dict) else None
+                if labels is not None and not isinstance(labels, torch.Tensor):
+                    labels = torch.as_tensor(labels)
                 if hasattr(outputs, "loss") and outputs.loss is not None:
+                    targets = next_token_targets(labels) if labels is not None else None
+                    if targets == 0:
+                        continue  # a mean over no targets is not a loss
                     raw = outputs.loss
-                    loss_val = raw.item() if hasattr(raw, "item") else float(raw)
-                    losses.append(loss_val)
-                # Collect predictions and references for non-loss metrics
-                if hasattr(outputs, "logits") and isinstance(batch, dict) and "labels" in batch:
-                    logits = outputs.logits
-                    labels = batch["labels"]
-                    preds = logits.argmax(dim=-1)
-                    mask = labels != -100
-                    all_preds.extend(preds[mask].cpu().tolist())
-                    all_refs.extend(labels[mask].cpu().tolist())
+                    losses.append(raw.item() if hasattr(raw, "item") else float(raw))
+                    if weights is not None and targets is not None:
+                        weights.append(targets)
+                    else:
+                        weights = None
+                # Next-token pairs: the logits at i against the label at i + 1.
+                if scores_tokens and hasattr(outputs, "logits") and labels is not None:
+                    preds, refs = next_token_pairs(outputs.logits, labels)
+                    all_preds.extend(preds)
+                    all_refs.extend(refs)
 
         for metric_name in metrics:
             compute_fn = _metric_registry().get(metric_name)
             if metric_name in ("loss", "perplexity"):
-                state.metrics[f"eval_{metric_name}"] = compute_fn(losses)
+                state.metrics[f"eval_{metric_name}"] = compute_fn(losses, weights=weights)
             else:
                 state.metrics[f"eval_{metric_name}"] = compute_fn(all_preds, all_refs)
 

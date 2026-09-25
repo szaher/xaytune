@@ -31,8 +31,9 @@ padding can still move the last digits.
 - ``token_accuracy``: the fraction of predicted tokens whose argmax is the
   next token.
 
-This is deliberately not :func:`xaytune.eval.evaluate`, which scores the
-logits at *i* against the token at *i* and averages losses per batch.
+The same definitions :func:`xaytune.eval.evaluate` uses since issue #36,
+computed here in the worker so that an evaluation depends on nothing but
+its own schema.
 """
 
 from __future__ import annotations

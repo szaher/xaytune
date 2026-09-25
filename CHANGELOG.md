@@ -24,6 +24,12 @@ planned as `1.0.0a1`, once it can train, evaluate and decide.
 - **`LICENSE`**: the Apache License 2.0 text, verbatim, which the package already declared and did not ship.
 - **A wheel smoke test** in CI and before every upload. The built wheel is installed into a fresh virtualenv, then must import without torch, transformers or TRL, migrate a new store, compile a candidate, round-trip the plan, and import the control-plane examples (`scripts/wheel_smoke.py`).
 
+### Fixed — evaluation metrics (correctness)
+
+- **`token_accuracy` scored the wrong token** in `xaytune.eval.evaluate()` and in the in-training evaluation (`eval.every_n_steps`). It compared the logits at position *i* with the label at *i*. In a causal LM those logits predict the token at *i + 1*, so a model that merely echoed its input scored perfectly: an untrained test model reported 1.0 where its next-token accuracy was 0.0. It now compares each prediction with the next label, and labels of `-100` count in neither the numerator nor the denominator (issue #36).
+- **`loss` and `perplexity` depended on batching.** They averaged per-batch losses, so a batch with 3 next-token targets weighed as much as one with 300. Each batch's loss is now weighted by its target count, which gives the mean over every target in the dataset: the same examples batched differently give the same answer. `perplexity` is `exp` of that loss. A batch with no next-token target contributes nothing.
+- **Reported values change.** This is a correctness fix, not an API change: the functions, their arguments and the metric names are unchanged, and the earlier values were wrong. `compute_loss` and `compute_perplexity` take an optional `weights`, one non-negative target count per loss: a mismatched or negative weight raises `ValueError`, and weights summing to zero report `0.0`, as no losses always have. Without `weights` they average plainly, exactly as before.
+
 ### Changed — positioning and dependencies
 
 - The package description is now "Agent-native experiment control plane for model post-training and adaptation". The README and docs separate what is available today from what is planned, and label the notebooks as the legacy trainer API.

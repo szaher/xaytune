@@ -19,6 +19,7 @@ import os
 from pydantic import Field, field_validator
 
 from xaytune.core.domain.candidate import CandidateSpec
+from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.objective import Objective
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.immutable import FrozenDomainModel
@@ -38,6 +39,13 @@ class ExperimentSpec(FrozenDomainModel):
         runtime: Which backend executes it, and its configuration.
         artifact_root: Where each run's model is published, as an absolute
             local directory; a run writes to ``<artifact_root>/<run_id>``.
+        evaluation: How the trained model is evaluated, if it is. ``None``
+            stops after training, with evaluation as the next stage nothing
+            has taken on. Set, the host evaluates the model once training
+            succeeds, on the experiment's runtime, and the node moves on to
+            ``DECIDING`` with the result. It is orchestration, not identity:
+            it never enters the candidate or its fingerprint, so changing it
+            never means retraining.
     """
 
     name: str = Field(min_length=1)
@@ -48,6 +56,7 @@ class ExperimentSpec(FrozenDomainModel):
     runtime: RuntimeSpec
     artifact_root: str
     hypothesis: str | None = None
+    evaluation: EvaluationSpec | None = None
 
     @field_validator("compiler", "runtime")
     @classmethod
@@ -58,6 +67,25 @@ class ExperimentSpec(FrozenDomainModel):
         if spec.version is not None:
             raise ValueError(
                 "version is resolved by the host at submission and recorded; do not supply it"
+            )
+        return spec
+
+    @field_validator("evaluation")
+    @classmethod
+    def _one_unbound_evaluator(cls, spec: EvaluationSpec | None) -> EvaluationSpec | None:
+        if spec is None:
+            return spec
+        if len(spec.evaluators) != 1:
+            raise ValueError(
+                f"one evaluator per evaluation in this phase, not {len(spec.evaluators)}: "
+                f"an evaluation run executes one evaluator's workload"
+            )
+        (evaluator,) = spec.evaluators
+        # Bound by the host, for the reason compiler and runtime versions are.
+        if evaluator.version is not None or evaluator.determinism is not None:
+            raise ValueError(
+                "an evaluator's version and determinism are resolved by the host at "
+                "submission and recorded; do not supply them"
             )
         return spec
 

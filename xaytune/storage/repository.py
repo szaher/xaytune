@@ -48,6 +48,7 @@ from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.immutable import AggregateModel
+from xaytune.core.telemetry import EvaluationCompletedPayload
 from xaytune.storage.errors import AggregateNotFoundError
 from xaytune.storage.payloads import decode_node_payload, decode_payload
 
@@ -191,6 +192,53 @@ class AggregateStore:
         ).fetchall()
         return tuple(EvaluationResult.model_validate_json(row["payload_json"]) for row in rows)
 
+    def pending_completion(
+        self, attempt_id: str
+    ) -> tuple[EvaluationCompletedPayload, tuple[int, int]] | None:
+        """The completion an evaluation attempt has received and not yet settled, if any.
+
+        With the ``(generation, sequence)`` it arrived at. Kept on the attempt
+        rather than in the stream, so it survives the stream (see migration
+        006).
+
+        Raises:
+            AggregateNotFoundError: If no such attempt exists.
+        """
+        row = self._connection.execute(
+            "SELECT pending_completion_json FROM evaluation_attempts WHERE id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if row is None:
+            raise AggregateNotFoundError("EvaluationAttempt", attempt_id)
+        if row["pending_completion_json"] is None:
+            return None
+        held = json.loads(row["pending_completion_json"])
+        completion = EvaluationCompletedPayload.model_validate(held["completion"])
+        generation, sequence = held["position"]
+        return completion, (int(generation), int(sequence))
+
+    def _hold_completion(
+        self,
+        attempt_id: str,
+        completion: EvaluationCompletedPayload,
+        position: tuple[int, int],
+    ) -> None:
+        self._require_transaction()
+        self._connection.execute(
+            "UPDATE evaluation_attempts SET pending_completion_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "completion": completion.model_dump(mode="json"),
+                        "position": list(position),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                attempt_id,
+            ),
+        )
+
     def nodes_for_experiment(self, experiment_id: str) -> tuple[ExperimentNode, ...]:
         """Return the experiment's nodes in creation order."""
         rows = self._connection.execute(
@@ -327,13 +375,14 @@ class AggregateStore:
         self._require_transaction()
         self._connection.execute(
             "INSERT INTO evaluation_results (id, evaluation_run_id, node_id, "
-            "evaluation_fingerprint, subject_digest, payload_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "evaluation_fingerprint, subject_artifact_id, subject_digest, payload_json, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(result.id),
                 str(result.evaluation_run_id),
                 str(result.node_id),
                 result.evaluation_fingerprint,
+                str(result.subject.id),
                 result.subject.digest,
                 json.dumps(
                     result.model_dump(mode="json", by_alias=True),

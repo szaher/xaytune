@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from xaytune.core.domain.evaluation import MetricResult
-from xaytune.core.ids import ArtifactId
+from xaytune.core.ids import ArtifactId, EvaluationId
 from xaytune.core.refs import ArtifactRef
 from xaytune.core.telemetry import (
     EvaluationCompletedPayload,
@@ -61,16 +61,30 @@ def main() -> int:
                     name="accuracy",
                     value=value,
                     sample_count=4,
-                    evaluator_name="scripted",
+                    evaluator_name=config.get("evaluator_name", "scripted"),
                     evaluator_version=config["evaluator_version"],
                     seed=config["seed"],
                 ),
             ),
             result_ref=ArtifactRef(
-                id=ArtifactId.generate(), kind="evaluation_report", uri=str(report)
+                id=ArtifactId.generate(),
+                kind="evaluation_report",
+                uri=str(report),
+                # A worker cannot know the result's id: naming one is a
+                # contract violation the controller must refuse.
+                producer_evaluation_id=(
+                    EvaluationId.generate() if config.get("report_names_producer") else None
+                ),
             ),
         )
     )
+    hold_after = config.get("hold_after_completion")
+    if hold_after is not None:
+        deadline = time.monotonic() + _HOLD_LIMIT_SECONDS
+        while not Path(hold_after).exists():
+            if time.monotonic() > deadline:
+                return 3
+            time.sleep(0.05)
     # Reported a result, then failed on the way out: the exit is the outcome.
     return 1 if mode == "complete-then-fail" else 0
 

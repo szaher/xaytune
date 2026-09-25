@@ -50,7 +50,12 @@ from xaytune.core.domain.action import (
     ActionStatus,
     ActionTarget,
 )
-from xaytune.core.domain.evaluation import EvaluationAttempt, EvaluationResult, EvaluationRun
+from xaytune.core.domain.evaluation import (
+    EvaluationAttempt,
+    EvaluationResult,
+    EvaluationRun,
+    result_provenance_problems,
+)
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.operation import (
@@ -81,6 +86,7 @@ from xaytune.core.state.status import (
     RunAttemptStatus,
     RunStatus,
 )
+from xaytune.core.telemetry import EvaluationCompletedPayload
 from xaytune.storage.actions import ActionStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
@@ -311,29 +317,15 @@ def _require_result_of_run(result: EvaluationResult, run: EvaluationRun) -> None
     """Refuse a result whose provenance disagrees with the run it names.
 
     Raises:
-        ProvenanceError: Naming the first disagreement.
+        ProvenanceError: Naming every disagreement
+            (:func:`~xaytune.core.domain.evaluation.result_provenance_problems`).
     """
-    if result.evaluation_run_id != run.id:
+    problems = result_provenance_problems(result, run)
+    if problems:
         raise ProvenanceError(
-            f"result {result.id} names run {result.evaluation_run_id}, not {run.id}"
+            f"result {result.id} disagrees with run {run.id}, so it would describe an "
+            f"evaluation the run did not perform: " + "; ".join(problems)
         )
-    for field, claimed, actual in (
-        ("node", result.node_id, run.node_id),
-        ("evaluation fingerprint", result.evaluation_fingerprint, run.evaluation_fingerprint),
-        ("subject", result.subject, run.subject),
-    ):
-        if claimed != actual:
-            raise ProvenanceError(
-                f"result {result.id} claims {field} {claimed!r}, but run {run.id} has "
-                f"{actual!r}: the result would describe an evaluation its run did not perform"
-            )
-    for metric in result.metrics:
-        if metric.seed is not None and metric.seed != run.seed:
-            raise ProvenanceError(
-                f"metric {metric.name!r} of result {result.id} was drawn with seed "
-                f"{metric.seed}, but run {run.id} has seed {run.seed}: it is another "
-                f"run's sample"
-            )
 
 
 class ControlPlaneRepository:
@@ -711,8 +703,12 @@ class ControlPlaneRepository:
         new_status: EvaluationRunStatus,
         actor: Actor,
         destinations: tuple[str, ...] = (),
+        reason: str | None = None,
     ) -> EvaluationRun:
         """Move an evaluation run to *new_status*, with its event, atomically.
+
+        *reason*, if given, is carried on the event -- why an evaluation
+        failed is part of its history.
 
         Not to ``SUCCEEDED``: a run succeeds only with its result, through
         :meth:`record_evaluation_result`, so no record can say an evaluation
@@ -733,6 +729,7 @@ class ControlPlaneRepository:
             actor,
             None,
             destinations,
+            extra=None if reason is None else {"reason": reason},
         )
 
     def transition_evaluation_attempt(
@@ -744,6 +741,7 @@ class ControlPlaneRepository:
         actor: Actor,
         destinations: tuple[str, ...] = (),
         telemetry_position: tuple[int, int] | None = None,
+        reason: str | None = None,
     ) -> EvaluationAttempt:
         """Move an evaluation attempt to *new_status*, with its event, atomically.
 
@@ -773,7 +771,68 @@ class ControlPlaneRepository:
                     str(moved.id), telemetry_position, kind="evaluation-attempt"
                 )
             ),
+            extra=None if reason is None else {"reason": reason},
         )
+
+    def hold_evaluation_completion(
+        self,
+        attempt_id: EvaluationAttemptId,
+        completion: EvaluationCompletedPayload,
+        *,
+        telemetry_position: tuple[int, int],
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[EvaluationCompletedPayload, tuple[int, int]]:
+        """Keep an ``EvaluationCompleted`` durably until the workload's end decides it.
+
+        A completion is not yet a result: the workload may still fail on its
+        way out, so it cannot be recorded as one. Held only in memory,
+        though, it could be lost -- a stream that dies over a live workload
+        moves the attempt to a new generation (ADR-014 §1a), and the
+        completion is in the one the next controller no longer reads. So it
+        is written here, with the cursor advanced to it in the same commit:
+        the effect of that event is now "the completion is held", and the
+        cursor never claims more than the record holds.
+
+        The first completion is kept. A worker reports one; a second is not a
+        correction the controller can choose between, and replaying the
+        first after a restart must not replace it.
+
+        Returns:
+            The completion held and its position -- the first one, if one
+            was already held.
+
+        Raises:
+            AggregateNotFoundError: If the attempt does not exist.
+            StorageError: If the attempt has already ended.
+        """
+        with write_transaction(self._connection):
+            attempt = self.aggregates.load_evaluation_attempt(str(attempt_id))
+            if attempt.is_terminal:
+                raise StorageError(
+                    f"evaluation attempt {attempt_id} is {attempt.status.value}; a completion "
+                    f"held for it now could never be settled"
+                )
+            held = self.aggregates.pending_completion(str(attempt_id))
+            if held is not None:
+                return held
+            self.aggregates._hold_completion(str(attempt_id), completion, telemetry_position)
+            self.aggregates._advance_telemetry(
+                str(attempt_id), telemetry_position, kind="evaluation-attempt"
+            )
+            self._emit(
+                attempt,
+                "EvaluationCompletionHeld",
+                self._owning_experiment(attempt),
+                actor,
+                destinations,
+                extra={
+                    "metrics": [metric.name for metric in completion.metrics or ()],
+                    "generation": telemetry_position[0],
+                    "sequence": telemetry_position[1],
+                },
+            )
+        return completion, telemetry_position
 
     def create_evaluation_attempt_with_submit_intent(
         self,
@@ -1663,6 +1722,7 @@ class ControlPlaneRepository:
         destinations: tuple[str, ...],
         *,
         after_write: Callable[[AggregateT], None] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> AggregateT:
         """Load, transition and persist an aggregate, with its event.
 
@@ -1702,6 +1762,7 @@ class ControlPlaneRepository:
                 self._owning_experiment(moved),
                 actor,
                 destinations,
+                extra=extra,
             )
         return moved
 

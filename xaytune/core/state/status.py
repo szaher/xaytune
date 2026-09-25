@@ -104,7 +104,8 @@ class EvaluationAttemptStatus(str, Enum):
 
     Not :class:`RunAttemptStatus`: evaluation writes no checkpoints, so it has
     no ``CHECKPOINTING``, and has nothing to recover into, so no
-    ``RECOVERING``. A failed evaluation is retried as a new attempt.
+    ``RECOVERING``. A retry creates a new attempt; it never recovers the old
+    one.
     """
 
     CREATED = "created"

@@ -365,7 +365,7 @@ generation (ADR-014 §1a). A lost stream never creates a new attempt here either
 
 The state machines are **not** copies of `Run`/`RunAttempt`. Evaluation produces
 no checkpoints, so there is no `CHECKPOINTING` and nothing to recover into, so
-no `RECOVERING`; a failed evaluation is retried as a new attempt. The tables are
+no `RECOVERING`; a retry creates a new attempt; it never recovers the old one. The tables are
 in ADR-015.
 
 `EvaluationSpec` is deliberately not part of `CandidateSpec` — see §4. An

@@ -48,13 +48,16 @@ def _evaluated(tmp_path: Path, **config: object) -> Any:
     return _spec(tmp_path).model_copy(update={"evaluation": evaluation(**config)})
 
 
-def _drive(tmp_path: Path, spec: Any, **host_options: Any) -> tuple[Any, Any, list]:
+def _drive(
+    tmp_path: Path, spec: Any, *, host_class: Any = None, **host_options: Any
+) -> tuple[Any, Any, list]:
     from xaytune.experiment import EmbeddedControllerHost
 
     host_options.setdefault("evaluators", EVALUATORS)
+    host_class = host_class or EmbeddedControllerHost
 
     async def scenario():
-        host = EmbeddedControllerHost(tmp_path / "state.db", **host_options)
+        host = host_class(tmp_path / "state.db", **host_options)
         try:
             handle = await host.submit(spec)
             result = await asyncio.wait_for(handle.wait(), timeout=180)
@@ -210,6 +213,110 @@ def test_a_failed_evaluation_fails_the_evaluation_not_the_training(tmp_path: Pat
     (evaluated,) = node.evaluations
     assert evaluated.status is EvaluationRunStatus.FAILED
     assert len(_stalls(events)) == 1
+
+
+def _reasons(events: list, aggregate_type: str) -> list[str]:
+    return [
+        event.payload["reason"]
+        for event in events
+        if event.aggregate_type == aggregate_type and "reason" in event.payload
+    ]
+
+
+@pytest.mark.parametrize(
+    ("config", "problem"),
+    [
+        ({"evaluator_name": "some-other-evaluator"}, "names evaluator 'some-other-evaluator'"),
+        ({"report_names_producer": True}, "the worker named a producer"),
+    ],
+    ids=["metric-from-another-evaluator", "report-names-its-own-producer"],
+)
+def test_a_result_that_cannot_be_attributed_fails_the_evaluation(
+    tmp_path: Path, config: dict, problem: str
+) -> None:
+    """Provenance drift in what a worker reports is a failed evaluation, and says why."""
+    result, _, events = _drive(tmp_path, _evaluated(tmp_path, **config))
+
+    (node,) = result.nodes
+    (evaluated,) = node.evaluations
+    assert evaluated.status is EvaluationRunStatus.FAILED
+    assert evaluated.result is None
+    (reason,) = _reasons(events, "EvaluationRun")
+    assert "cannot be attributed" in reason and problem in reason
+
+
+def test_the_first_evaluation_is_replicate_one_whatever_training_was(tmp_path: Path) -> None:
+    """The evaluation's replicate numbering is its own, not training's."""
+    from xaytune.core.domain.run import Run
+    from xaytune.core.ids import RunId
+    from xaytune.core.state.status import RunStatus as Status
+    from xaytune.experiment import EmbeddedControllerHost
+    from xaytune.experiment.host import _ACTOR
+
+    class SecondReplicate(EmbeddedControllerHost):
+        def _record_run(self, node: Any, seed: int) -> Run:
+            run = Run(
+                id=RunId.generate(),
+                node_id=node.id,
+                experiment_id=node.experiment_id,
+                seed=seed,
+                replicate=2,
+                candidate_fingerprint=node.candidate_fingerprint,
+            )
+            self.repository.create_run(run, actor=_ACTOR)
+            return self.repository.transition_run(
+                run.id, expected_revision=0, new_status=Status.ACTIVE, actor=_ACTOR
+            )
+
+    result, experiment, _ = _drive(tmp_path, _evaluated(tmp_path), host_class=SecondReplicate)
+
+    from xaytune.storage import connect
+    from xaytune.storage.control_plane import ControlPlaneRepository
+
+    repo = ControlPlaneRepository(connect(tmp_path / "state.db"))
+    (node,) = repo.aggregates.nodes_for_experiment(str(experiment.id))
+    (training,) = repo.aggregates.runs_for_node(str(node.id))
+    (evaluation_run,) = repo.aggregates.evaluation_runs_for_node(str(node.id))
+    assert training.replicate == 2
+    assert evaluation_run.replicate == 1
+    assert evaluation_run.seed == training.seed
+
+
+def test_a_preempted_evaluation_fails_its_run_and_stalls_the_node(tmp_path: Path) -> None:
+    """No retry policy yet: the attempt is PREEMPTED, the run FAILED, nothing left ACTIVE."""
+    from xaytune.experiment.host import _local_runtime
+
+    class Preempting:
+        """LocalRuntime, reporting an evaluation that finished as preempted instead."""
+
+        def __init__(self, runtime: Any) -> None:
+            self._runtime = runtime
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._runtime, name)
+
+        async def get_status(self, reference: Any) -> Any:
+            status = await self._runtime.get_status(reference)
+            workload = self._runtime._registry.workload(reference.external_id)
+            if workload.target_kind == "evaluation-attempt" and status.state == "succeeded":
+                return status.model_copy(update={"state": "preempted"})
+            return status
+
+    result, _, events = _drive(
+        tmp_path,
+        _evaluated(tmp_path),
+        runtimes={"local": lambda c: Preempting(_local_runtime(c))},
+    )
+
+    (node,) = result.nodes
+    (evaluated,) = node.evaluations
+    assert evaluated.attempt_status is EvaluationAttemptStatus.PREEMPTED
+    assert evaluated.status is EvaluationRunStatus.FAILED
+    assert evaluated.result is None, "a completion from a preempted workload is not a result"
+    assert node.status is ExperimentNodeStatus.EVALUATING
+    assert len(_stalls(events)) == 1
+    assert result.next_stage == "failure-handling"
+    assert result.quiescent
 
 
 # ---- refused at submission ---------------------------------------------------------

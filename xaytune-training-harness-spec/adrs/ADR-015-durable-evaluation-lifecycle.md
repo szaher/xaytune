@@ -62,7 +62,7 @@ class EvaluationAttempt(AggregateModel):
 The state machines follow the **same lifecycle principles** as `Run` and
 `RunAttempt` — not the same tables. Evaluation produces no checkpoints, so it
 has no `CHECKPOINTING` state and nothing to recover into, so no `RECOVERING`
-either. A failed evaluation is retried as a new attempt.
+either. A retry creates a new attempt; it never `RECOVER`s the old one.
 
 ```text
 EvaluationRun
@@ -269,6 +269,23 @@ silent-stall failure into a detected one.
   same write as the transition into `EVALUATING`, every `EvaluationRun` records
   its cycle, and the cycle's runs are written in that same commit
   (`begin_evaluation_cycle`). Reconciliation reads only the current cycle.
+- **A completion is held durably.** An `EvaluationCompleted` is not yet a
+  result -- the workload may still fail -- so it is written to the attempt
+  (`pending_completion_json`) in the commit that advances the cursor past it,
+  and becomes the result only when the runtime reports success. A stream that
+  dies over the live workload moves the attempt to a new generation (ADR-014
+  §1a); the completion is in the record, not that stream, so neither that nor
+  a controller crash can lose it.
+- **Preemption has no retry yet.** A preempted attempt is `PREEMPTED` and its
+  run `FAILED`, so no run stays `ACTIVE` with nothing executing it; the node
+  then stalls. A retry policy, when one exists, creates a new attempt.
+- **A result agrees with its run in every provenance field**: node,
+  fingerprint, subject (identity *and* digest -- two artifacts can share
+  bytes), and each metric's evaluator, evaluator version and seed, a missing
+  seed included. A report's producer is stamped by the controller with the
+  result's id; a worker-supplied producer is refused. The repository and the
+  database both enforce it, and a worker reporting drift fails its
+  evaluation, with the reason on the event.
 - **A stall is recorded, not raised.** `EvaluationStalled` is an event on the
   node, once per cycle; the node stays `EVALUATING`. What to do about it is a
   decision.

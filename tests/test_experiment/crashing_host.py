@@ -25,6 +25,10 @@ spec asks for one (PR-013) -- training has succeeded and been recorded:
 ``eval-never-sent``       before the runtime is asked for the evaluation.
 ``eval-cancel-intended``  once the evaluation is RUNNING, after recording a
                           cancellation and before issuing its effect.
+``eval-stream-lost``      the evaluation's telemetry stream ends just after its
+                          EvaluationCompleted, while the workload still runs
+                          (ADR-014 §1a); dies once the controller has recorded
+                          that degradation, before the workload ends.
 
 The workload runs in its own session, so it outlives this process, which is
 the situation PR-012a exists for.
@@ -44,7 +48,13 @@ from xaytune.core.refs import Actor
 from xaytune.core.state.status import EvaluationAttemptStatus
 from xaytune.experiment import EmbeddedControllerHost, ExperimentSpec
 
-_EVALUATION_MODES = ("evaluating", "eval-lost-response", "eval-never-sent", "eval-cancel-intended")
+_EVALUATION_MODES = (
+    "evaluating",
+    "eval-lost-response",
+    "eval-never-sent",
+    "eval-cancel-intended",
+    "eval-stream-lost",
+)
 
 
 def _die() -> None:
@@ -69,6 +79,20 @@ class _DyingAt:
         if self._mode == "lost-response" or (self._mode == "eval-lost-response" and evaluating):
             _die()
         return reference
+
+    async def watch(self, reference: Any, cursor: Any = None) -> Any:
+        """The stream, ended just after an EvaluationCompleted in ``eval-stream-lost``.
+
+        The workload runs on; only its telemetry is gone -- what a dead
+        supervisor looks like to the controller.
+        """
+        async for envelope in self._runtime.watch(reference, cursor):
+            yield envelope
+            if (
+                self._mode == "eval-stream-lost"
+                and envelope.payload.data.type == "EvaluationCompleted"
+            ):
+                return
 
 
 async def _main(state: Path, spec: ExperimentSpec, mode: str) -> None:
@@ -108,6 +132,11 @@ async def _die_while_evaluating(host: Any, handle: Any, mode: str) -> None:
     repo = host.repository
     experiment_id = str(handle.experiment_id)
     while True:
+        if mode == "eval-stream-lost" and any(
+            event.event_type == "TelemetryDegraded" and event.aggregate_type == "EvaluationAttempt"
+            for event in repo.events.events_for_experiment(experiment_id)
+        ):
+            _die()
         for node in repo.aggregates.nodes_for_experiment(experiment_id):
             for run in repo.aggregates.evaluation_runs_for_node(str(node.id)):
                 for attempt in repo.aggregates.evaluation_attempts_for_run(str(run.id)):

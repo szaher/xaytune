@@ -31,7 +31,7 @@ from xaytune.core import (
 )
 from xaytune.core.domain.action import ActionTarget
 from xaytune.core.errors import InvalidTransitionError
-from xaytune.core.ids import OperationId
+from xaytune.core.ids import OperationId, RunAttemptId
 from xaytune.core.refs import ArtifactRef
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
@@ -143,12 +143,23 @@ def _result(run: EvaluationRun, **overrides: object) -> EvaluationResult:
         "node_id": run.node_id,
         "subject": run.subject,
         "evaluation_fingerprint": run.evaluation_fingerprint,
-        "metrics": (
-            MetricResult(name="accuracy", value=0.8, evaluator_name="exact-match", seed=run.seed),
-        ),
+        "metrics": (_metric(run),),
     }
     fields.update(overrides)
     return EvaluationResult(**fields)  # type: ignore[arg-type]
+
+
+def _metric(run: EvaluationRun, **overrides: object) -> MetricResult:
+    """A metric measured by the run's evaluator, at its version, with its seed."""
+    fields: dict[str, object] = {
+        "name": "accuracy",
+        "value": 0.8,
+        "evaluator_name": run.spec.evaluator.name,
+        "evaluator_version": run.spec.evaluator.version,
+        "seed": run.seed,
+    }
+    fields.update(overrides)
+    return MetricResult(**fields)  # type: ignore[arg-type]
 
 
 def _succeed(repo: ControlPlaneRepository, run: EvaluationRun) -> EvaluationResult:
@@ -327,22 +338,65 @@ def test_nothing_succeeds_without_its_result(
             )
 
 
+_OTHER_SUBJECT = ArtifactRef(id=ArtifactId.generate(), kind="model", uri="/other")
+_SAME_BYTES = ArtifactRef(id=ArtifactId.generate(), kind="model", uri="/m", digest="sha256:m")
+
+
 @pytest.mark.parametrize(
     "disagreement",
     [
-        {"subject": ArtifactRef(id=ArtifactId.generate(), kind="model", uri="/other")},
-        {"evaluation_fingerprint": "sha256:" + "f" * 64},
-        {
+        lambda run: {"subject": _OTHER_SUBJECT},
+        lambda run: {"subject": _SAME_BYTES},
+        lambda run: {"evaluation_fingerprint": "sha256:" + "f" * 64},
+        lambda run: {"metrics": (_metric(run, seed=99),)},
+        lambda run: {"metrics": (_metric(run, seed=None),)},
+        lambda run: {"metrics": (_metric(run, evaluator_name="some-other-evaluator"),)},
+        lambda run: {"metrics": (_metric(run, evaluator_version="9.0"),)},
+        lambda run: {
             "metrics": (
-                MetricResult(name="accuracy", value=0.8, evaluator_name="exact-match", seed=99),
+                _metric(
+                    run, evaluator_name="some-other-evaluator", evaluator_version="9.0", seed=None
+                ),
+            )
+        },
+        lambda run: {
+            "artifacts": (
+                ArtifactRef(
+                    id=ArtifactId.generate(),
+                    kind="evaluation_report",
+                    uri="/r",
+                    producer_evaluation_id=EvaluationId.generate(),
+                ),
+            )
+        },
+        lambda run: {
+            "artifacts": (
+                ArtifactRef(
+                    id=ArtifactId.generate(),
+                    kind="evaluation_report",
+                    uri="/r",
+                    producer_attempt_id=RunAttemptId.generate(),
+                ),
             )
         },
     ],
-    ids=["subject", "fingerprint", "seed"],
+    ids=[
+        "subject",
+        "subject-same-digest",
+        "fingerprint",
+        "seed",
+        "seed-omitted",
+        "evaluator",
+        "evaluator-version",
+        "all-three-drifted",
+        "report-names-another-result",
+        "report-names-a-training-attempt",
+    ],
 )
 def test_a_result_that_disagrees_with_its_run_is_refused(
-    repo: ControlPlaneRepository, node: Any, disagreement: dict
+    repo: ControlPlaneRepository, node: Any, disagreement: Any
 ) -> None:
+    """Every field that says where a result came from must agree with its run."""
     run = _run(node)
     _begin(repo, node, run)
     attempt, _ = _attempt(repo, run)
@@ -351,7 +405,7 @@ def test_a_result_that_disagrees_with_its_run_is_refused(
     with pytest.raises(ProvenanceError):
         repo.record_evaluation_result(
             attempt.id,
-            _result(run, **disagreement),
+            _result(run, **disagreement(run)),
             expected_revision=attempt.revision,
             actor=_ACTOR,
         )
@@ -375,6 +429,42 @@ def test_the_database_itself_refuses_misattributed_results(
             repo.aggregates._insert_evaluation_result(
                 _result(run, evaluation_fingerprint="sha256:" + "f" * 64)
             )
+
+
+def test_the_database_refuses_another_artifact_with_the_same_bytes(
+    repo: ControlPlaneRepository, node: Any, connection: sqlite3.Connection
+) -> None:
+    """A shared digest is not a shared identity: the run evaluated artifact A, not B."""
+    run = _run(node)
+    _begin(repo, node, run)
+    assert _SAME_BYTES.digest == run.subject.digest and _SAME_BYTES.id != run.subject.id
+
+    with pytest.raises(sqlite3.IntegrityError, match="provenance"):
+        with write_transaction(connection):
+            repo.aggregates._insert_evaluation_result(_result(run, subject=_SAME_BYTES))
+
+
+def test_a_completion_is_held_once_with_its_cursor(repo: ControlPlaneRepository, node: Any) -> None:
+    """Held durably at its position; a replay or a second completion does not replace it."""
+    from xaytune.core.telemetry import EvaluationCompletedPayload
+
+    run = _run(node)
+    _begin(repo, node, run)
+    attempt, _ = _attempt(repo, run)
+    first = EvaluationCompletedPayload(metrics=(_metric(run),))
+    second = EvaluationCompletedPayload(metrics=(_metric(run, value=0.1),))
+
+    repo.hold_evaluation_completion(attempt.id, first, telemetry_position=(0, 3), actor=_ACTOR)
+    repo.hold_evaluation_completion(attempt.id, second, telemetry_position=(0, 4), actor=_ACTOR)
+
+    assert repo.aggregates.pending_completion(str(attempt.id)) == (first, (0, 3))
+    assert repo.aggregates.telemetry_position(str(attempt.id), kind="evaluation-attempt") == (0, 3)
+    repo.record_telemetry_degraded(
+        attempt.id, reason="stream lost", actor=_ACTOR, kind="evaluation-attempt"
+    )
+    assert repo.aggregates.pending_completion(str(attempt.id)) == (first, (0, 3)), (
+        "a new generation does not lose it"
+    )
 
 
 def test_a_result_is_never_edited(

@@ -4,7 +4,7 @@
 > **Evaluation has a durable execution lifecycle — see ADR-015.** The
 > `EvaluationSpec → EvaluationResult` shape below describes the *scientific*
 > contract. Operationally an evaluation is a workload: it queues, fails, gets
-> preempted, is retried and can be in flight across a controller restart. It
+> preempted, is retried as a new attempt and can be in flight across a controller restart. It
 > therefore has `EvaluationRun` and `EvaluationAttempt`, which follow the same
 > **lifecycle principles** as `Run` and `RunAttempt` — every non-terminal state
 > reaches `FAILED` and `CANCELLED`, and `PREEMPTED` applies from `QUEUED`
@@ -126,24 +126,27 @@ This metadata contributes to `EvaluationFingerprint`.
 ## 5. EvaluationResult
 
 ```python
-class EvaluationResult(BaseModel):
-    id: EvaluationResultId
+class EvaluationResult(FrozenDomainModel):
+    id: EvaluationResultId            # = EvaluationId
 
     evaluation_run_id: EvaluationRunId
     node_id: ExperimentNodeId
-    artifact_ref: ArtifactRef
+    subject: ArtifactRef              # what was measured: the run's subject
 
     evaluation_fingerprint: str
 
-    metrics: list[MetricResult]
-    constraints: list[ConstraintResult]
-
-    status: EvaluationStatus
-
-    artifacts: list[ArtifactRef]
+    metrics: tuple[MetricResult, ...] # at least one
+    artifacts: tuple[ArtifactRef, ...]  # reports; producer = this result
 
     created_at: datetime
 ```
+
+There is no `status`: a result exists only for a run that `SUCCEEDED`, written
+in the same commit, so a result is never pending or failed. There are no
+`constraints` yet either; constraint evaluation arrives with the DecisionEngine
+(PR-015). Every provenance field must agree with the run -- node, fingerprint,
+subject (identity and digest), and each metric's evaluator, evaluator version
+and seed -- and the database refuses a result that does not.
 
 `evaluation_run_id` is required, not convenience. After ADR-015 a node can hold
 several `EvaluationRun`s over the same subject and fingerprint — replicates 0,
@@ -160,17 +163,24 @@ meaningful if each sample can be traced to the run that drew it.
 ```python
 class Evaluator(Protocol):
     descriptor: PluginDescriptor
+    determinism: EvaluatorDeterminism
 
     def capabilities(self) -> CapabilityDocument: ...
 
-    async def prepare(
+    def prepare(
         self,
-        artifact: ArtifactRef,
+        subject: ArtifactRef,
         spec: EvaluationSpec,
+        context: EvaluationContext,   # run id, seed, replicate, output location
     ) -> EvaluationExecutionSpec: ...
 ```
 
-Execution may be local or remote.
+`prepare()` is **synchronous and deterministic**, like `TrainerCompiler.compile()`:
+it builds a request and never performs the evaluation. A re-issued evaluation is
+rebuilt from the record and its digest checked against the one recorded, which
+an evaluator reading the clock or the network would break. The spec it returns
+is resolved, submitted and observed like any other; execution may be local or
+remote. `xaytune.evaluation` holds the contract.
 
 ## 7. Initial evaluators
 

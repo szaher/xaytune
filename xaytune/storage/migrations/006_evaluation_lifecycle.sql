@@ -54,6 +54,13 @@ CREATE TABLE evaluation_attempts (
   -- an event caused, exactly as 005 defines it for run_attempts.
   telemetry_generation INTEGER NOT NULL DEFAULT 0 CHECK (telemetry_generation >= 0),
   telemetry_sequence INTEGER NOT NULL DEFAULT -1 CHECK (telemetry_sequence >= -1),
+  -- An EvaluationCompleted the controller has received but cannot yet turn
+  -- into a result, because the workload has not ended: its body and its
+  -- (generation, sequence). Written in the commit that advances the cursor
+  -- past it, so the completion is part of the record from then on -- a
+  -- stream that dies and moves the attempt to a new generation (ADR-014 §1a),
+  -- or a controller that dies, cannot lose it. NULL until one arrives.
+  pending_completion_json TEXT,
   revision INTEGER NOT NULL CHECK (revision >= 0),
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -78,6 +85,10 @@ CREATE TABLE evaluation_results (
   evaluation_run_id TEXT NOT NULL UNIQUE REFERENCES evaluation_runs(id),
   node_id TEXT NOT NULL REFERENCES experiment_nodes(id),
   evaluation_fingerprint TEXT NOT NULL,
+  -- The subject is compared by identity AND digest: two artifacts can share
+  -- a digest, and a result naming another artifact with the same bytes would
+  -- still describe an evaluation its run did not perform.
+  subject_artifact_id TEXT NOT NULL,
   subject_digest TEXT,
   payload_json TEXT NOT NULL,
   created_at TEXT NOT NULL
@@ -98,6 +109,7 @@ WHEN NOT EXISTS (
   WHERE run.id = NEW.evaluation_run_id
     AND run.node_id = NEW.node_id
     AND run.evaluation_fingerprint = NEW.evaluation_fingerprint
+    AND run.subject_artifact_id = NEW.subject_artifact_id
     AND run.subject_digest IS NEW.subject_digest
 )
 BEGIN

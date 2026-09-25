@@ -70,6 +70,7 @@ from xaytune.core.domain.evaluation import (
     EvaluationRun,
     EvaluationSpec,
     EvaluatorSpec,
+    result_provenance_problems,
 )
 from xaytune.core.domain.event import DomainEvent
 from xaytune.core.domain.experiment import (
@@ -172,6 +173,11 @@ _EVALUATION_PATH = (
 _EVALUATION_OUTCOME: Mapping[str, tuple[EvaluationAttemptStatus, EvaluationRunStatus]] = {
     "failed": (EvaluationAttemptStatus.FAILED, EvaluationRunStatus.FAILED),
     "cancelled": (EvaluationAttemptStatus.CANCELLED, EvaluationRunStatus.CANCELLED),
+    # Preempted: the attempt says so, and the run fails -- there is no retry
+    # policy yet, and a run left ACTIVE over a preempted attempt would have
+    # nothing executing it. A retry, when there is one, is a new attempt; it
+    # never recovers this one.
+    "preempted": (EvaluationAttemptStatus.PREEMPTED, EvaluationRunStatus.FAILED),
 }
 """How an evaluation that did not succeed ends. Success is not here: it is
 recorded only with its result, through ``record_evaluation_result``."""
@@ -912,7 +918,7 @@ class EmbeddedControllerHost:
                     subject=subject,
                     evaluation_fingerprint=experiment.evaluation.evaluation_fingerprint(),
                     seed=run.seed,
-                    replicate=run.replicate or 1,
+                    replicate=1,
                 ),
             )
         node, _ = self.repository.begin_evaluation_cycle(
@@ -1017,7 +1023,6 @@ class EmbeddedControllerHost:
         generation, sequence = aggregates.telemetry_position(
             str(attempt_id), kind="evaluation-attempt"
         )
-        completion: tuple[EvaluationCompletedPayload, tuple[int, int]] | None = None
         async for envelope in runtime.watch(
             reference, StreamCursor(generation=generation, sequence=sequence)
         ):
@@ -1032,7 +1037,11 @@ class EmbeddedControllerHost:
                     attempt_id, EvaluationAttemptStatus.RUNNING, position
                 )
             elif isinstance(observation, EvaluationCompletedPayload):
-                completion = (observation, position)
+                # Held durably, not in memory: the stream it arrived on may
+                # die before the workload ends, and this controller with it.
+                self.repository.hold_evaluation_completion(
+                    attempt_id, observation, telemetry_position=position, actor=_ACTOR
+                )
 
         status = await runtime.get_status(reference)
         if status.state in _LIVE_STATES:
@@ -1047,6 +1056,9 @@ class EmbeddedControllerHost:
                 status = await runtime.get_status(reference)
 
         if status.state == "succeeded":
+            # Read from the record, not from this stream: the completion may
+            # have arrived on an earlier generation, or to an earlier host.
+            completion = aggregates.pending_completion(str(attempt_id))
             if completion is not None and completion[0].metrics:
                 self._record_evaluation_result(attempt_id, run_id, *completion)
             else:
@@ -1059,6 +1071,7 @@ class EmbeddedControllerHost:
                     run_id,
                     EvaluationAttemptStatus.FAILED,
                     EvaluationRunStatus.FAILED,
+                    reason="the workload exited successfully without reporting its result",
                 )
         elif status.state in _EVALUATION_OUTCOME:
             self._settle_evaluation(attempt_id, run_id, *_EVALUATION_OUTCOME[status.state])
@@ -1078,31 +1091,59 @@ class EmbeddedControllerHost:
         completion: EvaluationCompletedPayload,
         position: tuple[int, int],
     ) -> None:
-        """Record the result a completed evaluation carried, with its success."""
+        """Record the result a completed evaluation carried, with its success.
+
+        Unless it cannot be attributed to this run. What the worker reported
+        is checked against the run first (``result_provenance_problems``): a
+        metric from another evaluator, version or seed, or a report naming its
+        own producer -- which the worker cannot know, since the result's id
+        is assigned here -- fails the evaluation, with the reason recorded.
+        A result the record cannot attribute is not a result.
+        """
         aggregates = self.repository.aggregates
         run = aggregates.load_evaluation_run(str(run_id))
-        # A worker that reported completion without first reporting its start
-        # still ran: the machine requires RUNNING before SUCCEEDED.
-        attempt = self._advance_evaluation_attempt(attempt_id, EvaluationAttemptStatus.RUNNING)
         result_id = EvaluationId.generate()
+        problems: list[str] = []
         artifacts: tuple[ArtifactRef, ...] = ()
         if completion.result_ref is not None:
             report = completion.result_ref
-            if report.producer_evaluation_id is None:
-                report = report.model_copy(update={"producer_evaluation_id": result_id})
-            artifacts = (report,)
+            if report.producer_evaluation_id is not None or report.producer_attempt_id is not None:
+                problems.append(
+                    f"the worker named a producer for its report {report.id}; only the "
+                    f"controller can, once the result exists"
+                )
+            artifacts = (
+                report.model_copy(
+                    update={"producer_evaluation_id": result_id, "producer_attempt_id": None}
+                ),
+            )
         assert completion.metrics is not None
+        result = EvaluationResult(
+            id=result_id,
+            evaluation_run_id=run.id,
+            node_id=run.node_id,
+            subject=run.subject,
+            evaluation_fingerprint=run.evaluation_fingerprint,
+            metrics=completion.metrics,
+            artifacts=artifacts,
+        )
+        problems.extend(result_provenance_problems(result, run))
+        if problems:
+            self._settle_evaluation(
+                attempt_id,
+                run_id,
+                EvaluationAttemptStatus.FAILED,
+                EvaluationRunStatus.FAILED,
+                reason="the reported result cannot be attributed to this run: "
+                + "; ".join(problems),
+            )
+            return
+        # A worker that reported completion without first reporting its start
+        # still ran: the machine requires RUNNING before SUCCEEDED.
+        attempt = self._advance_evaluation_attempt(attempt_id, EvaluationAttemptStatus.RUNNING)
         self.repository.record_evaluation_result(
             attempt.id,
-            EvaluationResult(
-                id=result_id,
-                evaluation_run_id=run.id,
-                node_id=run.node_id,
-                subject=run.subject,
-                evaluation_fingerprint=run.evaluation_fingerprint,
-                metrics=completion.metrics,
-                artifacts=artifacts,
-            ),
+            result,
             expected_revision=attempt.revision,
             actor=_ACTOR,
             telemetry_position=position,
@@ -1140,8 +1181,10 @@ class EmbeddedControllerHost:
         run_id: EvaluationRunId,
         attempt_status: EvaluationAttemptStatus,
         run_status: EvaluationRunStatus,
+        *,
+        reason: str | None = None,
     ) -> None:
-        """Record how an evaluation that did not succeed ended."""
+        """Record how an evaluation that did not succeed ended, and why if known."""
         aggregates = self.repository.aggregates
         attempt = aggregates.load_evaluation_attempt(str(attempt_id))
         if not attempt.is_terminal and EVALUATION_ATTEMPT_MACHINE.can(
@@ -1152,11 +1195,16 @@ class EmbeddedControllerHost:
                 expected_revision=attempt.revision,
                 new_status=attempt_status,
                 actor=_ACTOR,
+                reason=reason,
             )
         run = aggregates.load_evaluation_run(str(run_id))
         if not run.is_terminal:
             self.repository.transition_evaluation_run(
-                run.id, expected_revision=run.revision, new_status=run_status, actor=_ACTOR
+                run.id,
+                expected_revision=run.revision,
+                new_status=run_status,
+                actor=_ACTOR,
+                reason=reason,
             )
 
     def _reconcile_node_of(self, run_id: EvaluationRunId) -> None:

@@ -257,6 +257,66 @@ def test_an_uncertain_evaluation_absence_escalates(tmp_path: Path) -> None:
     assert _evaluator_workloads(tmp_path) == []
 
 
+# ---- a completion survives a lost stream and a dead controller ------------------------
+
+
+def test_a_completion_survives_a_lost_stream_and_a_dead_controller(tmp_path: Path) -> None:
+    """ADR-014 §1a meets ADR-015: the result reported before the stream died is kept.
+
+    The completion arrives; the stream then ends while the evaluator still
+    runs, so the attempt's telemetry moves to a new generation; the
+    controller dies before the evaluator exits. The next host must record
+    the same result -- not call the evaluation failed for lacking a
+    completion that is only in a generation it no longer reads.
+    """
+    spec = _spec(tmp_path).model_copy(
+        update={
+            "evaluation": evaluation(value=0.8, hold_after_completion=str(tmp_path / "release"))
+        }
+    )
+    experiment_id = _crash(tmp_path, "eval-stream-lost", spec)
+
+    result, run, attempts, operations = _adopt(tmp_path, experiment_id)
+
+    _decided_once(result, run, attempts)
+    (evaluated,) = result.nodes[0].evaluations
+    assert [metric.value for metric in evaluated.result.metrics] == [0.8]
+    assert _CountingSubmissions.issued == [], "recovered, not re-run"
+    assert len(_evaluator_workloads(tmp_path)) == 1
+    (submit,) = operations
+    assert submit.state == "confirmed"
+
+
+def test_a_preempted_attempt_found_after_a_crash_fails_its_run(tmp_path: Path) -> None:
+    """A run left ACTIVE over a PREEMPTED attempt has nothing executing it: settle it."""
+    from xaytune.core.refs import Actor
+    from xaytune.storage import connect
+    from xaytune.storage.control_plane import ControlPlaneRepository
+
+    experiment_id = _crash(tmp_path, "evaluating", _evaluated(tmp_path, hold=True))
+    repo = ControlPlaneRepository(connect(tmp_path / "state.db"))
+    _, (attempt,), _ = _evaluation_record(repo, experiment_id)
+    repo.transition_evaluation_attempt(
+        attempt.id,
+        expected_revision=attempt.revision,
+        new_status=EvaluationAttemptStatus.PREEMPTED,
+        actor=Actor(type="system", id="test"),
+    )
+
+    try:
+        result, run, attempts, _ = _adopt(tmp_path, experiment_id, release=False)
+    finally:
+        _release(tmp_path)
+
+    assert run.status is EvaluationRunStatus.FAILED
+    (preempted,) = attempts
+    assert preempted.status is EvaluationAttemptStatus.PREEMPTED, "never recovered"
+    (node,) = result.nodes
+    assert node.status is ExperimentNodeStatus.EVALUATING
+    assert result.next_stage == "failure-handling"
+    assert _CountingSubmissions.issued == []
+
+
 # ---- cancellation survives the controller ---------------------------------------------
 
 

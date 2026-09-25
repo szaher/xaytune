@@ -510,6 +510,11 @@ v1alpha3   EvaluationCompleted with metrics    required
   `plan.spec.telemetry.protocol_version`, not a constant; LocalRuntime refuses a
   plan asking for any other version at submission.
 - **A completion is not a success.** The controller holds it until the runtime
-  reports the workload `succeeded`, then records the result, the attempt's and
-  run's `SUCCEEDED` and the cursor at the completion in one commit. Exit 0
-  with no completion is a failed evaluation, not an empty success.
+  reports the workload `succeeded`, then records the result and the attempt's
+  and run's `SUCCEEDED` in one commit. Exit 0 with no completion is a failed
+  evaluation, not an empty success.
+- **Held durably, not in memory.** The completion is written to the attempt in
+  the commit that advances the cursor past it. §1a's generation change -- a
+  dead stream over a live workload -- leaves the completion in a generation no
+  later controller reads, so a completion held only in memory would be lost
+  with the controller; held in the record, it survives both.

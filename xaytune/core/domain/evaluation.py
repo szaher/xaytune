@@ -14,7 +14,7 @@ Evaluation is a workload, not a function call: it queues, fails, is preempted
 and can be in flight when the controller restarts. So it has the same run and
 attempt split as training -- following the same lifecycle principles, over its
 own states. It writes no checkpoints, so there is no ``CHECKPOINTING`` and
-nothing to recover into; a failed evaluation is retried as a new attempt.
+nothing to recover into: a retry creates a new attempt; it never recovers the old one.
 
 It is **not** training, and is not folded into a generic ``Execution``
 aggregate either (ADR-015 §2): an evaluation consumes a subject and a spec and
@@ -55,6 +55,7 @@ __all__ = [
     "EvaluatorSpec",
     "MetricResult",
     "evaluation_identity_v1",
+    "result_provenance_problems",
 ]
 
 
@@ -294,3 +295,51 @@ class EvaluationAttempt(AggregateModel):
     def is_terminal(self) -> bool:
         """Whether this attempt has reached a final state."""
         return EVALUATION_ATTEMPT_MACHINE.is_terminal(self.status)
+
+
+def result_provenance_problems(result: EvaluationResult, run: EvaluationRun) -> tuple[str, ...]:
+    """Every way *result* disagrees with the run that is said to have produced it.
+
+    Empty when the result is attributable. A durable result has to agree with
+    its run in every field that says where it came from -- not only its run,
+    node, fingerprint and subject, but **each metric**: measured by the run's
+    evaluator at the run's version, with the run's seed. A metric that omits
+    the seed of a seeded run is not "unknown seed"; it is a sample nobody can
+    place. And each attached report must name this result as its producer and
+    no training attempt: a worker cannot know the id its result will be given,
+    so a producer it supplied is a claim nobody established.
+    """
+    problems: list[str] = []
+    if result.evaluation_run_id != run.id:
+        problems.append(f"names run {result.evaluation_run_id}, not {run.id}")
+    for field, claimed, actual in (
+        ("node", result.node_id, run.node_id),
+        ("evaluation fingerprint", result.evaluation_fingerprint, run.evaluation_fingerprint),
+        ("subject", result.subject, run.subject),
+    ):
+        if claimed != actual:
+            problems.append(f"claims {field} {claimed!r}, but the run has {actual!r}")
+    evaluator = run.spec.evaluator
+    for metric in result.metrics:
+        metric_fields: tuple[tuple[str, object, object], ...] = (
+            ("evaluator", metric.evaluator_name, evaluator.name),
+            ("evaluator version", metric.evaluator_version, evaluator.version),
+            ("seed", metric.seed, run.seed),
+        )
+        for name, stated, expected in metric_fields:
+            if stated != expected:
+                problems.append(
+                    f"metric {metric.name!r} names {name} {stated!r}, but the run's is {expected!r}"
+                )
+    for artifact in result.artifacts:
+        if artifact.producer_evaluation_id != result.id:
+            problems.append(
+                f"artifact {artifact.id} names producer {artifact.producer_evaluation_id!r}, "
+                f"not result {result.id}"
+            )
+        if artifact.producer_attempt_id is not None:
+            problems.append(
+                f"artifact {artifact.id} names training attempt {artifact.producer_attempt_id} "
+                f"as its producer"
+            )
+    return tuple(problems)

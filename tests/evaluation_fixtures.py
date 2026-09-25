@@ -12,7 +12,12 @@ mode     "complete"   EvaluationCompleted(metrics) and exit 0   (default)
          "complete-then-fail"   EvaluationCompleted(metrics), then exit 1
 hold     a path: wait for it to exist before finishing, so a test can
          crash or cancel the controller while the evaluation is live
+hold_after_completion
+         a path: report the completion, then wait for it before exiting --
+         the window between a result reported and the workload's end
 value    the accuracy it reports
+evaluator_name          the evaluator its metric claims (default "scripted")
+report_names_producer   the report names an EvaluationId of the worker's own
 ```
 
 The worker is ``tests/evaluation_worker.py``, found through ``PYTHONPATH``

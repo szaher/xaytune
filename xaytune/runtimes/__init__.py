@@ -26,7 +26,13 @@ from xaytune.core.ids import OperationId
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.observability import CorrelationContext, Counter, TraceContext
 from xaytune.core.refs import RuntimeRef
-from xaytune.core.telemetry import EvaluationObservation, TrainingObservation
+from xaytune.core.telemetry import (
+    TELEMETRY_V1ALPHA3,
+    EvaluationCompletedPayload,
+    EvaluationObservation,
+    TelemetryProtocolVersion,
+    TrainingObservation,
+)
 
 __all__ = [
     "EvaluationEventPayload",
@@ -263,7 +269,14 @@ class RuntimeEventEnvelope(FrozenDomainModel):
     target with the payload to prevent.
     """
 
-    protocol_version: Literal["xaytune.telemetry/v1alpha2"] = "xaytune.telemetry/v1alpha2"
+    protocol_version: TelemetryProtocolVersion = "xaytune.telemetry/v1alpha2"
+    """Which contract the payload was written against; both are read.
+
+    Set from the plan's ``TelemetryContract``, never assumed: a controller
+    adopting a workload started before an upgrade must still read what it
+    writes.
+    """
+
     event_id: str
 
     target: RuntimeOperationTarget
@@ -291,6 +304,7 @@ class RuntimeEventEnvelope(FrozenDomainModel):
                 f"are two statements about the same workload, and a consumer "
                 f"that trusted either one would be wrong about the other"
             )
+        self._completion_matches_protocol()
         if self.context is not None:
             context = self.context
             if (
@@ -312,6 +326,24 @@ class RuntimeEventEnvelope(FrozenDomainModel):
             if context_id is not None and context_id != self.target.id:
                 raise ValueError("context attempt and envelope target disagree")
         return self
+
+    def _completion_matches_protocol(self) -> None:
+        """``EvaluationCompleted`` carries its metrics exactly when v1alpha3 says so."""
+        data = self.payload.data
+        if not isinstance(data, EvaluationCompletedPayload):
+            return
+        if self.protocol_version == TELEMETRY_V1ALPHA3 and data.metrics is None:
+            raise ValueError(
+                "an EvaluationCompleted under xaytune.telemetry/v1alpha3 must carry its "
+                "metrics: they are the evaluation's result, and a completion without "
+                "them would leave a successful evaluation that measured nothing"
+            )
+        if self.protocol_version != TELEMETRY_V1ALPHA3 and data.metrics is not None:
+            raise ValueError(
+                f"an EvaluationCompleted under {self.protocol_version} carries no metrics; "
+                f"inline results are xaytune.telemetry/v1alpha3, and the same version "
+                f"with a different payload would not be the same protocol"
+            )
 
 
 class RuntimeLog(FrozenDomainModel):

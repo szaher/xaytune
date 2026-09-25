@@ -4,7 +4,8 @@ These use the experiment control plane on `main`. It is not in the `0.6.0`
 package on PyPI yet, so install from a clone first:
 
 ```bash
-uv sync --locked                 # add --extra trl to try --compiler trl
+uv sync --locked                 # or: pip install -e .
+uv sync --locked --extra trl     # for --compiler trl; or: pip install -e ".[trl]"
 ```
 
 | Script | What it shows | Needs |

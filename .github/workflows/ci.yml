@@ -68,6 +68,9 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv build
       - run: python3 scripts/check_sdist.py dist/*.tar.gz
+      # The README is PyPI's long description; metadata or markup PyPI would
+      # reject or render wrongly fails here, before any upload is possible.
+      - run: uvx twine check --strict dist/*
       - run: uv venv --python 3.10 "$RUNNER_TEMP/smoke"
       # CPU torch: the smoke must not need a GPU, and must not need torch
       # at all -- it asserts nothing imports it -- but installing the declared

@@ -15,7 +15,7 @@ adopted by a second process. Every step has a runnable script in
 ```bash
 git clone https://github.com/szaher/xaytune && cd xaytune
 uv sync --locked                 # or: pip install -e .
-uv sync --locked --extra trl     # to use the TRL trainer as well
+uv sync --locked --extra trl     # the TRL trainer as well; or: pip install -e ".[trl]"
 ```
 
 `--locked` installs exactly what CI tests, from `uv.lock`. The TRL trainer

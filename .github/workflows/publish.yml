@@ -36,6 +36,11 @@ jobs:
       - name: Check the sdist holds the package and nothing else
         run: python scripts/check_sdist.py dist/*.tar.gz
 
+      # The README is PyPI's long description: metadata or markup PyPI would
+      # reject or render wrongly stops the release here.
+      - name: Check distribution metadata
+        run: uvx twine check --strict dist/*
+
       # Nothing is uploaded that does not install and work from outside the
       # checkout -- to TestPyPI or PyPI.
       - name: Smoke-test the wheel

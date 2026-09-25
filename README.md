@@ -176,7 +176,7 @@ use the control plane described above, install from a clone of `main`:
 ```bash
 git clone https://github.com/szaher/xaytune && cd xaytune
 uv sync --locked                # or: pip install -e .
-uv sync --locked --extra trl    # adds the TRL trainer (trl 1.13.x, transformers 5.17.x)
+uv sync --locked --extra trl    # adds the TRL trainer; or: pip install -e ".[trl]"
 ```
 
 `import xaytune` does not import torch, transformers or TRL. The control plane

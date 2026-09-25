@@ -3,7 +3,12 @@
     python examples/control_plane/02_train.py \\
         --model /abs/path/to/hf-model-dir \\
         --dataset /abs/path/to/train.jsonl \\
-        --compiler native            # or: trl  (pip install "xaytune[trl]")
+        --compiler native            # or: trl
+
+The control plane is not on PyPI yet, so install from a clone of main. For
+``--compiler trl``, include the TRL extra::
+
+    uv sync --locked --extra trl     # or, with pip: pip install -e ".[trl]"
 
 The dataset is local JSONL with a ``text`` field per line, the one format both
 built-in trainers read with the same meaning. The model is a local Hugging

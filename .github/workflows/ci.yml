@@ -54,6 +54,28 @@ jobs:
           XAYTUNE_REQUIRE_TRL: "1"
       - run: uv run --locked python -m pytest tests/ -q --collect-only -m trl
 
+  # The package a user installs, not the source tree the tests import. uv
+  # builds the sdist, then the wheel from that sdist, so a file the sdist's
+  # allow-list leaves out breaks the wheel here rather than on PyPI. The sdist
+  # must hold the package and nothing else (scripts/check_sdist.py); the wheel
+  # is installed with its declared dependencies into an empty virtualenv on
+  # the oldest supported Python and exercised from outside the checkout
+  # (scripts/wheel_smoke.py).
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv build
+      - run: python3 scripts/check_sdist.py dist/*.tar.gz
+      - run: uv venv --python 3.10 "$RUNNER_TEMP/smoke"
+      # CPU torch: the smoke must not need a GPU, and must not need torch
+      # at all -- it asserts nothing imports it -- but installing the declared
+      # dependencies is part of what is being checked.
+      - run: uv pip install --python "$RUNNER_TEMP/smoke/bin/python" --torch-backend cpu dist/*.whl
+      - run: '"$RUNNER_TEMP/smoke/bin/python" -I "$GITHUB_WORKSPACE/scripts/wheel_smoke.py"'
+        working-directory: ${{ runner.temp }}
+
   type-check:
     runs-on: ubuntu-latest
     steps:

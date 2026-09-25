@@ -9,7 +9,17 @@ class TestPackageMetadata:
         assert isinstance(xaytune.__version__, str)
 
     def test_version_matches_pyproject(self):
-        assert xaytune.__version__ == "0.6.0"
+        # The release gate holds these together; see tests/test_release_version.py.
+        from pathlib import Path
+
+        if sys.version_info >= (3, 11):
+            import tomllib
+        else:
+            import tomli as tomllib
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        with pyproject.open("rb") as handle:
+            assert xaytune.__version__ == tomllib.load(handle)["project"]["version"]
 
     def test_all_exports(self):
         expected = {

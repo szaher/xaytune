@@ -1,5 +1,12 @@
 # Getting Started
 
+!!! note "This page covers the legacy trainer API"
+    `finetune()`, `align()`, the `xaytune` CLI and pipelines: the library the
+    `0.6.0` package on PyPI contains. For the experiment control plane on
+    `main` (compile, submit, observe, cancel, attach), see
+    [Control-plane getting started](control-plane/getting-started.md). The
+    reproducible install and the supported TRL releases below apply to both.
+
 ## Installation
 
 Install xaytune from source:

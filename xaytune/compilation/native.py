@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+from xaytune._version import __version__
 from xaytune.compilation import CompilationContext, SupportResult, UnsupportedCandidateError
 from xaytune.compilation._sft import local_path, sft_refusals
 from xaytune.core.capabilities import (
@@ -69,7 +70,7 @@ class NativeCompiler:
         name="native",
         plugin_version="0.1.0",
         provider="xaytune",
-        xaytune_version="0.6.0",
+        xaytune_version=__version__,
     )
 
     def capabilities(self) -> CapabilityDocument:

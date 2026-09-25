@@ -5844,6 +5844,7 @@ source = { editable = "." }
 dependencies = [
     { name = "bitsandbytes" },
     { name = "datasets" },
+    { name = "packaging" },
     { name = "peft" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -5927,6 +5928,7 @@ requires-dist = [
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=2.10" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "openai", marker = "extra == 'synth'", specifier = ">=1.0" },
+    { name = "packaging", specifier = ">=22" },
     { name = "peft", specifier = ">=0.10" },
     { name = "plotly", marker = "extra == 'studio'", specifier = ">=5.0" },
     { name = "pydantic", specifier = ">=2.0" },

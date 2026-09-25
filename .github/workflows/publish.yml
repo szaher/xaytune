@@ -18,8 +18,31 @@ jobs:
         with:
           python-version: "3.12"
 
+      # A release publishes exactly the version it is named for. Without this
+      # they drifted apart once already -- the v0.1.0 release uploaded 0.6.0
+      # -- and an upload cannot be taken back. A manual dispatch to TestPyPI
+      # has no tag, so it is not checked.
+      - name: Check the release tag names the version being built
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python scripts/check_release_version.py "$TAG"
+
+      # The wheel is built from the sdist, and the sdist must be the package
+      # and nothing else from the working tree.
       - name: Build sdist and wheel
         run: uv build
+
+      - name: Check the sdist holds the package and nothing else
+        run: python scripts/check_sdist.py dist/*.tar.gz
+
+      # Nothing is uploaded that does not install and work from outside the
+      # checkout -- to TestPyPI or PyPI.
+      - name: Smoke-test the wheel
+        run: |
+          uv venv --python 3.10 "$RUNNER_TEMP/smoke"
+          uv pip install --python "$RUNNER_TEMP/smoke/bin/python" --torch-backend cpu dist/*.whl
+          cd "$RUNNER_TEMP" && "$RUNNER_TEMP/smoke/bin/python" -I "$GITHUB_WORKSPACE/scripts/wheel_smoke.py"
 
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4

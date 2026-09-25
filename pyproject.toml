@@ -5,12 +5,22 @@ build-backend = "hatchling.build"
 [project]
 name = "xaytune"
 version = "0.6.0"
-description = "An opinionated LLM training and fine-tuning library"
+description = "Agent-native experiment control plane for model post-training and adaptation"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "szaher" },
+]
+keywords = [
+    "llm",
+    "fine-tuning",
+    "post-training",
+    "experiment-control",
+    "orchestration",
+    "control-plane",
+    "trl",
+    "evaluation",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -32,10 +42,15 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
     "rich>=13.0",
+    # Imported directly: the TRL worker checks installed releases against the
+    # ranges it supports (xaytune.workers.trl.verify_versions). 22 is the first
+    # release that parses only PEP 440 versions (no LegacyVersion fallback).
+    "packaging>=22",
 ]
 
 [project.urls]
 Homepage = "https://github.com/szaher/xaytune"
+Documentation = "https://szaher.github.io/xaytune/"
 Repository = "https://github.com/szaher/xaytune"
 Issues = "https://github.com/szaher/xaytune/issues"
 
@@ -81,6 +96,21 @@ dev = [
 
 [project.scripts]
 xaytune = "xaytune.cli:main"
+
+# The source distribution is an allow-list, not whatever sits in the working
+# tree: hatch otherwise packs every file git does not ignore, so a local venv,
+# an editor index or a stray database beside the repository would ship to
+# PyPI. uv builds the wheel *from* this sdist, and CI checks both
+# (scripts/check_sdist.py, scripts/wheel_smoke.py), which is what proves the
+# list is complete.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/xaytune",
+    "/pyproject.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

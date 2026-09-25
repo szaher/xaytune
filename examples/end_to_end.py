@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-xaytune — End-to-End Demo
-==========================
+xaytune — End-to-End Demo (legacy trainer API)
+===============================================
+
+This demo uses the legacy trainer API: the library in the ``0.6.0`` package,
+which remains supported. For the experiment control plane, see
+``examples/control_plane/``.
 
 A self-contained script that exercises every major xaytune feature using a tiny
 GPT-2 model (~500 KB). No GPU required — runs on CPU in under a minute.

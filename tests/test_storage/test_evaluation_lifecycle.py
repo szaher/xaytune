@@ -3,7 +3,8 @@
 ```text
 begin_evaluation_cycle        node EVALUATING (cycle n) + its runs    one commit
 create_evaluation_attempt_with_submit_intent      attempt + INTENDED   one commit
-record_evaluation_result      result + attempt + run SUCCEEDED + cursor   one commit
+hold_evaluation_completion    pending completion + cursor at it       one commit
+record_evaluation_result      result + attempt + run SUCCEEDED        one commit
 reconcile_evaluating_node     WAITING | DECIDING | STALLED, over cycle n only
 ```
 """

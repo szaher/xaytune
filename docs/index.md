@@ -1,83 +1,98 @@
 # Xaytune
 
-**An agent-native experiment control plane for model post-training and adaptation.**
+**Xaytune is an agent-native experiment control plane for model post-training and adaptation.**
 
-Xaytune is being built to coordinate training, evaluation, branching, recovery,
-interventions, experiment lineage, and agent-driven decisions across trainer and
-runtime backends. It answers: **what should this training experiment do next?**
+It records what an experiment is testing, compiles each candidate into a plan a
+trainer can run, submits that plan to a runtime, and keeps a durable record of
+everything that happened. That record is what lets a restarted controller pick
+up running work instead of losing it or starting it twice. It is built to
+answer: **what should this training experiment do next?**
 
 **Xaytune controls the experiment.** Trainer integrations compile training intent.
-Runtime integrations execute training. Infrastructure schedules and runs workloads.
+Runtime integrations execute it. Infrastructure schedules and runs the workloads.
 
-!!! info "Xaytune 2.0 is under active development"
-    As of **2026-09-22**, the domain and Band B persistence foundations are merged
-    on `main`. Band C, the compile/execute boundary, is current work. The
-    end-to-end experiment controller and runtime integrations are not available
-    yet. The existing v0.6.0 trainer API remains usable.
+!!! info "Pre-release"
+    The control plane is on `main` and is not in a release yet. The package on
+    PyPI, `0.6.0`, is the [legacy trainer API](getting-started.md), which remains
+    available. The first control-plane release is planned as `1.0.0a1`, once it
+    can train, evaluate *and* decide.
 
-## What Xaytune owns
+## Start here
 
-The target control plane owns experiment topology, candidate identity, scientific
-lineage, evaluation-driven decisions, interventions, semantic recovery, agent
-proposals, policy gates, budgets, and provenance. It delegates tensor execution,
-distributed training, worker management, scheduling, infrastructure admission,
-and low-level fault tolerance to trainer, runtime, and platform integrations.
+- [Control-plane getting started](control-plane/getting-started.md): install
+  from `main`, compile a candidate, train it, cancel it, and attach to it from
+  another process.
+- [Control-plane concepts](control-plane/concepts.md): candidates, compilers,
+  runtimes, the durable record, and what `wait()` means.
+- [Legacy trainer API](getting-started.md): `finetune`, `align`, the CLI and
+  pipelines from the `0.6.0` package.
 
-Planned integrations include Xaytune Native / TRL / torchtune / verl compilers;
-Local / Ray Train / Training Hub runtimes; and infrastructure or resilience
-providers such as TorchFT, Kubeflow Trainer, KubeRay, Kueue, and OpenShift AI.
-This describes the intended ecosystem, not currently available backend support.
+## What Xaytune owns, and what it delegates
 
-## Development status
+| Xaytune owns | Today |
+|---|---|
+| Experiment lifecycle and durable controller state | Available |
+| Candidate identity and scientific lineage | Available |
+| Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
+| Evaluation orchestration | Lifecycle available; built-in evaluators are next |
+| Decisions and branching | Planned |
+| Resilience policy and semantic recovery | Planned |
+| Policy gates, budgets and agent-driven control | Planned |
 
-### Completed foundation
+Xaytune delegates tensor execution, distributed training, worker management
+and second-scale worker recovery, scheduling, and infrastructure admission to
+trainer, runtime and platform integrations. The boundary is **experiment
+topology, not GPU count**.
 
-- Immutable core domain models and lifecycle state machines.
-- SQLite persistence, versioned migrations, and revision-based optimistic concurrency.
-- Atomic state + event + outbox transactions.
-- Durable `RuntimeOperation` journal and atomic attempt + submit-intent persistence.
-- Idempotent repository writes, unresolved-operation queries, and crash/concurrency tests.
-- Action substrate and persisted cancellation intent, lifecycle, and outcomes.
-- Experiment DAG, cycle prevention, lineage traversal, and candidate comparison.
+## Available today
 
-These are repository guarantees. Runtime submission, workload reattachment,
-external cancellation delivery, policy/budget enforcement, and daemon restart
-reconciliation are not implemented by this foundation alone.
+Status as of **2026-09-25**, after PR-013:
 
-### Current work: Band C — compile/execute boundary
+- **A durable record**: SQLite persistence, versioned migrations, atomic
+  state + event + outbox transactions, a `RuntimeOperation` journal that
+  records every external effect before it is attempted, and cancellation as a
+  recorded Action.
+- **Candidates with identities**: `CandidateSpec` and a versioned
+  `CandidateFingerprint`.
+- **Compilation**: `NativeCompiler` and `TRLCompiler` compile full-parameter
+  SFT into a serializable `TrainingExecutionSpec`, and refuse any candidate that
+  leaves a training-relevant value to a trainer default.
+- **A restart-safe local runtime**: `LocalRuntime`, with idempotent
+  `submit_or_get` and versioned telemetry.
+- **An embedded controller**: `EmbeddedControllerHost` and `ExperimentHandle`
+  (`submit`, `status`, `wait`, `cancel`, `events`, `attach`). A restarted
+  process adopts running work and never submits it twice.
+- **The durable evaluation lifecycle**: evaluation runs, attempts, results and
+  cycles, recorded and restart-safe. No evaluator is built in yet; you register
+  your own `Evaluator` until the next PR.
 
-Next are `CandidateSpec`, `TrainingSpec`, `CandidateFingerprint`,
-`RunHistoryFingerprint`, and `ArtifactLineageFingerprint`, then `TrainerCompiler`,
-`TrainingExecutionSpec`, and capability resolution. Restart-safe LocalRuntime,
-Native/TRL adapters, an embedded controller, and runtime-operation reconciliation
-follow within Band C.
+## Planned
 
-See the [core API](api/core.md) for the foundation and the
-[implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
-for the remaining work.
+Production evaluators (next), then the DecisionEngine, policy and budgets,
+checkpoints and semantic recovery, a rule-based planner and branching, daemon
+hosting, an LLM planner, and Ray / TorchFT / Training Hub integrations. None of
+these exist yet.
 
-## Target architecture
+## Architecture
 
-Solid green boxes show the implemented foundation; dashed boxes show planned
-components. The runtime feedback path is separate from the path that submits work.
+Solid green boxes are implemented; dashed boxes are planned. The runtime
+feedback path is separate from the path that submits work.
 
-![Xaytune target architecture: experiment control plane, trainer compilation, capability and resilience resolution, runtime backends, and infrastructure.](assets/architecture-overview.svg)
-
-The boundary is **experiment topology, not GPU count**. Xaytune may control a
-large distributed training job while its runtime handles second-scale worker
-recovery and distributed tensor execution.
+![Xaytune target architecture: experiment control plane, trainer compilation, capability resolution, runtime backends, and infrastructure, with implementation status after PR-013.](assets/architecture-overview.svg)
 
 The [architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/02-architecture.md)
-defines the contracts and dependency boundaries.
+defines the contracts and dependency boundaries, and the
+[implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
+the order the remaining work lands in.
 
 ## Roadmap
 
 | Architectural band | Status |
 |---|---|
-| Domain foundation | Complete; typed candidate/identity contracts continue in Band C |
+| A — domain foundation | Complete |
 | B — persistence and control records | Complete |
-| C — compile/execute, local runtime, runtime reconciliation | **Current** |
-| D — durable evaluation and decisioning | Planned |
+| C — compile/execute, local runtime, runtime reconciliation | Complete |
+| D — durable evaluation and decisioning | **Current**: lifecycle complete; evaluators and DecisionEngine next |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |
@@ -85,22 +100,13 @@ defines the contracts and dependency boundaries.
 | I — LLM planner | Planned |
 | J — Ray / TorchFT / Training Hub integrations | Planned |
 
-## Existing training capabilities
+## Legacy trainer API
 
-The existing PyTorch-based trainer stack remains available and will become the
-Native trainer implementation under the new architecture. Its capabilities
-include SFT, LoRA/QLoRA, DPO/GRPO alignment, evaluation, export, deterministic
-multi-stage pipelines, YAML configuration, callbacks, and logging integrations.
-Core SFT and DPO paths are tested and functional.
-
-Additional alignment methods, FSDP, Studio, and data preparation remain
-experimental. **DeepSpeed is experimental and partial:** optimizer/scheduler
-and checkpoint ownership are still tracked by
-[TASK-029](https://github.com/szaher/xaytune/blob/main/implementation-plan/backlog.md#task-029-is-still-open).
-The existing trainer's evaluation and pipeline features are separate from the
-planned durable evaluation coordinator and adaptive experiment controller.
-
-## Quick example — existing trainer API
+Xaytune began as an opinionated PyTorch training library. That library is what
+PyPI's `0.6.0` contains, and it stays available: SFT with LoRA/QLoRA, DPO and
+GRPO alignment, evaluation, export, multi-stage pipelines, YAML configuration,
+callbacks and logging integrations. Its trainer is what `NativeCompiler` runs,
+behind the compile/execute boundary.
 
 ```python
 import xaytune
@@ -114,20 +120,12 @@ state = xaytune.finetune(
 )
 ```
 
-Or use the CLI:
+Additional alignment methods, FSDP, Studio and data preparation are
+experimental. **DeepSpeed is experimental and partial:** optimizer/scheduler
+and checkpoint ownership are still tracked by
+[TASK-029](https://github.com/szaher/xaytune/blob/main/implementation-plan/backlog.md#task-029-is-still-open).
+The trainer's own `evaluate()` and pipeline evaluation stages are separate from
+the control plane's durable evaluation lifecycle.
 
-```bash
-xaytune train --config configs/examples/lora_finetune.yaml
-```
-
-Installation and these examples use the existing training package. They do not
-provide the planned end-to-end 2.0 experiment API.
-
-## Next steps
-
-- [Getting Started](getting-started.md) — install and run the existing trainer.
-- [Recipes](recipes/index.md) — fine-tuning, pre-training, and alignment.
-- [API Reference](api/index.md) — current API documentation.
-- [CLI Reference](cli.md) — current commands.
-- [Examples](examples.md) — notebooks and sample configs.
-- [Control-plane specification](https://github.com/szaher/xaytune/tree/main/xaytune-training-harness-spec) — target architecture and implementation contracts.
+See [Getting Started](getting-started.md), [Recipes](recipes/index.md),
+[CLI Reference](cli.md) and [Examples](examples.md).

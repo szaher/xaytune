@@ -22,8 +22,8 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 > **Pre-release.** The control plane described here is on `main` and is not in
 > a release yet. The package on PyPI, `0.6.0`, is the trainer library described
 > under [Legacy trainer API](#legacy-trainer-api), which remains available. The
-> first release of the control plane is planned as `1.0.0a1`, once it can
-> train, evaluate *and* decide.
+> first release of the control plane is planned as `1.0.0a1`: declare an
+> experiment, train, evaluate, and make a durable, deterministic decision.
 
 ## What Xaytune owns, and what it delegates
 
@@ -33,7 +33,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Candidate identity and scientific lineage | Available |
 | Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
 | Evaluation orchestration | Available: the built-in native evaluator; lm-eval planned |
-| Decisions and branching | Planned |
+| Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
 | Policy gates, budgets and agent-driven control | Planned |
 
@@ -50,7 +50,7 @@ distributed tensor execution and for recovering individual workers.
 
 ## Available today
 
-Status as of **2026-09-25**, after PR-014.
+Status as of **2026-09-25**, after PR-015.
 
 - **A durable record.** SQLite persistence with versioned migrations and
   optimistic concurrency. Every state change commits in one transaction with
@@ -82,6 +82,16 @@ Status as of **2026-09-25**, after PR-014.
   next-token loss, perplexity and token accuracy on a local held-out file
   pinned by its content digest. An evaluation it cannot run exactly as
   declared is refused at submission, before anything trains.
+- **Durable decisions.** Once a candidate is evaluated, a decision engine
+  decides it from the record alone: the experiment's objective and that
+  evaluation's results. The built-in engine compares the recorded values with
+  the objective's target and constraints. A target met gives a `COMPLETED`
+  candidate and a `SUCCEEDED` experiment, which names it as its best
+  candidate. A target missed gives `REJECTED` and `FAILED`. A violated
+  constraint rejects the candidate but leaves the experiment open for
+  another. The decision is recorded, with the evidence and a fingerprint of
+  its inputs, in the same commit that applies it. A candidate it cannot decide (no target, a missing metric) stays
+  `DECIDING`, with the reason recorded; nothing is guessed.
 - **A reproducible environment.** `uv.lock` pins every dependency, and a CI job
   tests the locked environment. The TRL worker refuses any TRL or Transformers
   release it has not been classified against.
@@ -94,7 +104,7 @@ from xaytune.experiment import EmbeddedControllerHost
 host = EmbeddedControllerHost("xaytune-workdir/state.db")
 handle = await host.submit(spec)        # spec: an ExperimentSpec
 result = await handle.wait()            # quiescent: every piece of work is settled
-print(result.status, result.next_stage) # ACTIVE, "evaluation" after training alone
+print(result.status, result.next_stage) # SUCCEEDED, None once evaluated and decided
 ```
 
 `wait()` returns when the controller has nothing left it can run, which is not
@@ -107,14 +117,14 @@ run next, if any. See
 In the order the [implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
 builds them:
 
-1. **DecisionEngine** (next): turning evaluation results into a recorded
-   decision.
-2. **Policy and budgets** over the Action substrate.
-3. **Checkpoints, semantic recovery and interventions.**
-4. **A rule-based planner and experiment branching.**
-5. **Daemon hosting** and whole-controller restart.
-6. **An LLM planner** proposing candidates under policy.
-7. **Ray, TorchFT and Training Hub** integrations.
+1. **Policy and budgets** over the Action substrate.
+2. **Checkpoints, semantic recovery and interventions.**
+3. **A rule-based planner and experiment branching**, and with it decisions
+   that compare candidates -- promotion, and noise-aware comparison across
+   replicates -- which one candidate cannot support.
+4. **Daemon hosting** and whole-controller restart.
+5. **An LLM planner** proposing candidates under policy.
+6. **Ray, TorchFT and Training Hub** integrations.
 
 Alongside them, an **lm-eval evaluator** is a planned integration, with each
 task's definition and dataset pinned to immutable versions when the
@@ -130,7 +140,7 @@ resolution and execution separate. Solid green boxes are implemented; dashed
 boxes are planned. The runtime feedback path is separate from the path that
 submits work.
 
-![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure, with implementation status after PR-014.](https://szaher.github.io/xaytune/assets/architecture-overview.svg)
+![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure, with implementation status after PR-015.](https://szaher.github.io/xaytune/assets/architecture-overview.svg)
 
 See the [architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/02-architecture.md)
 for protocol and dependency boundaries.
@@ -165,7 +175,7 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; DecisionEngine next |
+| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval planned |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

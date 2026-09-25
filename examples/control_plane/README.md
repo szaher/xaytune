@@ -14,7 +14,7 @@ uv sync --locked --extra trl     # for --compiler trl; or: pip install -e ".[trl
 | `02_train.py` | Submit, follow events, wait, and read the result; `--compiler native` or `trl` | A local model and dataset |
 | `03_cancel.py` | Cancel while training; the record says `CANCELLED` only once the workload has stopped | As above |
 | `04_restart_and_attach.py` | `start` submits and exits while training continues; `attach` adopts it from a new process | As above |
-| `05_train_and_evaluate.py` | Train, then evaluate the trained model with the built-in `native` evaluator; the candidate reaches `DECIDING` | As above, plus a held-out JSONL file |
+| `05_train_and_evaluate.py` | Train, evaluate with the built-in `native` evaluator, and decide against a loss `--target`: the experiment ends `SUCCEEDED` or `FAILED` | As above, plus a held-out JSONL file |
 
 `sft_experiment.py` is the experiment 02 to 05 share.
 

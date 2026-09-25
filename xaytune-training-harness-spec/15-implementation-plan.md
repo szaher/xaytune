@@ -628,7 +628,60 @@ that cannot honour a seeded contract is refused.
 
 ### PR-015 — DecisionEngine
 
-Implement deterministic objective/constraint decisions.
+Implement deterministic objective/constraint decisions. As built:
+
+- **`DecisionContext` → `DecisionProposal` → `Decision`**
+  (`xaytune.core.domain.decision`).
+  - The context is assembled from durable state: the experiment's objective
+    and the node's **current-cycle** results.
+  - The engine returns a proposal: the outcome, the reason, the evidence
+    (each comparison, with its value, threshold, result and evaluator), the
+    engine name and version, the result ids, and an **input fingerprint**.
+  - The repository records it as an immutable `Decision`, adding an id, a
+    time and an actor.
+  - The fingerprint is `decision_input_identity_v1`, an explicit versioned
+    projection of what is evidence: the objective, and each result's id, run,
+    evaluation fingerprint, subject id and digest, and each metric's name,
+    value, slice, evaluator and version, seed, sample count, confidence
+    interval and standard error. It is canonically sorted, and excludes
+    timestamps, reports and metadata.
+- **`DecisionEngine`** (`xaytune.decision`), synchronous and pure: nothing but
+  its context is read and nothing is minted, so the same context gives a
+  byte-identical proposal. The spec sketch in 10-evaluation-and-decisioning §8
+  is `async`; purity made that unnecessary.
+- **`ThresholdDecisionEngine`, the v1 rules**:
+  - a missing objective or constraint metric → undecidable;
+  - any constraint violated, under all six operators applied exactly → `REJECT`;
+  - no target → undecidable;
+  - target met (maximize ≥, minimize ≤) → `STOP_SUCCEEDED`;
+  - otherwise `STOP_FAILED`.
+
+  It compares point estimates only, reads no `sample_count`, and considers
+  only unsliced metrics; a metric reported twice in a cycle is ambiguous and
+  undecidable. The outcome vocabulary is these three; the rest of §9 arrives
+  with what can act on it.
+- **Persistence, migration 007.** `record_decision` writes the decision,
+  moves the node with its id, and applies the outcome to the experiment, with
+  events, in **one commit**:
+  - `STOP_SUCCEEDED`: node `COMPLETED`, and an `ACTIVE` experiment
+    `SUCCEEDED` with `best_node_id` set;
+  - `STOP_FAILED`: node `REJECTED`, and the experiment `FAILED`;
+  - `REJECT`: node `REJECTED`, and the experiment **unchanged**. It judges the
+    candidate, not the experiment, so the planner of band G can propose
+    another without undoing a persistence rule. `next_stage` is then
+    `"planning"`.
+
+  It is idempotent per cycle: the same proposal returns the recorded
+  decision, and a different one raises `DecisionConflictError`.
+
+  The decision must name exactly the node's current-cycle results
+  (`ProvenanceError`). The database enforces one decision per node per cycle,
+  refuses a decision filed under another experiment, and refuses edits.
+  `defer_decision` records `DecisionDeferred` once per cycle for an
+  undecidable node, which stays `DECIDING`.
+- **Host.** Deciding follows reconciliation into `DECIDING`, and `attach()`
+  decides a node a crash left there. A crash point, `deciding`, proves a
+  restart decides once, and a decided experiment is never decided again.
 
 ### PR-016 — BudgetLedger
 

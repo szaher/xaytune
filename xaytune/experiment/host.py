@@ -27,11 +27,11 @@ same time* would both adopt it -- no second workload, since adoption never
 issues one, but two observers whose writes would conflict. Leases that make
 one host the owner belong to the daemon host, not to this one.
 
-The controller loop only turns observations into transitions. It does not
-decide scientific outcomes. A successful run leaves the node ``ACTIVE`` when
-no evaluation is configured, because the next thing that can happen to it is
-evaluation, and the experiment ``ACTIVE``, because ending an experiment is a
-decision (implementation plan, PR-012).
+The controller loop turns observations into transitions, and leaves
+scientific outcomes to the decision engine. A successful run leaves the node
+``ACTIVE`` when no evaluation is configured, because the next thing that can
+happen to it is evaluation, and the experiment ``ACTIVE``, because ending an
+experiment is a decision (implementation plan, PR-012).
 
 **Evaluation, when the spec asks for it** (ADR-015, PR-013):
 
@@ -47,9 +47,13 @@ training run SUCCEEDED
    └── node EVALUATING → DECIDING                          reconciled, not assumed
 ```
 
-It reaches ``DECIDING`` and stops: deciding is PR-015's. An evaluation in
-flight is adopted after a restart exactly as training is, through the same
-reconciliation.
+**Then the decision** (PR-015): the context is assembled from the record --
+the objective and the cycle's results -- and the engine's decision is
+recorded with what it causes, node ``COMPLETED`` / ``REJECTED`` and the
+experiment ``SUCCEEDED`` / ``FAILED``, in one commit. An undecidable cycle
+stays ``DECIDING``, with a ``DecisionDeferred`` event. An evaluation in
+flight is adopted after a restart exactly as training is; a node left in
+``DECIDING`` by a crash is decided when the experiment is attached.
 """
 
 from __future__ import annotations
@@ -65,6 +69,7 @@ from xaytune.compilation import (
     TrainerCompiler,
     UnsupportedCandidateError,
 )
+from xaytune.core.domain.decision import DecisionContext
 from xaytune.core.domain.evaluation import (
     EvaluationAttempt,
     EvaluationResult,
@@ -115,6 +120,7 @@ from xaytune.core.telemetry import (
     TrainingStartedPayload,
     WorkerReadyPayload,
 )
+from xaytune.decision import DecisionEngine, ThresholdDecisionEngine, UndecidableError
 from xaytune.evaluation import EvaluationContext, Evaluator, UnsupportedEvaluationError
 from xaytune.experiment.handle import (
     EvaluationOutcome,
@@ -264,6 +270,8 @@ class EmbeddedControllerHost:
         evaluators: Evaluator factories by name, the registry a recorded
             ``EvaluatorSpec`` resolves through. Defaults to the built-in
             ``native``.
+        decision_engine: What decides an evaluated candidate. Defaults to
+            :class:`~xaytune.decision.ThresholdDecisionEngine`.
     """
 
     def __init__(
@@ -273,6 +281,7 @@ class EmbeddedControllerHost:
         compilers: Mapping[str, Callable[[], TrainerCompiler]] | None = None,
         runtimes: Mapping[str, Callable[[Mapping[str, Any]], RuntimeBackend]] | None = None,
         evaluators: Mapping[str, Callable[[], Evaluator]] | None = None,
+        decision_engine: DecisionEngine | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -287,6 +296,9 @@ class EmbeddedControllerHost:
         self._compilers = dict(_default_compilers() if compilers is None else compilers)
         self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
         self._evaluators = dict(_default_evaluators() if evaluators is None else evaluators)
+        self._decision_engine = (
+            ThresholdDecisionEngine() if decision_engine is None else decision_engine
+        )
         self._runtimes: dict[str, RuntimeBackend] = {}
         # One observer per attempt, keyed by experiment then attempt: an
         # experiment can have several live attempts, and each must stay
@@ -417,6 +429,7 @@ class EmbeddedControllerHost:
         nodes: list[NodeOutcome] = []
         settled = True
         trained = deciding = evaluating = False
+        live = False  # a candidate not yet COMPLETED, REJECTED, CANCELLED or FAILED
         for node in aggregates.nodes_for_experiment(str(experiment_id)):
             runs: list[RunOutcome] = []
             for run in aggregates.runs_for_node(str(node.id)):
@@ -451,6 +464,7 @@ class EmbeddedControllerHost:
                     )
                 )
             deciding = deciding or node.status is ExperimentNodeStatus.DECIDING
+            live = live or not node.is_terminal
             nodes.append(
                 NodeOutcome(
                     node_id=node.id,
@@ -474,6 +488,15 @@ class EmbeddedControllerHost:
             next_stage = "decision"
         elif trained or evaluating:
             next_stage = "evaluation"
+        elif (
+            nodes
+            and not live
+            and any(node.status is ExperimentNodeStatus.REJECTED for node in nodes)
+        ):
+            # Every candidate is settled and none ended the experiment: a
+            # rejected candidate leaves it open for another. Proposing one is
+            # a planner's work, which does not exist yet.
+            next_stage = "planning"
         else:
             # Training failed or was cancelled, or an evaluation ended without
             # a result and the node's cycle stalled.
@@ -737,6 +760,12 @@ class EmbeddedControllerHost:
         if node.status is ExperimentNodeStatus.ACTIVE:
             # Trained, and the cycle never began: begin it now.
             await self._continue_to_evaluation(experiment.id, node.id)
+            return
+        if node.status is ExperimentNodeStatus.DECIDING:
+            # Evaluated, and the crash came before -- or after -- the decision.
+            # Deciding again is safe: a cycle already decided is not decided
+            # twice.
+            self._decide(node.id)
             return
         if node.status is not ExperimentNodeStatus.EVALUATING:
             return
@@ -1248,7 +1277,59 @@ class EmbeddedControllerHost:
             return None
         if self._cancelling(node.experiment_id):
             return None
-        return self.repository.reconcile_evaluating_node(node.id, actor=_ACTOR)
+        reconciled = self.repository.reconcile_evaluating_node(node.id, actor=_ACTOR)
+        if reconciled is EvaluationReconciliation.DECIDING:
+            self._decide(node.id)
+        return reconciled
+
+    def _decide(self, node_id: ExperimentNodeId) -> None:
+        """Decide a node in ``DECIDING`` from the record, and apply it (PR-015).
+
+        The context is assembled from durable state alone -- the experiment's
+        objective and the results of the node's current evaluation cycle --
+        and the engine sees nothing else. What it decides is recorded and
+        applied in one commit. A cycle decided before, by a controller that
+        then died, is recognised by the repository and not decided twice.
+
+        An engine that cannot decide leaves the node ``DECIDING``, with a
+        ``DecisionDeferred`` event saying why. Skipped while a cancellation
+        is in flight: the experiment is ending, and a decision would race it.
+        """
+        aggregates = self.repository.aggregates
+        node = aggregates.load_node(str(node_id))
+        if node.status is not ExperimentNodeStatus.DECIDING:
+            return
+        experiment = aggregates.load_experiment(str(node.experiment_id))
+        if experiment.is_terminal or self._cancelling(experiment.id):
+            return
+        results = tuple(
+            result
+            for run in aggregates.evaluation_runs_for_node(
+                str(node.id), cycle=node.evaluation_cycle
+            )
+            if (result := aggregates.evaluation_result_for_run(str(run.id))) is not None
+        )
+        context = DecisionContext(
+            experiment_id=experiment.id,
+            node_id=node.id,
+            evaluation_cycle=node.evaluation_cycle,
+            objective=experiment.objective,
+            results=results,
+        )
+        engine = self._decision_engine
+        try:
+            proposal = engine.decide(context)
+        except UndecidableError as undecidable:
+            self.repository.defer_decision(
+                node.id,
+                engine=f"{engine.name} {engine.version}",
+                reasons=undecidable.reasons,
+                actor=_ACTOR,
+            )
+            return
+        self.repository.record_decision(
+            proposal, expected_node_revision=node.revision, actor=_ACTOR
+        )
 
     def _cancelling(self, experiment_id: ExperimentId) -> bool:
         return any(

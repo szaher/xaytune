@@ -143,8 +143,8 @@ class EvaluationResult(FrozenDomainModel):
 
 There is no `status`: a result exists only for a run that `SUCCEEDED`, written
 in the same commit, so a result is never pending or failed. There are no
-`constraints` yet either; constraint evaluation arrives with the DecisionEngine
-(PR-015). Every provenance field must agree with the run -- node, fingerprint,
+`constraints` either: constraints belong to the experiment's objective, and
+are evaluated by the DecisionEngine (PR-015). Every provenance field must agree with the run -- node, fingerprint,
 subject (identity and digest), each metric's evaluator, evaluator version and
 seed, and each report's producer -- and the repository refuses a result that
 does not. The database independently refuses the column-level subset: a result
@@ -193,6 +193,12 @@ remote. `xaytune.evaluation` holds the contract.
 - CustomPythonEvaluator
 
 ## 8. Decision engine
+
+> **As built (PR-015):** `decide()` is synchronous and pure, and the first
+> engine (`ThresholdDecisionEngine`) uses only the objective and the current
+> cycle's metric results, comparing point estimates with the target and
+> constraints. The other inputs below arrive with the machinery that
+> produces them. See `15-implementation-plan.md` §PR-015.
 
 ```python
 class DecisionEngine:

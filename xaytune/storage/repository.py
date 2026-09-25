@@ -43,6 +43,7 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.decision import Decision
 from xaytune.core.domain.evaluation import EvaluationAttempt, EvaluationResult, EvaluationRun
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.run import Run, RunAttempt
@@ -191,6 +192,22 @@ class AggregateStore:
             (node_id,),
         ).fetchall()
         return tuple(EvaluationResult.model_validate_json(row["payload_json"]) for row in rows)
+
+    def decision_for_cycle(self, node_id: str, evaluation_cycle: int) -> Decision | None:
+        """The decision made for the node's evaluation round, if one was made."""
+        row = self._connection.execute(
+            "SELECT payload_json FROM decisions WHERE node_id = ? AND evaluation_cycle = ?",
+            (node_id, evaluation_cycle),
+        ).fetchone()
+        return None if row is None else Decision.model_validate_json(row["payload_json"])
+
+    def decisions_for_node(self, node_id: str) -> tuple[Decision, ...]:
+        """Every decision made about the node, one per cycle, in cycle order."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM decisions WHERE node_id = ? ORDER BY evaluation_cycle",
+            (node_id,),
+        ).fetchall()
+        return tuple(Decision.model_validate_json(row["payload_json"]) for row in rows)
 
     def pending_completion(
         self, attempt_id: str
@@ -390,6 +407,27 @@ class AggregateStore:
                     separators=(",", ":"),
                 ),
                 _stamp(result.created_at),
+            ),
+        )
+
+    def _insert_decision(self, decision: Decision) -> None:
+        """Write a decision. There is no update: a decision is a historical fact."""
+        self._require_transaction()
+        self._connection.execute(
+            "INSERT INTO decisions (id, experiment_id, node_id, evaluation_cycle, outcome, "
+            "input_fingerprint, engine_name, engine_version, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(decision.id),
+                str(decision.experiment_id),
+                str(decision.node_id),
+                decision.evaluation_cycle,
+                decision.outcome.value,
+                decision.input_fingerprint,
+                decision.engine_name,
+                decision.engine_version,
+                json.dumps(decision.model_dump(mode="json"), sort_keys=True, separators=(",", ":")),
+                _stamp(decision.created_at),
             ),
         )
 

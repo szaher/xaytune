@@ -480,3 +480,36 @@ untyped checkpoint events must not be upgraded by inventing missing state.
 LocalRuntime constructs the typed shared worker-ready/incident bodies; it still does not report training completion from
 process exit. Stream ownership, replay, sequencing and reconciliation rules above
 are unchanged.
+
+### `xaytune.telemetry/v1alpha3` — evaluation results travel inline (PR-013)
+
+`v1alpha3` makes an evaluation's result part of the stream. Its
+`EvaluationCompleted` **must** carry `metrics: tuple[MetricResult, ...]` -- the
+final, decision-grade result set -- with `result_ref` still pointing at the full
+report. So the controller records a result without reading the worker's files,
+and a remote runtime needs no storage shared with the controller. Streamed
+`MetricObserved` stays observation: a final result is never reconstructed from
+progress telemetry.
+
+The change is a version, not a silent widening of `v1alpha2`: domain models
+forbid unknown fields, so a `v1alpha2` reader would reject the new field, and
+the same version with a different payload would not be the same protocol.
+
+```text
+v1alpha2   training telemetry                  yes
+           EvaluationCompleted without metrics yes (read for recovery)
+           EvaluationCompleted with metrics    refused
+v1alpha3   EvaluationCompleted with metrics    required
+```
+
+- **Both are read.** A training workload started before an upgrade still
+  writes `v1alpha2`, and a new controller still adopts it. The envelope accepts
+  either version and enforces the pairing above; `TrainingExecutionSpec` stays
+  on `v1alpha2` and `EvaluationExecutionSpec` requires `v1alpha3`.
+- **The launcher writes what the plan declares**, from
+  `plan.spec.telemetry.protocol_version`, not a constant; LocalRuntime refuses a
+  plan asking for any other version at submission.
+- **A completion is not a success.** The controller holds it until the runtime
+  reports the workload `succeeded`, then records the result, the attempt's and
+  run's `SUCCEEDED` and the cursor at the completion in one commit. Exit 0
+  with no completion is a failed evaluation, not an empty success.

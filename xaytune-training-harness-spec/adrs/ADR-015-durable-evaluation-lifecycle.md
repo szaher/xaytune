@@ -259,3 +259,28 @@ silent-stall failure into a detected one.
    targeting the `evaluation-attempt` (ADR-013 §6a), committed with its cancel
    operation as ADR-005 §5 requires — evaluation cancellation uses the same path
    as training, not a parallel one.
+
+## Implementation notes (PR-013)
+
+- **"Required runs" are the runs of the node's current evaluation cycle.** A
+  node can evaluate, decide, return to `ACTIVE` and evaluate again, so §5 would
+  be unsound over all of a node's runs: the first round's successful results
+  would satisfy the second. `ExperimentNode.evaluation_cycle` advances in the
+  same write as the transition into `EVALUATING`, every `EvaluationRun` records
+  its cycle, and the cycle's runs are written in that same commit
+  (`begin_evaluation_cycle`). Reconciliation reads only the current cycle.
+- **A stall is recorded, not raised.** `EvaluationStalled` is an event on the
+  node, once per cycle; the node stays `EVALUATING`. What to do about it is a
+  decision.
+- **Success needs the result.** `EvaluationRun` and `EvaluationAttempt` reach
+  `SUCCEEDED` only through `record_evaluation_result`, together with the
+  result; no other path can write it. Results are rows of their own
+  (`evaluation_results`, migration 006), one per run, immutable, and a trigger
+  refuses one whose node, fingerprint or subject disagrees with its run.
+- **Implemented:** AC-1, 2, 3, 4b, 4c, 5, 6, 7 -- and AC-4's declaration half:
+  every evaluator declares its `EvaluatorDeterminism`, recorded with the bound
+  spec. **Not yet:** the reuse lookup itself (AC-4, 4a). The identity it keys
+  on is indexed (`idx_evaluation_runs_reuse`); the lookup and
+  `EvaluationReusePolicy` come with the planner, which is what would ask for a
+  replicate.
+

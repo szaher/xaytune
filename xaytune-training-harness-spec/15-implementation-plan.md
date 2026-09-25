@@ -531,6 +531,38 @@ Implement:
   instant between the run reaching `SUCCEEDED` and the node advancing. The
   middle case is what repairs the lag instead of reporting it.
 
+As built:
+
+- **The public trigger is `ExperimentSpec.evaluation`** (optional, one
+  evaluator, bound by the host to the evaluator's version and declared
+  determinism). `None` leaves a trained node `ACTIVE` with
+  `next_stage="evaluation"`, as before. Set, the host evaluates the trained
+  model on the experiment's runtime once training succeeds, and the node
+  reaches `DECIDING` with `next_stage="decision"` -- advice only; deciding is
+  PR-015. The evaluation is orchestration, never candidate identity: it does
+  not enter the `CandidateSpec`, its fingerprint or its compilation. There is
+  no `handle.evaluate()`: coordinating that is the controller's job.
+- **Evaluation's own wire type.** `EvaluationExecutionSpec` is a sibling of
+  `TrainingExecutionSpec`, sharing only transport fields; `ExecutionSpec` is the
+  wire-only union, discriminated on `api_version`, and a plan refuses a spec
+  whose workload is not its target's. The training spec's field set is
+  unchanged, so no recorded training `request_digest` moves (pinned by a test).
+  LocalRuntime stays workload-blind.
+- **Results travel inline, under `xaytune.telemetry/v1alpha3`** (ADR-014): the
+  completion carries the final `MetricResult`s; success needs that completion
+  *and* the runtime's `succeeded`, recorded with the cursor in one commit.
+- **Cycles** (ADR-015 implementation notes): required runs are the current
+  cycle's, so an earlier round never satisfies a later one.
+- **One reconciliation, two workloads.** Issue, adoption and restart
+  reconciliation are shared with training; the evaluator, like the compiler,
+  is resolved and version-checked only where a request is rebuilt. `attach()`
+  also carries forward what a crash between two commits leaves behind.
+- **The `Evaluator` contract** (`xaytune.evaluation`: descriptor, determinism,
+  `prepare()`) with no built-in evaluators. Tests use a scripted evaluator whose
+  worker is a real process.
+- **Not in PR-013:** evaluation reuse lookups (ADR-015 AC-4, 4a) and choosing
+  a different runtime for evaluation.
+
 ### PR-014 — existing eval adapter
 
 Wrap current metrics/lm-eval.

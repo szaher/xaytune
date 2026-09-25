@@ -1,9 +1,11 @@
-"""xaytune — An opinionated LLM training and fine-tuning library."""
+"""xaytune — an agent-native experiment control plane for model post-training and adaptation."""
 
 from __future__ import annotations
 
 import importlib
 from typing import TYPE_CHECKING, Any
+
+from xaytune._version import __version__
 
 # `pipeline` is the one public name that collides with a submodule
 # (xaytune/pipeline.py). Importing that submodule anywhere makes Python set it
@@ -12,8 +14,6 @@ from typing import TYPE_CHECKING, Any
 # keeps `xaytune.pipeline` pointing at the callable regardless of import order,
 # as it did before. The module is pydantic-only, so this pulls in no ML stack.
 from xaytune.pipeline import run_pipeline as pipeline
-
-__version__ = "0.6.0"
 
 # Public names are resolved lazily (PEP 562) so that importing a submodule such
 # as ``xaytune.core`` does not drag in torch/transformers through the recipes.

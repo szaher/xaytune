@@ -8,7 +8,7 @@ It is deliberately free of ML and runtime dependencies — no torch, transformer
 import xaytune.core as core  # no torch required
 ```
 
-This is a foundation package. The controller, persistence, runtimes, trainer compilers and planners build on it in later phases; none of them are here yet.
+This is the foundation the rest of the control plane builds on: persistence (`xaytune.storage`), the trainer compilers (`xaytune.compilation`), the local runtime (`xaytune.runtimes`), the evaluation contract (`xaytune.evaluation`) and the embedded controller (`xaytune.experiment`) all depend on it, and it depends on none of them. For how those fit together, see [Control-plane concepts](../control-plane/concepts.md).
 
 ## Identifiers
 
@@ -34,10 +34,13 @@ The body after the prefix is ULID-shaped: 10 Crockford base32 characters of mill
 | `ActionId` | `act_` |
 | `IncidentId` | `inc_` |
 | `EvaluationId` | `eval_` |
+| `EvaluationRunId` | `evalrun_` |
+| `EvaluationAttemptId` | `evalattempt_` |
 | `ArtifactId` | `artifact_` |
 | `CheckpointId` | `ckpt_` |
 | `DecisionId` | `decision_` |
 | `EventId` | `event_` |
+| `OperationId` | `op_` |
 
 `created_at_ms` recovers the embedded timestamp:
 

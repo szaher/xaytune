@@ -37,7 +37,10 @@ theme:
 
 nav:
   - Home: index.md
-  - Getting Started: getting-started.md
+  - Control Plane:
+      - Getting Started: control-plane/getting-started.md
+      - Concepts: control-plane/concepts.md
+  - Getting Started (legacy trainer): getting-started.md
   - Recipes:
       - Overview: recipes/index.md
       - Fine-tuning: recipes/finetuning.md

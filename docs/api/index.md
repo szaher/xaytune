@@ -1,8 +1,25 @@
 # API Reference
 
-This section documents xaytune's Python API. The library exposes four top-level functions and a supporting ecosystem of configs, callbacks, evaluation, and export utilities.
+This section documents xaytune's Python API.
 
-## Top-Level Functions
+## Control plane
+
+| Module | Description |
+|--------|-------------|
+| `xaytune.core` | Domain types: identifiers, aggregates, state machines, `CandidateSpec`, execution specs ([reference](core.md)) |
+| `xaytune.experiment` | `EmbeddedControllerHost`, `ExperimentHandle`, `ExperimentSpec` |
+| `xaytune.compilation` | `TrainerCompiler`, `NativeCompiler`, `TRLCompiler` |
+| `xaytune.evaluation` | The `Evaluator` contract |
+| `xaytune.runtimes` | `RuntimeBackend` and `LocalRuntime` |
+| `xaytune.storage` | SQLite persistence, migrations, `ControlPlaneRepository` |
+
+See [Control-plane concepts](../control-plane/concepts.md) for how they fit together.
+
+## Legacy trainer API
+
+The library exposes four top-level functions and a supporting ecosystem of configs, callbacks, evaluation, and export utilities.
+
+### Top-Level Functions
 
 These are the primary entry points, importable directly from `xaytune`:
 
@@ -15,7 +32,7 @@ xaytune.align(...)      # Align a model with human preferences
 xaytune.evaluate(...)   # Evaluate a model on metrics
 ```
 
-## Module Overview
+### Module Overview
 
 | Module | Description |
 |--------|-------------|
@@ -35,7 +52,7 @@ xaytune.evaluate(...)   # Evaluate a model on metrics
 | `xaytune.recipes.align.rewards` | `reward_registry` and reward functions |
 | `xaytune.utils.registry` | Generic `Registry` class |
 
-## Registries
+### Registries
 
 xaytune uses a registry pattern to make components extensible. Each registry maps string names to callable objects:
 
@@ -47,7 +64,7 @@ xaytune uses a registry pattern to make components extensible. Each registry map
 | `model_registry` | `xaytune.models.registry` | `@model_registry.register("name")` | Model loaders |
 | `recipe_registry` | `xaytune.recipes` | `@recipe_registry.register("name")` | Training recipes |
 
-### Registry API
+#### Registry API
 
 All registries share the same interface:
 
@@ -71,7 +88,7 @@ registry.has("key")  # True
 registry.list()  # ['key']
 ```
 
-## Detailed References
+### Detailed References
 
 - [Config](config.md) -- all Pydantic config models and their fields
 - [Callbacks](callbacks.md) -- event system and `TrainState`

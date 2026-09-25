@@ -4,7 +4,8 @@ from xaytune import export
 
 class TestTopLevelAPI:
     def test_version(self):
-        assert xaytune.__version__ == "0.6.0"
+        # Checked against pyproject.toml in tests/test_release_version.py.
+        assert isinstance(xaytune.__version__, str) and xaytune.__version__
 
     def test_finetune_importable(self):
         assert callable(xaytune.finetune)

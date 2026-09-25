@@ -15,7 +15,8 @@ reconcile_cancellation(...)                 Action settled from observed state
 
 begin_evaluation_cycle(...)                 node EVALUATING + its runs    ADR-015
 create_evaluation_attempt_with_submit_intent(...)
-record_evaluation_result(...)               result + attempt + run + cursor
+hold_evaluation_completion(...)             pending completion + cursor
+record_evaluation_result(...)               result + attempt + run SUCCEEDED
 reconcile_evaluating_node(...)              wait / DECIDING / EvaluationStalled
 ```
 

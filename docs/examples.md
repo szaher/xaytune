@@ -1,8 +1,25 @@
 # Examples
 
-xaytune includes Jupyter notebooks and YAML config files to help you get started quickly.
+## Control plane
 
-## Jupyter Notebooks
+[`examples/control_plane/`](https://github.com/szaher/xaytune/tree/main/examples/control_plane)
+uses the experiment control plane on `main`. See
+[Control-plane getting started](control-plane/getting-started.md) for a walkthrough.
+
+| Script | What it shows | Needs |
+|--------|---------------|-------|
+| [01_compile_a_candidate.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/01_compile_a_candidate.py) | Describe a candidate, see it refused with reasons, compile it into a serializable plan | Nothing: no model, no GPU |
+| [02_train.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/02_train.py) | Submit, follow events, wait, read the result (`--compiler native` or `trl`) | A local model and JSONL dataset |
+| [03_cancel.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/03_cancel.py) | Cancel a running experiment | As above |
+| [04_restart_and_attach.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/04_restart_and_attach.py) | Submit, end the process, adopt the running workload from another | As above |
+
+## Legacy trainer API
+
+The notebooks and configs below use the **legacy trainer API**, the
+`finetune()` / `align()` / CLI library in the `0.6.0` package. They remain
+supported.
+
+### Jupyter Notebooks
 
 The `examples/` directory contains step-by-step notebooks:
 
@@ -20,11 +37,11 @@ The `examples/` directory contains step-by-step notebooks:
 | [10_model_merging.ipynb](https://github.com/szaher/xaytune/blob/main/examples/10_model_merging.ipynb) | Model merging with Linear, SLERP, TIES, and DARE algorithms |
 | [11_agent_finetuning.ipynb](https://github.com/szaher/xaytune/blob/main/examples/11_agent_finetuning.ipynb) | Agent fine-tuning -- data formats, loss masking, rewards, evaluation, multi-agent |
 
-## Example Configs
+### Example Configs
 
 The `configs/examples/` directory contains ready-to-use YAML config files for every recipe and method:
 
-### Fine-tuning
+#### Fine-tuning
 
 ```bash
 # Full fine-tuning
@@ -37,13 +54,13 @@ xaytune train --config configs/examples/lora_finetune.yaml
 xaytune train --config configs/examples/qlora_finetune.yaml
 ```
 
-### Pre-training
+#### Pre-training
 
 ```bash
 xaytune train --config configs/examples/pretrain.yaml
 ```
 
-### Alignment
+#### Alignment
 
 ```bash
 # DPO
@@ -65,9 +82,9 @@ xaytune train --config configs/examples/ppo_align.yaml
 xaytune train --config configs/examples/reinforce_align.yaml
 ```
 
-## Quick Recipes
+### Quick Recipes
 
-### Fine-tune Llama 3.1 with LoRA
+#### Fine-tune Llama 3.1 with LoRA
 
 ```python
 import xaytune
@@ -82,7 +99,7 @@ state = xaytune.finetune(
 )
 ```
 
-### Align with DPO
+#### Align with DPO
 
 ```python
 import xaytune
@@ -95,7 +112,7 @@ state = xaytune.align(
 )
 ```
 
-### Evaluate and Compare
+#### Evaluate and Compare
 
 ```python
 from xaytune.eval.benchmarks import benchmark_evaluate
@@ -107,7 +124,7 @@ results = benchmark_evaluate(
 )
 ```
 
-### Agent Fine-Tuning
+#### Agent Fine-Tuning
 
 ```python
 import xaytune
@@ -122,7 +139,7 @@ state = xaytune.finetune(
 )
 ```
 
-### Agent Evaluation
+#### Agent Evaluation
 
 ```python
 from xaytune.eval.agent_metrics import evaluate_agent
@@ -134,7 +151,7 @@ results = evaluate_agent(
 )
 ```
 
-### Export Pipeline
+#### Export Pipeline
 
 ```python
 from xaytune.export.merge import merge

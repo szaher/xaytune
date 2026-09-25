@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Everything below is on `main` and not yet released; `pyproject.toml` stays at
+`0.6.0` until it is. The first release of the experiment control plane is
+planned as `1.0.0a1`, once it can train, evaluate and decide.
+
+### Added — the experiment control plane
+
+- **Durable persistence** (`xaytune.storage`): SQLite, versioned migrations 001–006, revision-based optimistic concurrency, and atomic state + event + outbox transactions. A `RuntimeOperation` journal records every external effect before it is attempted, and Actions record requests such as cancellation together with their outcomes.
+- **`CandidateSpec` and versioned fingerprints**: `CandidateFingerprint`, `RunHistoryFingerprint`, `ArtifactLineageFingerprint`.
+- **Compile/execute boundary** (`xaytune.compilation`): `TrainerCompiler`, `TrainingExecutionSpec` and `ResolvedExecutionPlan`, with `NativeCompiler` and `TRLCompiler` for full-parameter SFT. A candidate that leaves a training-relevant value undeclared is refused, with every reason.
+- **`LocalRuntime`** (`xaytune.runtimes`): workers run as separate processes, submission is idempotent through `submit_or_get`, and telemetry is versioned (v1alpha2 for training, v1alpha3 for evaluation) with a durable cursor.
+- **`EmbeddedControllerHost` and `ExperimentHandle`** (`xaytune.experiment`): `submit`, `status`, `wait`, `cancel`, `events`, and `attach`, which adopts running work after a restart and never submits it twice.
+- **The durable evaluation lifecycle**: `EvaluationSpec`, evaluation runs, attempts and results, evaluation cycles, and the `Evaluator` contract. No evaluator is built in yet.
+- **`examples/control_plane/`**, and control-plane *Getting started* and *Concepts* pages in the docs.
+- **A release gate**: publishing a GitHub release fails unless its tag is `v` plus the `pyproject.toml` version, and `xaytune/_version.py` agrees (`scripts/check_release_version.py`). Manual TestPyPI dispatches are not gated.
+- **One runtime version**: `xaytune/_version.py`, an import-free module. `xaytune.__version__` and the `xaytune_version` of every built-in plugin descriptor (`NativeCompiler`, `TRLCompiler`, `LocalRuntime`) come from it instead of hardcoded literals, and a test refuses any new literal.
+- **An sdist allow-list**: the source distribution contains `xaytune/`, `pyproject.toml`, `README.md`, `CHANGELOG.md` and `LICENSE`, whatever else is in the working tree. `scripts/check_sdist.py` checks the built archive in CI and before every upload, including that `LICENSE` ships and `pyproject.toml` declares `Apache-2.0`. The wheel is built from the sdist.
+- **`LICENSE`**: the Apache License 2.0 text, verbatim, which the package already declared and did not ship.
+- **A wheel smoke test** in CI and before every upload. The built wheel is installed into a fresh virtualenv, then must import without torch, transformers or TRL, migrate a new store, compile a candidate, round-trip the plan, and import the control-plane examples (`scripts/wheel_smoke.py`).
+
+### Changed — positioning and dependencies
+
+- The package description is now "Agent-native experiment control plane for model post-training and adaptation". The README and docs separate what is available today from what is planned, and label the notebooks as the legacy trainer API.
+- `packaging` is a declared dependency. The TRL worker imports it to check installed releases.
+- The `trl` extra pins `trl>=1.13,<1.14` and `transformers>=5.17,<5.18`, the releases the TRL worker is classified against, and `uv.lock` resolves them.
+
 ### Added
 
 - **`xaytune.core` — control-plane domain foundation.** Typed sortable identifiers (`ExperimentId`, `RunId`, …), the `Experiment` / `ExperimentNode` / `Run` / `RunAttempt` aggregates, their separate state machines, `ExecutionOverride`, and the immutable value objects (`Actor`, `DatasetRef`, `ModelRef`, `ArtifactRef`, `RuntimeRef`, `ControllerHostRef`, `CheckpointRef`, `ResourceUsage`). The package imports without torch, transformers, peft, trl, ray or kubernetes installed, enforced by `tests/test_core/test_architecture.py`. Nothing in the existing training path uses it yet.

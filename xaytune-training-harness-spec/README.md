@@ -135,16 +135,19 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 
   `15-implementation-plan.md` §Phase 0 holds the same table with the work each
   still-open ADR blocks. ADR-005 was accepted on 2026-09-21, which unblocked
-  band B; PR-004 through PR-010 have since merged. It was expanded before acceptance from a
-  single transaction rule into the full persistence transaction contract,
-  because band B owns the operation journal, the Action substrate and the
-  projections as well as the experiment aggregates. Nothing ready to start is
-  now blocked: ADR-009 gates band F, ADR-017 band G and ADR-004 band H. ADR-008
-  was accepted on 2026-09-22 and band C is unblocked.
-- `schemas/` — proposed YAML and JSON/Python schema examples. The SQLite file is
-  **migrations 001 and 002 only**, not the target schema — 001 is the core
-  aggregates plus the operation journal, 002 the minimal Action substrate, and
-  both are required before Phase 2. The 001 header lists what is still to come
+  band B. It was expanded before acceptance from a single transaction rule into
+  the full persistence transaction contract, because band B owns the operation
+  journal, the Action substrate and the projections as well as the experiment
+  aggregates. ADR-008 was accepted on 2026-09-22, which unblocked band C. Nothing
+  ready to start is blocked: ADR-009 gates band F, ADR-017 band G and ADR-004
+  band H.
+- `schemas/` — proposed YAML and JSON/Python schema examples, and the design
+  drafts of migrations 001–003 with their rationale. They are not the schema:
+  the shipped migrations are `xaytune/storage/migrations/001`–`006` (core
+  aggregates; events, outbox and the operation journal; actions; action
+  parents; the telemetry cursor; the evaluation lifecycle), and a shipped
+  migration is never edited. The 001 draft's header lists the tables still to
+  come; evaluation runs, attempts and results have since shipped in 006.
 - `agent-prompts/` — coding-agent execution prompts for the first implementation phases
 
 ## Implementation order
@@ -152,9 +155,10 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 The ADR gate is **per-ADR, not global** — an ADR must be settled before the work
 that depends on it, not before all work. See `15-implementation-plan.md`
 §Phase 0 for which ADRs are ratified, accepted, or still open, and what each
-still-open one blocks. **Band B is complete and band C is in progress: PR-004
-through PR-012 have merged, and PR-012a (runtime-operation reconciliation) is
-the next implementation step.** The remaining `Proposed` ADRs gate later bands.
+still-open one blocks. **Bands A–C are complete, and band D is in progress:
+PR-004 through PR-013 have merged, through the durable evaluation lifecycle.
+PR-014 (evaluators wrapping the existing eval and lm-eval) is next, then
+PR-015 (DecisionEngine).** The remaining `Proposed` ADRs gate later bands.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

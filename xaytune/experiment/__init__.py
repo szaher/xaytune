@@ -7,8 +7,8 @@ result = await handle.wait()
 ```
 
 A handle is a way of asking the durable record about one experiment; see
-:mod:`xaytune.experiment.handle` for what ``wait()`` means while evaluation
-does not yet exist.
+:mod:`xaytune.experiment.handle` for what ``wait()`` means while nothing yet
+decides what an evaluated candidate becomes.
 """
 
 from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec

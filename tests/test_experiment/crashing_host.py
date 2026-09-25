@@ -30,6 +30,12 @@ spec asks for one (PR-013) -- training has succeeded and been recorded:
                           (ADR-014 §1a); dies once the controller has recorded
                           that degradation, before the workload ends.
 
+And one for the decision that follows (PR-015):
+
+``deciding``              the evaluation's result is recorded and the node is
+                          DECIDING; dies as the decision engine is asked, so
+                          no decision exists.
+
 The workload runs in its own session, so it outlives this process, which is
 the situation PR-012a exists for.
 """
@@ -60,6 +66,16 @@ _EVALUATION_MODES = (
 
 def _die() -> None:
     os.kill(os.getpid(), signal.SIGKILL)
+
+
+class _DieWhenDeciding:
+    """A decision engine that kills the controller instead of deciding."""
+
+    name = "dies"
+    version = "0"
+
+    def decide(self, context: Any) -> Any:
+        _die()
 
 
 class _DyingAt:
@@ -103,8 +119,12 @@ async def _main(state: Path, spec: ExperimentSpec, mode: str) -> None:
         state,
         runtimes={"local": lambda config: _DyingAt(_local_runtime(config), mode)},
         evaluators={**EVALUATORS, "native": NativeEvaluator},
+        decision_engine=_DieWhenDeciding() if mode == "deciding" else None,
     )
     handle = await host.submit(spec)
+    if mode == "deciding":
+        await handle.wait()
+        raise AssertionError("the controller should have died deciding")
     if mode in _EVALUATION_MODES:
         await _die_while_evaluating(host, handle, mode)
     if mode not in ("running", "cancel-intended"):

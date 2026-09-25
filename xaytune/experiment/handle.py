@@ -8,12 +8,14 @@ has gone, return a handle that says the same things.
 **What ``wait()`` means.** Controller quiescence: every piece of work this
 controller can currently execute for the experiment is settled, and its
 telemetry has been drained. It does *not* mean the experiment is finished.
-With evaluation configured, ``wait()`` waits through it: the node reaches
-``DECIDING`` with its results, and the experiment stays ``ACTIVE`` awaiting a
-decision nothing makes yet. Without it, a trained node stays ``ACTIVE``. Either
-way :class:`ExperimentResult` says it is quiescent and names the stage that
-would run next, so a caller never has to infer success from ``wait()`` having
-returned.
+With evaluation configured, ``wait()`` waits through it and through the
+decision that follows: a decided candidate ends ``COMPLETED`` or ``REJECTED``
+and the experiment ``SUCCEEDED`` or ``FAILED``. A candidate the decision
+engine cannot decide -- no target, a missing metric -- stays ``DECIDING``,
+with the experiment ``ACTIVE``. Without evaluation, a trained node stays
+``ACTIVE``. Either way :class:`ExperimentResult` says it is quiescent and
+names the stage that would run next, so a caller never has to infer success
+from ``wait()`` having returned.
 """
 
 from __future__ import annotations
@@ -47,14 +49,29 @@ __all__ = [
     "RunOutcome",
 ]
 
-NextStage = Literal["evaluation", "decision", "failure-handling"]
+NextStage = Literal["evaluation", "decision", "planning", "failure-handling"]
 """Advisory: the controller work that would move the experiment on.
+
+```text
+None                 the experiment is terminal
+"decision"           a candidate is DECIDING: its decision was deferred
+"evaluation"         a trained candidate is unevaluated, or evaluating
+"planning"           the experiment is ACTIVE and every candidate was rejected
+                     on its merits: another candidate is needed to go on
+"failure-handling"   training or evaluation failed or was cancelled, and did
+                     not establish a result: recovery or policy is needed
+```
 
 Deliberately not named after a status. ``"evaluation"`` is not
 ``ExperimentNodeStatus.EVALUATING``: it is the next work for a trained node
-nothing has evaluated, or the evaluation still running. ``"decision"`` is
-reached only through evaluation -- a node in ``DECIDING`` with its results --
-and is advice, not a DecisionEngine: none exists yet (PR-015)."""
+nothing has evaluated, or the evaluation still running. ``"decision"`` is a
+node in ``DECIDING`` that the decision engine could not decide -- its
+``DecisionDeferred`` event says why -- and that someone must decide.
+``"planning"`` comes only from a scientific outcome -- every candidate
+``REJECTED`` -- never from candidates merely having ended: a failed or
+cancelled candidate is ``"failure-handling"``, even beside a rejected one.
+A ``REJECT`` judges the candidate, not the experiment, and what comes next is
+another candidate: a planner's work, which does not exist yet."""
 
 _FOLLOW_INTERVAL_SECONDS = 0.05
 
@@ -91,15 +108,17 @@ class ExperimentResult(FrozenDomainModel):
     """Where an experiment stands once its controller has nothing left to do.
 
     Attributes:
-        status: The experiment's own status -- ``ACTIVE`` after a successful
-            training run, because terminating an experiment is a decision
-            nothing in this phase makes.
+        status: The experiment's own status. ``SUCCEEDED`` or ``FAILED`` once
+            its candidate is decided; ``ACTIVE`` while it is not -- after
+            training with no evaluation, or with a decision deferred.
         quiescent: Whether all executable work is settled. Always true for a
             result ``wait()`` returns; carried so the result says so rather
             than leaving it implied.
         next_stage: Advisory controller work that would move the experiment
             on, if it could run -- never a status any aggregate is in:
-            ``"decision"`` for a node evaluated into ``DECIDING``,
+            ``"decision"`` for a node in ``DECIDING`` the engine could not
+            decide, ``"planning"`` for an active experiment whose candidates
+            were all rejected and which needs another,
             ``"evaluation"`` for a trained candidate nothing has evaluated (or
             whose evaluation is still running), ``"failure-handling"`` for one
             whose runs or evaluations failed or were cancelled (retry, recover

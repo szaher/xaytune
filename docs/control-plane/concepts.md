@@ -97,14 +97,25 @@ work it can currently execute is settled, and its telemetry is drained. It does
 not mean the experiment is finished. The returned `ExperimentResult` says so
 explicitly:
 
-- `status`: the experiment's own status. After a successful training run it is
-  still `ACTIVE`, because ending an experiment is a decision, and nothing makes
-  decisions yet.
+- `status`: the experiment's own status. `SUCCEEDED` or `FAILED` once its
+  candidate has been evaluated and decided. `ACTIVE` while it has not: after
+  training with no evaluation configured, or when the decision was deferred.
 - `quiescent`: always true for a result `wait()` returns.
-- `next_stage`: the work that would move things on. `"evaluation"` means a
-  trained candidate nothing has evaluated yet. `"decision"` means a candidate
-  evaluated into `DECIDING`. `"failure-handling"` means a run or evaluation
-  failed or was cancelled. `None` means the experiment is terminal.
+- `next_stage`: the work that would move things on. It is advice, not a
+  status:
+
+  ```text
+  None                 the experiment is terminal
+  "decision"           a candidate is DECIDING: its decision was deferred
+  "evaluation"         a trained candidate is unevaluated, or evaluating
+  "planning"           every candidate was rejected on its merits, and the
+                       experiment is still ACTIVE: another candidate is needed
+  "failure-handling"   training or evaluation failed or was cancelled
+  ```
+
+  `"planning"` comes only from a scientific outcome. A candidate that failed
+  or was cancelled did not establish a result, so it leads to
+  `"failure-handling"`, even beside a rejected one.
 - `nodes`: each candidate with its runs, attempts, artifacts and evaluations.
 
 ## Cancellation
@@ -151,9 +162,68 @@ registered with `EmbeddedControllerHost(..., evaluators={"name": factory})`.
 twice runs twice. Reusing an earlier result (ADR-015's reuse lookup) is a
 separate, later decision.
 
+## Decisions
+
+Once a candidate's evaluation cycle has its results, the node is `DECIDING`,
+and a **decision engine** decides it.
+
+- **From the record alone.** The engine sees a `DecisionContext`: the
+  experiment's `Objective` and the results of that evaluation cycle, and
+  nothing else (no clock, database or environment). Results from an earlier
+  cycle never decide a later one.
+- **Deterministic thresholds.** The built-in `ThresholdDecisionEngine`
+  compares the recorded values with the objective:
+
+  ```text
+  a metric the objective or a constraint names is missing   → not decided
+  any constraint violated          (<  <=  >  >=  ==  !=)    → REJECT
+  no target                                                  → not decided
+  target met   (maximize: value ≥ target, minimize: ≤)       → STOP_SUCCEEDED
+  target not met                                             → STOP_FAILED
+  ```
+
+  It compares point estimates exactly and makes no statistical claim: it says
+  whether 0.83 meets a stated threshold, not that 0.83 beats 0.81.
+- **Durable, in one commit.** The `Decision` records the outcome, the
+  evidence (each comparison, with the result it came from), the engine and
+  its version, and a fingerprint of its inputs. It is written with what its
+  outcome causes, in the same commit:
+
+  ```text
+  STOP_SUCCEEDED   candidate COMPLETED   experiment SUCCEEDED, best_node_id = it
+  STOP_FAILED      candidate REJECTED    experiment FAILED
+  REJECT           candidate REJECTED    experiment stays ACTIVE ("planning" next)
+  ```
+
+  `REJECT` judges the candidate, not the experiment: another candidate may
+  still be proposed and succeed. Only a `STOP` ends the experiment.
+- **Pure.** The engine returns a `DecisionProposal`: the outcome, reason,
+  evidence and input fingerprint, with no id, time or actor. The same context
+  always gives an identical proposal. The repository adds the id, time and
+  actor when it records the decision. The input fingerprint is an explicit,
+  versioned projection of the evidence (the objective, and each result's id,
+  run, fingerprint, subject and metric values with their evaluator, seed,
+  count and uncertainty). A field added to a result later does not change the
+  identity of decisions already made.
+- **Attributable.** The repository does not take a proposal's word for what
+  it was decided on. It recomputes the input fingerprint from the stored
+  objective and the cycle's results, and refuses a proposal whose fingerprint
+  differs, names a result twice or not at all, or cites evidence from outside
+  the cycle. It does not check the outcome: which outcome the evidence
+  warrants is the engine's call, and a custom engine may use its own rules.
+- **Nothing guessed.** An objective without a target means "optimize this",
+  not "this is good enough". With one candidate there is nothing to compare,
+  so the candidate stays `DECIDING`, as it does when a metric is missing. A
+  `DecisionDeferred` event records why, once per cycle.
+- **Once per cycle, across restarts.** A controller that died before deciding
+  is replaced by one that decides when it attaches. Deciding the same cycle on
+  the same inputs returns the decision already on record; a *different*
+  decision for a cycle already decided is refused.
+
 ## Not yet
 
 These are designed in the specification and planned, but **not
-implemented**: deciding what an evaluated candidate becomes, an lm-eval
-evaluator, reusing earlier evaluation results, policy and budgets, checkpoints and semantic recovery, planners and branching, daemon
-hosting, and runtimes other than local.
+implemented**: decisions that compare candidates (promotion, noise-aware
+comparison across replicates), an lm-eval evaluator, reusing earlier
+evaluation results, policy and budgets, checkpoints and semantic recovery,
+planners and branching, daemon hosting, and runtimes other than local.

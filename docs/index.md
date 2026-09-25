@@ -14,8 +14,8 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 !!! info "Pre-release"
     The control plane is on `main` and is not in a release yet. The package on
     PyPI, `0.6.0`, is the [legacy trainer API](getting-started.md), which remains
-    available. The first control-plane release is planned as `1.0.0a1`, once it
-    can train, evaluate *and* decide.
+    available. The first control-plane release is planned as `1.0.0a1`: declare
+    an experiment, train, evaluate, and make a durable, deterministic decision.
 
 ## Start here
 
@@ -35,7 +35,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Candidate identity and scientific lineage | Available |
 | Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
 | Evaluation orchestration | Available: the built-in native evaluator; lm-eval planned |
-| Decisions and branching | Planned |
+| Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
 | Policy gates, budgets and agent-driven control | Planned |
 
@@ -46,7 +46,7 @@ topology, not GPU count**.
 
 ## Available today
 
-Status as of **2026-09-25**, after PR-014:
+Status as of **2026-09-25**, after PR-015:
 
 - **A durable record**: SQLite persistence, versioned migrations, atomic
   state + event + outbox transactions, a `RuntimeOperation` journal that
@@ -66,12 +66,17 @@ Status as of **2026-09-25**, after PR-014:
   results and cycles, recorded and restart-safe. The `native` evaluator
   measures next-token loss, perplexity and token accuracy on a local held-out
   file pinned by its content digest.
+- **Durable decisions**: an evaluated candidate is decided from the record --
+  the objective's target and constraints against the recorded results -- and
+  the decision is written with the transitions it causes, in one commit. A
+  candidate that cannot be decided (no target, a missing metric) stays
+  `DECIDING`, with the reason recorded.
 
 ## Planned
 
-The DecisionEngine (next), then policy and budgets, checkpoints and semantic
-recovery, a rule-based planner and branching, daemon hosting, an LLM planner,
-and Ray / TorchFT / Training Hub integrations. An lm-eval evaluator, with
+Policy and budgets, checkpoints and semantic recovery, a rule-based planner
+and branching (with decisions that compare candidates), daemon hosting, an LLM
+planner, and Ray / TorchFT / Training Hub integrations. An lm-eval evaluator, with
 pinned task and dataset versions, is a planned integration alongside them.
 None of these exist yet.
 
@@ -80,7 +85,7 @@ None of these exist yet.
 Solid green boxes are implemented; dashed boxes are planned. The runtime
 feedback path is separate from the path that submits work.
 
-![Xaytune target architecture: experiment control plane, trainer compilation, capability resolution, runtime backends, and infrastructure, with implementation status after PR-014.](assets/architecture-overview.svg)
+![Xaytune target architecture: experiment control plane, trainer compilation, capability resolution, runtime backends, and infrastructure, with implementation status after PR-015.](assets/architecture-overview.svg)
 
 The [architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/02-architecture.md)
 defines the contracts and dependency boundaries, and the
@@ -94,7 +99,7 @@ the order the remaining work lands in.
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | **Current**: lifecycle and native evaluator complete; DecisionEngine next |
+| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval planned |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

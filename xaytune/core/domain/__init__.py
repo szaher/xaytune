@@ -32,6 +32,12 @@ from xaytune.core.domain.candidate import (
     candidate_identity_v1,
     candidate_identity_v2,
 )
+from xaytune.core.domain.decision import (
+    Decision,
+    DecisionContext,
+    DecisionOutcome,
+    MetricEvidence,
+)
 from xaytune.core.domain.evaluation import (
     EvaluationAttempt,
     EvaluationResult,
@@ -76,6 +82,10 @@ from xaytune.core.domain.run import (
 
 __all__ = [
     "EvaluationAttempt",
+    "Decision",
+    "DecisionContext",
+    "DecisionOutcome",
+    "MetricEvidence",
     "EvaluationResult",
     "EvaluationRun",
     "EvaluationSpec",

@@ -51,6 +51,12 @@ from xaytune.core.domain.action import (
     ActionStatus,
     ActionTarget,
 )
+from xaytune.core.domain.decision import (
+    Decision,
+    DecisionContext,
+    DecisionOutcome,
+    DecisionProposal,
+)
 from xaytune.core.domain.evaluation import (
     EvaluationAttempt,
     EvaluationResult,
@@ -101,6 +107,7 @@ from xaytune.storage.repository import AggregateStore
 
 __all__ = [
     "ControlPlaneRepository",
+    "DecisionConflictError",
     "EvaluationReconciliation",
     "ProvenanceError",
     "UnknownOperationTargetError",
@@ -211,6 +218,16 @@ class CancellationSagaRequiredError(StorageError):
 
 class ProvenanceError(StorageError):
     """A record would attribute something to a producer that did not make it."""
+
+
+class DecisionConflictError(StorageError):
+    """A cycle already decided is being decided differently.
+
+    The same decision again -- a restarted controller deciding the cycle it
+    had decided before it died -- is recognised and returns the one on
+    record. A decision on other inputs, or with another outcome, is a second
+    answer to one question, and is refused rather than appended.
+    """
 
 
 class UnknownOperationTargetError(StorageError):
@@ -1037,6 +1054,231 @@ class ControlPlaneRepository:
                     },
                 )
             return EvaluationReconciliation.STALLED
+
+    def record_decision(
+        self,
+        proposal: DecisionProposal,
+        *,
+        expected_node_revision: int,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> Decision:
+        """Record *proposal* as a decision and apply it, in one commit. Idempotent per cycle.
+
+        The decision is given its id, time and *actor* here -- the engine
+        mints none -- and written with the transitions its outcome causes:
+
+        ```text
+        STOP_SUCCEEDED   node COMPLETED   experiment SUCCEEDED, best_node_id = node
+        STOP_FAILED      node REJECTED    experiment FAILED
+        REJECT           node REJECTED    experiment unchanged
+        ```
+
+        ``REJECT`` is a judgement on the candidate, not the experiment: another
+        candidate may yet be proposed. Only the ``STOP`` outcomes end an
+        experiment, and only an ``ACTIVE`` one; a paused experiment is
+        somebody's to resume or stop. There is no moment at which a decision
+        is recorded but not applied, or applied with no decision on record.
+
+        Deciding a cycle already decided, with the same proposal, returns the
+        decision on record and writes nothing -- what a controller restarted
+        after deciding sees. Anything else is refused.
+
+        The proposal must be about this node's current cycle, in
+        ``DECIDING``, and must name exactly that cycle's results, each once:
+        a decision drawn from an earlier round's results, or from some of
+        this round's, is not attributable to the evidence it claims. Its
+        evidence may cite only those results, and its ``input_fingerprint``
+        must be the one the experiment's objective and those results give
+        (:func:`~xaytune.core.domain.decision.decision_input_identity_v1`),
+        recomputed here, not taken on trust. Which outcome those inputs
+        warrant is the engine's to say and is not checked: a custom engine
+        may decide by rules of its own.
+
+        Raises:
+            AggregateNotFoundError: If the node does not exist.
+            DecisionConflictError: If the cycle was decided differently.
+            ConcurrentModificationError: If the node moved since it was read.
+            InvalidTransitionError: If the node is not in ``DECIDING``.
+            ProvenanceError: If the proposal is about another experiment or
+                cycle, names results other than the cycle's or one twice,
+                cites a result outside the cycle, or claims an input
+                fingerprint the durable inputs do not give.
+        """
+        with write_transaction(self._connection):
+            node = self.aggregates.load_node(str(proposal.node_id))
+            recorded = self.aggregates.decision_for_cycle(str(node.id), proposal.evaluation_cycle)
+            if recorded is not None:
+                if recorded.proposal() == proposal:
+                    return recorded
+                raise DecisionConflictError(
+                    f"node {node.id} cycle {proposal.evaluation_cycle} was decided "
+                    f"{recorded.outcome.value} by {recorded.engine_name} "
+                    f"{recorded.engine_version} on input {recorded.input_fingerprint}; "
+                    f"a different decision for the same cycle is refused"
+                )
+
+            problems = []
+            if proposal.experiment_id != node.experiment_id:
+                problems.append(
+                    f"names experiment {proposal.experiment_id}, not {node.experiment_id}"
+                )
+            if proposal.evaluation_cycle != node.evaluation_cycle:
+                problems.append(
+                    f"decides cycle {proposal.evaluation_cycle}, but the node is in cycle "
+                    f"{node.evaluation_cycle}"
+                )
+            results = tuple(
+                result
+                for run in self.aggregates.evaluation_runs_for_node(
+                    str(node.id), cycle=node.evaluation_cycle
+                )
+                if (result := self.aggregates.evaluation_result_for_run(str(run.id))) is not None
+            )
+            cycle_results = {result.id for result in results}
+            named = proposal.evaluation_result_ids
+            if len(set(named)) != len(named):
+                repeated = sorted({str(i) for i in named if named.count(i) > 1})
+                problems.append(f"names results {repeated} more than once")
+            if set(named) != cycle_results:
+                problems.append(
+                    f"names results {sorted(named)}, but the cycle's are {sorted(cycle_results)}"
+                )
+            cited = {evidence.evaluation_result_id for evidence in proposal.evidence}
+            if foreign := cited - cycle_results:
+                problems.append(f"cites results {sorted(foreign)} from outside the cycle")
+            if not problems:
+                # The fingerprint is the record's claim about what was decided
+                # on. Recompute it from the durable inputs rather than trust
+                # the caller's: which outcome follows from those inputs is the
+                # engine's business, but what the inputs were is ours.
+                experiment = self.aggregates.load_experiment(str(node.experiment_id))
+                expected = DecisionContext(
+                    experiment_id=experiment.id,
+                    node_id=node.id,
+                    evaluation_cycle=node.evaluation_cycle,
+                    objective=experiment.objective,
+                    results=results,
+                ).input_fingerprint()
+                if proposal.input_fingerprint != expected:
+                    problems.append(
+                        f"claims input fingerprint {proposal.input_fingerprint}, but the "
+                        f"objective and the cycle's results fingerprint to {expected}"
+                    )
+            if problems:
+                raise ProvenanceError(f"decision for node {node.id} " + "; ".join(problems))
+            if node.revision != expected_node_revision:
+                raise ConcurrentModificationError(
+                    "ExperimentNode", str(node.id), expected_node_revision
+                )
+
+            decision = Decision.record(proposal, actor=actor)
+            decided = node.with_decision(decision.id, decision.outcome.node_status)
+            self.aggregates._update_node(decided)
+            self.aggregates._insert_decision(decision)
+            experiment_id = str(node.experiment_id)
+            self._emit(
+                decided,
+                "DecisionRecorded",
+                experiment_id,
+                actor,
+                destinations,
+                extra={
+                    "decision_id": str(decision.id),
+                    "evaluation_cycle": decision.evaluation_cycle,
+                    "outcome": decision.outcome.value,
+                    "reason": decision.reason,
+                    "engine": f"{decision.engine_name} {decision.engine_version}",
+                },
+            )
+            self._emit(
+                decided,
+                "ExperimentNodeStatusChanged",
+                experiment_id,
+                actor,
+                destinations,
+                extra={"decision_id": str(decision.id)},
+            )
+            self._conclude_experiment(decision, actor, destinations)
+        return decision
+
+    def _conclude_experiment(
+        self, decision: Decision, actor: Actor, destinations: tuple[str, ...]
+    ) -> None:
+        """End an ``ACTIVE`` experiment when the decision says to stop it; otherwise nothing."""
+        if decision.outcome is DecisionOutcome.REJECT:
+            return
+        experiment = self.aggregates.load_experiment(str(decision.experiment_id))
+        if experiment.status is not ExperimentStatus.ACTIVE:
+            return
+        if decision.outcome is DecisionOutcome.STOP_SUCCEEDED:
+            ended = experiment.succeeded_with(decision.node_id)
+        else:
+            ended = experiment.with_status(ExperimentStatus.FAILED)
+        self.aggregates._update_experiment(ended)
+        self._emit(
+            ended,
+            "ExperimentStatusChanged",
+            str(ended.id),
+            actor,
+            destinations,
+            extra={
+                "decision_id": str(decision.id),
+                "best_node_id": str(ended.best_node_id) if ended.best_node_id else None,
+            },
+        )
+
+    def defer_decision(
+        self,
+        node_id: ExperimentNodeId,
+        *,
+        engine: str,
+        reasons: tuple[str, ...],
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> bool:
+        """Record that the node's current cycle could not be decided, and why.
+
+        The node stays ``DECIDING``: an engine that cannot decide must not be
+        made to guess. A ``DecisionDeferred`` event on the node makes that
+        visible -- once per cycle, however often it is asked, like an
+        ``EvaluationStalled``.
+
+        Returns:
+            Whether an event was written; ``False`` if the cycle was already
+            recorded as deferred.
+
+        Raises:
+            AggregateNotFoundError: If the node does not exist.
+            StorageError: If the node is not in ``DECIDING``.
+        """
+        with write_transaction(self._connection):
+            node = self.aggregates.load_node(str(node_id))
+            if node.status is not ExperimentNodeStatus.DECIDING:
+                raise StorageError(
+                    f"node {node_id} is {node.status.value}, not deciding; there is no "
+                    f"decision to defer"
+                )
+            already = any(
+                event.event_type == "DecisionDeferred"
+                and event.payload.get("evaluation_cycle") == node.evaluation_cycle
+                for event in self.events.events_for_aggregate(str(node.id))
+            )
+            if already:
+                return False
+            self._emit(
+                node,
+                "DecisionDeferred",
+                str(node.experiment_id),
+                actor,
+                destinations,
+                extra={
+                    "evaluation_cycle": node.evaluation_cycle,
+                    "engine": engine,
+                    "reasons": list(reasons),
+                },
+            )
+        return True
 
     # ---- ADR-005 §4 ----------------------------------------------------
 

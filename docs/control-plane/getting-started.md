@@ -2,7 +2,7 @@
 
 This page takes one fine-tuning candidate from a description to a trained
 model, through the control plane: compiled, submitted, observed, cancelled,
-adopted by a second process, and evaluated. Every step has a runnable script in
+adopted by a second process, evaluated, and decided. Every step has a runnable script in
 [`examples/control_plane/`](https://github.com/szaher/xaytune/tree/main/examples/control_plane).
 
 !!! note "Pre-release"
@@ -167,7 +167,7 @@ then `... attach <experiment-id>`.
 `ExperimentSpec.evaluation` takes an `EvaluationSpec` naming one evaluator.
 When it is set, the host evaluates the trained model after training, through
 the same journal, runtime and telemetry, records the result, and moves the
-candidate to `DECIDING` with `next_stage="decision"`.
+candidate to `DECIDING`, where it is decided (section 6).
 
 The built-in `native` evaluator measures next-token loss, perplexity and token
 accuracy on a local JSONL file of held-out text:
@@ -190,7 +190,7 @@ evaluation = EvaluationSpec(
     dataset=local_dataset("/abs/data/held-out.jsonl"),   # pinned by content digest
 )
 result = await (await host.submit(spec.model_copy(update={"evaluation": evaluation}))).wait()
-print(result.next_stage)                                 # "decision"
+print(result.next_stage)       # "decision": this spec's objective has no target yet
 for metric in result.nodes[0].evaluations[0].result.metrics:
     print(metric.name, metric.value, metric.seed)
 ```
@@ -209,6 +209,43 @@ recorded, and the report beside the result names the device and library
 versions it ran with.
 
 Run it: `python examples/control_plane/05_train_and_evaluate.py --model ... --dataset ... --held-out ...`.
+
+## 6. Decide
+
+The experiment's `Objective` says what counts as good enough. With a
+`target`, the evaluated candidate is decided as soon as its results are in:
+
+```python
+from xaytune.core import Objective, ObjectiveMetric, MetricConstraint
+
+spec = spec.model_copy(update={
+    "objective": Objective(
+        primary=ObjectiveMetric(name="loss", direction="minimize"),
+        target=2.5,                                   # good enough: loss <= 2.5
+        constraints=(MetricConstraint(name="token_accuracy", operator=">=", value=0.2),),
+    ),
+    "evaluation": evaluation,
+})
+result = await (await host.submit(spec)).wait()
+print(result.status, result.next_stage)               # SUCCEEDED, None  (or FAILED, None)
+
+decision = host.repository.aggregates.decisions_for_node(str(result.nodes[0].node_id))[0]
+print(decision.outcome, decision.reason)
+```
+
+A target met completes the candidate, and the experiment `SUCCEEDED`, with
+`best_node_id` naming the candidate. A target missed rejects the candidate,
+and the experiment `FAILED`. A violated constraint rejects the candidate but
+leaves the experiment `ACTIVE`, since another candidate could still succeed;
+`next_stage` is then `"planning"`. The decision is recorded with its evidence
+in the same commit that applies it.
+
+Without a target, or with a metric the objective names but the evaluation did
+not report, nothing is decided. The candidate stays `DECIDING`, the reason is
+recorded as a `DecisionDeferred` event, and `next_stage` is `"decision"`. See
+[concepts](concepts.md#decisions).
+
+Run it: `python examples/control_plane/05_train_and_evaluate.py ... --target 2.5`.
 
 ## What is not supported yet
 

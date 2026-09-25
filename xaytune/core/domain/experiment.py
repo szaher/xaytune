@@ -17,6 +17,7 @@ from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
+from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.ids import (
     DecisionId,
     EvaluationRunId,
@@ -114,6 +115,19 @@ class Experiment(AggregateModel):
             }
         )
 
+    def succeeded_with(self, node_id: ExperimentNodeId) -> Experiment:
+        """Return a copy ``SUCCEEDED``, with *node_id* recorded as its best candidate.
+
+        The candidate a decision completed is the answer the experiment found;
+        recording it is part of the same transition, so an experiment never
+        succeeds without naming what succeeded.
+
+        Raises:
+            InvalidTransitionError: If the experiment cannot succeed from its status.
+        """
+        succeeded = self.with_status(ExperimentStatus.SUCCEEDED)
+        return succeeded._validated_copy({"best_node_id": node_id})
+
     @property
     def is_terminal(self) -> bool:
         """Whether this experiment has reached a final state."""
@@ -179,6 +193,25 @@ class ExperimentNode(AggregateModel):
         if new_status is ExperimentNodeStatus.EVALUATING:
             update["evaluation_cycle"] = self.evaluation_cycle + 1
         return self._validated_copy(update)
+
+    def with_decision(
+        self, decision_id: DecisionId, new_status: ExperimentNodeStatus
+    ) -> ExperimentNode:
+        """Return a copy in *new_status*, with *decision_id* recorded as the reason.
+
+        Only from ``DECIDING``: a decision is about an evaluated candidate.
+        The id and the transition are one change, so a node never holds a
+        decision it was not moved by, nor was moved by one it does not hold.
+
+        Raises:
+            InvalidTransitionError: If the node is not deciding, or the
+                transition is not permitted.
+        """
+        if self.status is not ExperimentNodeStatus.DECIDING:
+            # Only a node in DECIDING is decided.
+            raise InvalidTransitionError("ExperimentNode", self.status, new_status)
+        moved = self.with_status(new_status)
+        return moved._validated_copy({"decision_ids": (*self.decision_ids, decision_id)})
 
     @property
     def is_root(self) -> bool:

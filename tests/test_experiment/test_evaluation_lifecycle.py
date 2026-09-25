@@ -147,7 +147,7 @@ def test_the_host_records_the_evaluator_it_resolved(tmp_path: Path) -> None:
     """ADR-016: the record says which implementation measured, not only its name."""
     _, experiment, _ = _drive(tmp_path, _evaluated(tmp_path))
 
-    (bound,) = experiment.evaluation.evaluators
+    bound = experiment.evaluation.evaluator
     assert bound.version == "1.0.0"
     assert bound.determinism is EvaluatorDeterminism.SEEDED
 
@@ -231,26 +231,26 @@ def test_an_unknown_evaluator_is_refused_before_anything_is_recorded(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    "evaluators",
+    "evaluator",
     [
-        (EvaluatorSpec(name="scripted", version="1.0.0"),),
-        (EvaluatorSpec(name="scripted", determinism=EvaluatorDeterminism.DETERMINISTIC),),
-        (EvaluatorSpec(name="scripted"), EvaluatorSpec(name="other")),
+        EvaluatorSpec(name="scripted", version="1.0.0"),
+        EvaluatorSpec(name="scripted", determinism=EvaluatorDeterminism.DETERMINISTIC),
     ],
-    ids=["version-supplied", "determinism-supplied", "two-evaluators"],
+    ids=["version-supplied", "determinism-supplied"],
 )
-def test_the_caller_names_one_evaluator_and_the_host_binds_it(
-    tmp_path: Path, evaluators: tuple
+def test_the_caller_names_the_evaluator_and_the_host_binds_it(
+    tmp_path: Path, evaluator: EvaluatorSpec
 ) -> None:
     from pydantic import ValidationError
 
     from xaytune.core.domain.evaluation import EvaluationSpec
+    from xaytune.experiment import ExperimentSpec
 
-    with pytest.raises(ValidationError):
-        _spec(tmp_path).model_validate(
+    with pytest.raises(ValidationError, match="resolved by the host"):
+        ExperimentSpec.model_validate(
             {
                 **_spec(tmp_path).model_dump(),
-                "evaluation": EvaluationSpec(evaluators=evaluators).model_dump(),
+                "evaluation": EvaluationSpec(evaluator=evaluator).model_dump(),
             }
         )
 

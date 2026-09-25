@@ -104,10 +104,16 @@ class EvaluationSpec(FrozenDomainModel):
     Not part of any candidate either: the same grader used as a reward is
     training; scoring a finished artifact is evaluation, and contributes to
     the evaluation's identity only (ADR-006).
+
+    **One evaluator**, which may measure many metrics. So one run is one
+    subject, one spec, one evaluator -- one determinism class -- and one seed
+    and replicate, and nothing is ambiguous about whether its result can be
+    reused. Several evaluators are several ``EvaluationRun`` s in a cycle,
+    each with its own reproducibility, never one run mixing them.
     """
 
     api_version: Literal["xaytune.eval/v1alpha1"] = "xaytune.eval/v1alpha1"
-    evaluators: tuple[EvaluatorSpec, ...] = Field(min_length=1)
+    evaluator: EvaluatorSpec
     dataset: DatasetRef | None = None
     slices: tuple[str, ...] = Field(default_factory=tuple)
     metadata: FrozenDict = Field(default_factory=FrozenDict)
@@ -124,8 +130,8 @@ def evaluation_identity_v1(spec: EvaluationSpec) -> Mapping[str, Any]:
     :class:`EvaluationSpec` later does not change the identity of every
     evaluation already recorded (the rule ``candidate_identity_v1`` follows).
 
-    Covers each evaluator's name, bound version and configuration, the
-    dataset and the slices. Not ``determinism``, which is the evaluator's
+    Covers the evaluator's name, bound version and configuration, the dataset
+    and the slices. Not ``determinism``, which is the evaluator's
     statement about reuse rather than a property of what is measured, and not
     ``metadata``, which describes rather than defines.
     """
@@ -133,9 +139,11 @@ def evaluation_identity_v1(spec: EvaluationSpec) -> Mapping[str, Any]:
         "kind": "evaluation",
         "identity_version": 1,
         "api_version": spec.api_version,
-        "evaluators": [
-            {"name": e.name, "version": e.version, "config": e.config} for e in spec.evaluators
-        ],
+        "evaluator": {
+            "name": spec.evaluator.name,
+            "version": spec.evaluator.version,
+            "config": spec.evaluator.config,
+        },
         "dataset": spec.dataset,
         "slices": list(spec.slices),
     }

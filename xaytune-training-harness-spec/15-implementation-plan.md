@@ -533,9 +533,10 @@ Implement:
 
 As built:
 
-- **The public trigger is `ExperimentSpec.evaluation`** (optional, one
-  evaluator, bound by the host to the evaluator's version and declared
-  determinism). `None` leaves a trained node `ACTIVE` with
+- **The public trigger is `ExperimentSpec.evaluation`** (optional; its
+  `EvaluationSpec.evaluator` is singular, one evaluator measuring any number
+  of metrics, bound by the host to the evaluator's version and declared
+  determinism -- several evaluators are several runs in a cycle). `None` leaves a trained node `ACTIVE` with
   `next_stage="evaluation"`, as before. Set, the host evaluates the trained
   model on the experiment's runtime once training succeeds, and the node
   reaches `DECIDING` with `next_stage="decision"` -- advice only; deciding is
@@ -553,6 +554,10 @@ As built:
   *and* the runtime's `succeeded`, recorded with the cursor in one commit.
 - **Cycles** (ADR-015 implementation notes): required runs are the current
   cycle's, so an earlier round never satisfies a later one.
+- **The first evaluation sample's seed is the training run's, replicate 1** --
+  the embedded controller's default, not a coupling: an evaluation seed means
+  nothing about training, stays outside `EvaluationFingerprint`, and a planner
+  may schedule further replicates with seeds of its own.
 - **One reconciliation, two workloads.** Issue, adoption and restart
   reconciliation are shared with training; the evaluator, like the compiler,
   is resolved and version-checked only where a request is rebuilt. `attach()`

@@ -875,6 +875,12 @@ class EmbeddedControllerHost:
         is the subject. A successful run with no model is still recorded as a
         cycle, with no run in it, so reconciliation reports it stalled rather
         than the node sitting ``ACTIVE`` with nobody saying why.
+
+        The run's seed is the training run's, and its replicate 1: the
+        embedded controller's default for the first evaluation sample, not a
+        coupling. An evaluation seed means nothing about training, stays
+        outside ``EvaluationFingerprint``, and a planner may schedule further
+        replicates with seeds of its own.
         """
         aggregates = self.repository.aggregates
         experiment = aggregates.load_experiment(str(experiment_id))
@@ -1179,9 +1185,8 @@ class EmbeddedControllerHost:
 
     def _recorded_evaluator(self, spec: EvaluationSpec) -> Evaluator:
         """The evaluator the record names, at the version it names."""
-        (recorded,) = spec.evaluators
-        evaluator = self._evaluator(recorded.name)
-        _require_version("evaluator", recorded, evaluator.descriptor.plugin_version)
+        evaluator = self._evaluator(spec.evaluator.name)
+        _require_version("evaluator", spec.evaluator, evaluator.descriptor.plugin_version)
         return evaluator
 
     # ---- cancellation (ADR-013 §6) -----------------------------------------
@@ -1237,24 +1242,20 @@ class EmbeddedControllerHost:
     # ---- durable writes --------------------------------------------------
 
     def _bind_evaluation(self, spec: EvaluationSpec) -> EvaluationSpec:
-        """Resolve each evaluator and record which implementation it is (ADR-016).
+        """Resolve the evaluator and record which implementation it is (ADR-016).
 
         The version and determinism are the evaluator's own declarations, read
         now, so the record says which evaluator measured -- and a restarted
         host rebuilding the request can check it has the same one.
         """
-        bound = []
-        for requested in spec.evaluators:
-            evaluator = self._evaluator(requested.name)
-            bound.append(
-                EvaluatorSpec(
-                    name=requested.name,
-                    version=evaluator.descriptor.plugin_version,
-                    determinism=evaluator.determinism,
-                    config=requested.config,
-                )
-            )
-        return spec.model_copy(update={"evaluators": tuple(bound)})
+        evaluator = self._evaluator(spec.evaluator.name)
+        bound = EvaluatorSpec(
+            name=spec.evaluator.name,
+            version=evaluator.descriptor.plugin_version,
+            determinism=evaluator.determinism,
+            config=spec.evaluator.config,
+        )
+        return spec.model_copy(update={"evaluator": bound})
 
     def _record_experiment(
         self,

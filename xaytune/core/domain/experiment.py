@@ -86,7 +86,7 @@ class Experiment(AggregateModel):
     artifact_root: str | None = None
 
     evaluation: EvaluationSpec | None = None
-    """How each trained candidate is evaluated, with its evaluators bound.
+    """How each trained candidate is evaluated, with its evaluator bound.
 
     Orchestration, not identity: it never enters a candidate, its fingerprint
     or its compilation, so changing it does not mean retraining anything.

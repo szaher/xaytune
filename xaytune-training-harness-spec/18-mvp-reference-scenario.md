@@ -60,8 +60,8 @@ candidate:
       epochs: 2
 
 evaluation:
-  evaluators:
-    - name: support-task
+  evaluator:
+    name: support-task
 
 resilience:
   cudaOOM:

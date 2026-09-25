@@ -39,7 +39,8 @@ class ExperimentSpec(FrozenDomainModel):
         runtime: Which backend executes it, and its configuration.
         artifact_root: Where each run's model is published, as an absolute
             local directory; a run writes to ``<artifact_root>/<run_id>``.
-        evaluation: How the trained model is evaluated, if it is. ``None``
+        evaluation: How the trained model is evaluated, if it is -- by one
+            evaluator, which may measure many metrics. ``None``
             stops after training, with evaluation as the next stage nothing
             has taken on. Set, the host evaluates the model once training
             succeeds, on the experiment's runtime, and the node moves on to
@@ -72,17 +73,11 @@ class ExperimentSpec(FrozenDomainModel):
 
     @field_validator("evaluation")
     @classmethod
-    def _one_unbound_evaluator(cls, spec: EvaluationSpec | None) -> EvaluationSpec | None:
-        if spec is None:
-            return spec
-        if len(spec.evaluators) != 1:
-            raise ValueError(
-                f"one evaluator per evaluation in this phase, not {len(spec.evaluators)}: "
-                f"an evaluation run executes one evaluator's workload"
-            )
-        (evaluator,) = spec.evaluators
+    def _unbound_evaluator(cls, spec: EvaluationSpec | None) -> EvaluationSpec | None:
         # Bound by the host, for the reason compiler and runtime versions are.
-        if evaluator.version is not None or evaluator.determinism is not None:
+        if spec is not None and (
+            spec.evaluator.version is not None or spec.evaluator.determinism is not None
+        ):
             raise ValueError(
                 "an evaluator's version and determinism are resolved by the host at "
                 "submission and recorded; do not supply them"

@@ -59,7 +59,6 @@ class ScriptedEvaluator:
     def prepare(
         self, subject: ArtifactRef, spec: EvaluationSpec, context: EvaluationContext
     ) -> EvaluationExecutionSpec:
-        (evaluator,) = spec.evaluators
         return EvaluationExecutionSpec(
             evaluator=EvaluatorIdentity(
                 name=EVALUATOR,
@@ -70,7 +69,7 @@ class ScriptedEvaluator:
             subject=subject,
             entrypoint=PythonModuleEntrypoint(module="tests.evaluation_worker"),
             config={
-                **thaw(evaluator.config),
+                **thaw(spec.evaluator.config),
                 "subject_uri": subject.uri,
                 "seed": context.seed,
                 "output_uri": context.output_uri,
@@ -101,4 +100,4 @@ EVALUATORS: dict[str, Any] = {EVALUATOR: ScriptedEvaluator}
 
 def evaluation(**config: object) -> EvaluationSpec:
     """An evaluation of the trained model by the scripted evaluator, unbound."""
-    return EvaluationSpec(evaluators=(EvaluatorSpec(name=EVALUATOR, config=config),))
+    return EvaluationSpec(evaluator=EvaluatorSpec(name=EVALUATOR, config=config))

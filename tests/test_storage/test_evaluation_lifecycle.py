@@ -50,7 +50,7 @@ from xaytune.storage.errors import StorageError
 from xaytune.storage.journal import IdempotencyConflictError
 
 _ACTOR = Actor(type="system", id="test")
-_SPEC = EvaluationSpec(evaluators=(EvaluatorSpec(name="exact-match", version="1.0.0"),))
+_SPEC = EvaluationSpec(evaluator=EvaluatorSpec(name="exact-match", version="1.0.0"))
 
 
 @pytest.fixture

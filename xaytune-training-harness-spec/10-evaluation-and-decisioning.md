@@ -41,13 +41,27 @@ Evaluation has its own protocol and execution path.
 class EvaluationSpec(BaseModel):
     api_version: str = "xaytune.eval/v1alpha1"
 
-    evaluators: list[EvaluatorSpec]
+    evaluator: EvaluatorSpec          # one; it may measure many metrics
 
     dataset: DatasetRef | None
     slices: list[str]
 
     metadata: dict[str, Any]
 ```
+
+**One evaluator per spec.** One `EvaluationRun` is then one subject, one spec,
+one evaluator -- so one `EvaluatorDeterminism` class -- and one seed and
+replicate, and whether its result can be reused is never ambiguous. Several
+evaluators are several `EvaluationRun`s in one evaluation cycle:
+
+```text
+evaluation cycle
+├── run A → lm-eval
+├── run B → task evaluator
+└── run C → LLM judge
+```
+
+rather than one run mixing evaluators with different reproducibility.
 
 **`seed` is deliberately not here.** It belongs to `EvaluationRun`, exactly as
 seed and replicate belong to `Run` (ADR-015 §3). If the seed were part of the

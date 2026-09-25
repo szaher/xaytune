@@ -48,9 +48,7 @@ experiment = xaytune.Experiment(
         ),
     ),
     evaluation=xaytune.EvaluationSpec(
-        evaluators=[
-            xaytune.TaskEvaluator("support-task-v2"),
-        ],
+        evaluator=xaytune.TaskEvaluator("support-task-v2"),
     ),
     budget=xaytune.Budget(
         max_runs=8,

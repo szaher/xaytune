@@ -35,7 +35,7 @@ from xaytune.core.state.status import EvaluationRunStatus, ExperimentNodeStatus
 
 def _spec(**overrides: object) -> EvaluationSpec:
     fields: dict[str, object] = {
-        "evaluators": (EvaluatorSpec(name="exact-match", version="1.0.0", config={"k": 1}),),
+        "evaluator": EvaluatorSpec(name="exact-match", version="1.0.0", config={"k": 1}),
         "dataset": DatasetRef(uri="./data/held-out.jsonl"),
         "slices": ("all",),
     }
@@ -72,7 +72,7 @@ def _metric(**overrides: object) -> MetricResult:
 
 def test_an_evaluation_spec_has_no_seed() -> None:
     with pytest.raises(ValidationError, match="seed"):
-        EvaluationSpec(evaluators=(EvaluatorSpec(name="exact-match"),), seed=1)  # type: ignore[call-arg]
+        EvaluationSpec(evaluator=EvaluatorSpec(name="exact-match"), seed=1)  # type: ignore[call-arg]
 
 
 def test_two_seeds_are_two_samples_of_one_evaluation() -> None:
@@ -84,15 +84,21 @@ def test_two_seeds_are_two_samples_of_one_evaluation() -> None:
     assert (first.seed, first.replicate) != (second.seed, second.replicate)
 
 
+def test_an_evaluation_names_one_evaluator() -> None:
+    """One run, one evaluator, one determinism class: several are several runs."""
+    with pytest.raises(ValidationError):
+        EvaluationSpec(evaluators=(EvaluatorSpec(name="exact-match"),))  # type: ignore[call-arg]
+
+
 # ---- what the fingerprint covers --------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "changed",
     [
-        {"evaluators": (EvaluatorSpec(name="exact-match", version="1.0.1", config={"k": 1}),)},
-        {"evaluators": (EvaluatorSpec(name="exact-match", version="1.0.0", config={"k": 5}),)},
-        {"evaluators": (EvaluatorSpec(name="bleu", version="1.0.0", config={"k": 1}),)},
+        {"evaluator": EvaluatorSpec(name="exact-match", version="1.0.1", config={"k": 1})},
+        {"evaluator": EvaluatorSpec(name="exact-match", version="1.0.0", config={"k": 5})},
+        {"evaluator": EvaluatorSpec(name="bleu", version="1.0.0", config={"k": 1})},
         {"dataset": DatasetRef(uri="./data/other.jsonl")},
         {"slices": ("hard",)},
     ],
@@ -107,13 +113,11 @@ def test_what_is_measured_changes_the_fingerprint(changed: dict) -> None:
     [
         {"metadata": {"note": "rerun"}},
         {
-            "evaluators": (
-                EvaluatorSpec(
-                    name="exact-match",
-                    version="1.0.0",
-                    config={"k": 1},
-                    determinism=EvaluatorDeterminism.STOCHASTIC,
-                ),
+            "evaluator": EvaluatorSpec(
+                name="exact-match",
+                version="1.0.0",
+                config={"k": 1},
+                determinism=EvaluatorDeterminism.STOCHASTIC,
             )
         },
     ],

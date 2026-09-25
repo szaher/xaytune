@@ -429,7 +429,6 @@ class EmbeddedControllerHost:
         nodes: list[NodeOutcome] = []
         settled = True
         trained = deciding = evaluating = False
-        live = False  # a candidate not yet COMPLETED, REJECTED, CANCELLED or FAILED
         for node in aggregates.nodes_for_experiment(str(experiment_id)):
             runs: list[RunOutcome] = []
             for run in aggregates.runs_for_node(str(node.id)):
@@ -464,7 +463,6 @@ class EmbeddedControllerHost:
                     )
                 )
             deciding = deciding or node.status is ExperimentNodeStatus.DECIDING
-            live = live or not node.is_terminal
             nodes.append(
                 NodeOutcome(
                     node_id=node.id,
@@ -488,14 +486,12 @@ class EmbeddedControllerHost:
             next_stage = "decision"
         elif trained or evaluating:
             next_stage = "evaluation"
-        elif (
-            nodes
-            and not live
-            and any(node.status is ExperimentNodeStatus.REJECTED for node in nodes)
-        ):
-            # Every candidate is settled and none ended the experiment: a
-            # rejected candidate leaves it open for another. Proposing one is
-            # a planner's work, which does not exist yet.
+        elif nodes and all(node.status is ExperimentNodeStatus.REJECTED for node in nodes):
+            # Every candidate was evaluated and rejected on its merits, and
+            # the experiment is still open: another candidate is what comes
+            # next -- a planner's work, which does not exist yet. Only a
+            # scientific outcome leads here. A candidate that failed or was
+            # cancelled did not establish a result, and is failure-handling.
             next_stage = "planning"
         else:
             # Training failed or was cancelled, or an evaluation ended without

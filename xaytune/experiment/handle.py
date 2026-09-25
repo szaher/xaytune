@@ -52,15 +52,26 @@ __all__ = [
 NextStage = Literal["evaluation", "decision", "planning", "failure-handling"]
 """Advisory: the controller work that would move the experiment on.
 
+```text
+None                 the experiment is terminal
+"decision"           a candidate is DECIDING: its decision was deferred
+"evaluation"         a trained candidate is unevaluated, or evaluating
+"planning"           the experiment is ACTIVE and every candidate was rejected
+                     on its merits: another candidate is needed to go on
+"failure-handling"   training or evaluation failed or was cancelled, and did
+                     not establish a result: recovery or policy is needed
+```
+
 Deliberately not named after a status. ``"evaluation"`` is not
 ``ExperimentNodeStatus.EVALUATING``: it is the next work for a trained node
 nothing has evaluated, or the evaluation still running. ``"decision"`` is a
 node in ``DECIDING`` that the decision engine could not decide -- its
 ``DecisionDeferred`` event says why -- and that someone must decide.
-``"planning"`` is an experiment still ``ACTIVE`` whose candidates are all
-settled, one of them rejected: a ``REJECT`` judges the candidate, not the
-experiment, and what comes next is another candidate -- a planner's work,
-which does not exist yet."""
+``"planning"`` comes only from a scientific outcome -- every candidate
+``REJECTED`` -- never from candidates merely having ended: a failed or
+cancelled candidate is ``"failure-handling"``, even beside a rejected one.
+A ``REJECT`` judges the candidate, not the experiment, and what comes next is
+another candidate: a planner's work, which does not exist yet."""
 
 _FOLLOW_INTERVAL_SECONDS = 0.05
 
@@ -106,8 +117,8 @@ class ExperimentResult(FrozenDomainModel):
         next_stage: Advisory controller work that would move the experiment
             on, if it could run -- never a status any aggregate is in:
             ``"decision"`` for a node in ``DECIDING`` the engine could not
-            decide, ``"planning"`` for an active experiment whose candidate
-            was rejected and which needs another,
+            decide, ``"planning"`` for an active experiment whose candidates
+            were all rejected and which needs another,
             ``"evaluation"`` for a trained candidate nothing has evaluated (or
             whose evaluation is still running), ``"failure-handling"`` for one
             whose runs or evaluations failed or were cancelled (retry, recover

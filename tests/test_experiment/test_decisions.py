@@ -288,3 +288,119 @@ def test_the_host_decides_with_the_engine_it_is_given(tmp_path: Path) -> None:
     )
     (decision,) = record["decisions"]
     assert decision.engine_name == "strict"
+
+
+# ---- what next_stage says, pinned ----------------------------------------------------
+
+_PATHS: dict[ExperimentNodeStatus, tuple[ExperimentNodeStatus, ...]] = {
+    ExperimentNodeStatus.DECIDING: (
+        ExperimentNodeStatus.PLANNED,
+        ExperimentNodeStatus.READY,
+        ExperimentNodeStatus.ACTIVE,
+        ExperimentNodeStatus.EVALUATING,
+        ExperimentNodeStatus.DECIDING,
+    ),
+    ExperimentNodeStatus.REJECTED: (
+        ExperimentNodeStatus.PLANNED,
+        ExperimentNodeStatus.READY,
+        ExperimentNodeStatus.ACTIVE,
+        ExperimentNodeStatus.EVALUATING,
+        ExperimentNodeStatus.DECIDING,
+        ExperimentNodeStatus.REJECTED,
+    ),
+    ExperimentNodeStatus.FAILED: (
+        ExperimentNodeStatus.PLANNED,
+        ExperimentNodeStatus.READY,
+        ExperimentNodeStatus.ACTIVE,
+        ExperimentNodeStatus.FAILED,
+    ),
+    ExperimentNodeStatus.CANCELLED: (
+        ExperimentNodeStatus.PLANNED,
+        ExperimentNodeStatus.READY,
+        ExperimentNodeStatus.ACTIVE,
+        ExperimentNodeStatus.CANCELLED,
+    ),
+}
+
+
+def _next_stage(
+    tmp_path: Path, nodes: tuple[ExperimentNodeStatus, ...], experiment: ExperimentStatus
+) -> Any:
+    """next_stage for an experiment whose record holds candidates in *nodes*."""
+    from tests.test_storage.conftest import make_experiment, make_node
+    from xaytune.experiment import EmbeddedControllerHost
+
+    actor = Actor(type="system", id="test")
+
+    async def scenario() -> Any:
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            repo = host.repository
+            recorded = repo.create_experiment(make_experiment(), actor=actor)
+            recorded = repo.transition_experiment(
+                recorded.id,
+                expected_revision=recorded.revision,
+                new_status=ExperimentStatus.ACTIVE,
+                actor=actor,
+            )
+            for index, status in enumerate(nodes):
+                node = repo.create_node(make_node(recorded, fingerprint=str(index)), actor=actor)
+                for step in _PATHS[status]:
+                    node = repo.transition_node(
+                        node.id, expected_revision=node.revision, new_status=step, actor=actor
+                    )
+            if experiment is not ExperimentStatus.ACTIVE:
+                repo.transition_experiment(
+                    recorded.id,
+                    expected_revision=recorded.revision,
+                    new_status=experiment,
+                    actor=actor,
+                )
+            return host._result(recorded.id).next_stage
+        finally:
+            await host.close()
+
+    return asyncio.run(scenario())
+
+
+REJECTED, FAILED, DECIDING, CANCELLED = (
+    ExperimentNodeStatus.REJECTED,
+    ExperimentNodeStatus.FAILED,
+    ExperimentNodeStatus.DECIDING,
+    ExperimentNodeStatus.CANCELLED,
+)
+
+
+@pytest.mark.parametrize(
+    ("nodes", "experiment", "stage"),
+    [
+        ((REJECTED,), ExperimentStatus.ACTIVE, "planning"),
+        ((REJECTED, REJECTED), ExperimentStatus.ACTIVE, "planning"),
+        ((FAILED,), ExperimentStatus.ACTIVE, "failure-handling"),
+        ((CANCELLED,), ExperimentStatus.ACTIVE, "failure-handling"),
+        ((REJECTED, FAILED), ExperimentStatus.ACTIVE, "failure-handling"),
+        ((DECIDING,), ExperimentStatus.ACTIVE, "decision"),
+        ((REJECTED, DECIDING), ExperimentStatus.ACTIVE, "decision"),
+        ((REJECTED,), ExperimentStatus.FAILED, None),
+        ((DECIDING,), ExperimentStatus.CANCELLED, None),
+    ],
+    ids=[
+        "rejected-is-planning",
+        "all-rejected-is-planning",
+        "failed-is-failure-handling",
+        "cancelled-is-failure-handling",
+        "a-failure-beside-a-rejection-is-failure-handling",
+        "deferred-is-decision",
+        "a-deferral-beside-a-rejection-is-decision",
+        "terminal-is-none",
+        "terminal-is-none-even-while-deciding",
+    ],
+)
+def test_next_stage_follows_what_the_record_says(
+    tmp_path: Path,
+    nodes: tuple[ExperimentNodeStatus, ...],
+    experiment: ExperimentStatus,
+    stage: str | None,
+) -> None:
+    """Planning only from a scientific outcome; a failure is never a planner request."""
+    assert _next_stage(tmp_path, nodes, experiment) == stage

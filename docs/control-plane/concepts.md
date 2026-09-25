@@ -101,10 +101,21 @@ explicitly:
   candidate has been evaluated and decided. `ACTIVE` while it has not: after
   training with no evaluation configured, or when the decision was deferred.
 - `quiescent`: always true for a result `wait()` returns.
-- `next_stage`: the work that would move things on. `"evaluation"` means a
-  trained candidate nothing has evaluated yet. `"decision"` means a candidate in
-  `DECIDING` that the decision engine could not decide (see below). `"failure-handling"` means a run or evaluation
-  failed or was cancelled. `None` means the experiment is terminal.
+- `next_stage`: the work that would move things on. It is advice, not a
+  status:
+
+  ```text
+  None                 the experiment is terminal
+  "decision"           a candidate is DECIDING: its decision was deferred
+  "evaluation"         a trained candidate is unevaluated, or evaluating
+  "planning"           every candidate was rejected on its merits, and the
+                       experiment is still ACTIVE: another candidate is needed
+  "failure-handling"   training or evaluation failed or was cancelled
+  ```
+
+  `"planning"` comes only from a scientific outcome. A candidate that failed
+  or was cancelled did not establish a result, so it leads to
+  `"failure-handling"`, even beside a rejected one.
 - `nodes`: each candidate with its runs, attempts, artifacts and evaluations.
 
 ## Cancellation

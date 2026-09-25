@@ -555,9 +555,11 @@ As built:
   held **durably** on the attempt from the moment it arrives, so a stream that
   dies over a live workload, and then the controller, cannot lose it.
 - **Provenance is exact.** A result agrees with its run in node, fingerprint,
-  subject identity and digest, and every metric's evaluator, version and seed;
-  the database refuses one that does not. Drift in what a worker reports fails
-  the evaluation, with the reason on the event.
+  subject identity and digest, every metric's evaluator, version and seed, and
+  each report's producer; the repository refuses one that does not, and the
+  database independently refuses the column-level subset (run, node,
+  fingerprint, subject id and digest, one result per run, no edits). Drift in
+  what a worker reports fails the evaluation, with the reason on the event.
 - **Preemption** fails the run (the attempt `PREEMPTED`) and stalls the node;
   retry, when it exists, is a new attempt.
 - **Cycles** (ADR-015 implementation notes): required runs are the current

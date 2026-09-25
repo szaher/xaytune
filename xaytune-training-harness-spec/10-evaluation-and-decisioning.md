@@ -145,8 +145,11 @@ There is no `status`: a result exists only for a run that `SUCCEEDED`, written
 in the same commit, so a result is never pending or failed. There are no
 `constraints` yet either; constraint evaluation arrives with the DecisionEngine
 (PR-015). Every provenance field must agree with the run -- node, fingerprint,
-subject (identity and digest), and each metric's evaluator, evaluator version
-and seed -- and the database refuses a result that does not.
+subject (identity and digest), each metric's evaluator, evaluator version and
+seed, and each report's producer -- and the repository refuses a result that
+does not. The database independently refuses the column-level subset: a result
+whose run, node, evaluation fingerprint, subject artifact id or subject digest
+disagrees with its run, a second result for one run, and any edit.
 
 `evaluation_run_id` is required, not convenience. After ADR-015 a node can hold
 several `EvaluationRun`s over the same subject and fingerprint — replicates 0,

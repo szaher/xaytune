@@ -283,9 +283,14 @@ silent-stall failure into a detected one.
   fingerprint, subject (identity *and* digest -- two artifacts can share
   bytes), and each metric's evaluator, evaluator version and seed, a missing
   seed included. A report's producer is stamped by the controller with the
-  result's id; a worker-supplied producer is refused. The repository and the
-  database both enforce it, and a worker reporting drift fails its
-  evaluation, with the reason on the event.
+  result's id; a worker-supplied producer is refused. The repository
+  enforces **all** of this (`result_provenance_problems`), and a worker
+  reporting drift fails its evaluation, with the reason on the event. The
+  database independently enforces the column-level subset -- the result's
+  run, node, evaluation fingerprint, subject artifact id and subject digest,
+  one result per run, and immutability -- so a writer that bypassed the
+  repository still cannot misfile a result; the per-metric and report rules
+  live in the payload and are the repository's.
 - **A stall is recorded, not raised.** `EvaluationStalled` is an event on the
   node, once per cycle; the node stays `EVALUATING`. What to do about it is a
   decision.

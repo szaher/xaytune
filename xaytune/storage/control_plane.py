@@ -877,16 +877,18 @@ class ControlPlaneRepository:
     ) -> EvaluationResult:
         """Record what an evaluation measured, and that it succeeded, in one commit.
 
-        The result, the attempt's ``SUCCEEDED``, the run's ``SUCCEEDED`` and the
-        telemetry cursor at the completion that carried the result: a crash
-        before the commit leaves the cursor before that completion, so the
-        next controller reads it again and records the same result; a crash
-        after it leaves nothing to redo. There is no state in between, and so
-        no success without a result and no result without a success.
+        The result, the attempt's ``SUCCEEDED`` and the run's ``SUCCEEDED``:
+        there is no state in between, so no success without a result and no
+        result without a success. The completion the result comes from was
+        already held durably, with the cursor advanced to it
+        (:meth:`hold_evaluation_completion`), so a crash before this commit
+        loses nothing -- the next controller records the same result from the
+        held completion -- and a crash after it leaves nothing to redo.
+        *telemetry_position* only moves the cursor forward, if at all.
 
-        The result's provenance is checked against the run it names: its
-        node, fingerprint and subject must be the run's, and a metric that
-        names a seed must name the run's.
+        The result's provenance is checked against the run it names -- every
+        field, including each metric's evaluator, version and seed
+        (``result_provenance_problems``).
 
         Raises:
             AggregateNotFoundError: If the attempt does not exist.

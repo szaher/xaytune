@@ -110,11 +110,12 @@ def test_a_trained_model_is_evaluated_and_the_node_moves_to_deciding(tmp_path: P
     assert _stalls(events) == []
 
 
-def test_the_result_is_recorded_with_the_cursor_at_its_completion(tmp_path: Path) -> None:
-    """The completion's position commits with the result, so a crash before it replays it.
+def test_the_cursor_stops_at_the_held_completion(tmp_path: Path) -> None:
+    """The cursor advances to the completion when it is held, and no further.
 
     WorkerReady, EvaluationStarted, MetricObserved, EvaluationCompleted: the
-    completion is sequence 3, and nothing after it has an effect to record.
+    completion is sequence 3, held durably with the cursor there, and nothing
+    after it has an effect to record.
     """
     from xaytune.experiment import EmbeddedControllerHost
 

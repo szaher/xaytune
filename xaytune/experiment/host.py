@@ -40,9 +40,10 @@ training run SUCCEEDED
    ├── node ACTIVE → EVALUATING, cycle n, EvaluationRun   one commit
    ├── EvaluationAttempt + INTENDED operation              one commit
    ├── runtime.submit_or_get()                             the same journal
-   ├── observe: EvaluationCompleted(metrics) held until the runtime says
-   │   the workload succeeded, then
-   │   result + attempt + run SUCCEEDED + cursor           one commit
+   ├── observe: EvaluationCompleted(metrics) held durably,
+   │   with the cursor advanced to it                      one commit
+   ├── the runtime says the workload succeeded:
+   │   result + attempt + run SUCCEEDED                    one commit
    └── node EVALUATING → DECIDING                          reconciled, not assumed
 ```
 
@@ -1010,14 +1011,17 @@ class EmbeddedControllerHost:
         """Turn one evaluation's telemetry into durable transitions, then settle it.
 
         Success takes **two** facts: an ``EvaluationCompleted`` carrying the
-        metrics, and the runtime reporting that the workload succeeded. The
-        completion alone is held, not recorded -- the workload may still fail
-        on its way out -- and an exit of 0 with no completion is not a
-        success either: the evaluation produced no result, so it failed.
+        metrics, and the runtime reporting that the workload succeeded. An exit
+        of 0 with no completion is not a success: the evaluation produced no
+        result, so it failed.
 
-        The completion's position is the cursor recorded with the result, in
-        the same commit. So a controller that dies holding a completion has
-        advanced nothing past it, and the next one reads it again.
+        The completion is held durably, with its telemetry position, in the
+        same commit that advances the cursor to it
+        (``hold_evaluation_completion``). It is not yet an ``EvaluationResult``
+        -- the workload may still fail on its way out, and runtime success is
+        still required. Because it is durable, a change of stream generation
+        or a controller restart cannot lose it: whichever controller sees the
+        workload end reads the completion from the record, not from a stream.
         """
         aggregates = self.repository.aggregates
         generation, sequence = aggregates.telemetry_position(

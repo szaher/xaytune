@@ -76,9 +76,10 @@ def test_no_built_in_plugin_states_a_version_of_its_own() -> None:
 def test_the_built_in_plugins_record_the_running_version() -> None:
     from xaytune.compilation.native import NativeCompiler
     from xaytune.compilation.trl import TRLCompiler
+    from xaytune.evaluation.native import NativeEvaluator
     from xaytune.runtimes.local import LocalRuntime
 
-    for plugin in (NativeCompiler, TRLCompiler, LocalRuntime):
+    for plugin in (NativeCompiler, TRLCompiler, LocalRuntime, NativeEvaluator):
         assert plugin.descriptor.xaytune_version == gate.project_version()
 
 

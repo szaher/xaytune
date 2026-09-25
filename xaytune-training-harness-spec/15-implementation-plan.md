@@ -578,9 +578,52 @@ As built:
 - **Not in PR-013:** evaluation reuse lookups (ADR-015 AC-4, 4a) and choosing
   a different runtime for evaluation.
 
-### PR-014 — existing eval adapter
+### PR-014 — the native evaluator
 
-Wrap current metrics/lm-eval.
+Wrap current metrics/lm-eval. As built, the native half, with lm-eval split
+into PR-014b:
+
+- **`NativeEvaluator`** (`xaytune.evaluation.native`), registered by default as
+  `native`, with its worker `xaytune.workers.eval_native` under telemetry
+  v1alpha3. The narrow, exact surface: a local model artifact, a local JSONL
+  file of plain text pinned by `DatasetRef.content_digest` (which the worker
+  verifies before measuring), and next-token `loss`, `perplexity` and
+  `token_accuracy`, aggregated over tokens. Format, truncation length, batch
+  size, precision (`fp32` only) and metrics are required `EvaluatorSpec.config`,
+  so they are in the `EvaluationFingerprint`. The tokenizer is the model's own,
+  so it is part of the subject. Slices, dataset revisions and splits, and
+  dataset fingerprints the worker cannot verify are refused.
+- **It reuses the trainer's text pipeline, not `xaytune.eval.evaluate()`.** The
+  existing function scores the logits at *i* against the token at *i*, not at
+  *i + 1*, and averages losses per batch. Its numbers would describe neither
+  next-token prediction nor the data independent of batching.
+- **`SEEDED`, never `DETERMINISTIC`.** Floating-point results depend on the
+  device and library versions. The run's seed is applied and recorded on
+  every metric, and the report names the environment.
+- **`Evaluator.supports(spec)`**, asked by the host at submission: an
+  evaluation that cannot run exactly as declared is refused before anything
+  trains. A refusal only `prepare()` can make, about the trained subject,
+  fails the evaluation run with the reasons and stalls the cycle. It no
+  longer escapes the controller task.
+- **No reuse.** A test pins that a second evaluation of the same artifact, with
+  the same fingerprint and seed, runs a second workload. The reuse lookup
+  (ADR-015 AC-4, 4a) stays a separate decision.
+- **Restart safety with the real evaluator**: the PR-013 crash points
+  (`evaluating`, `eval-lost-response`, `eval-never-sent`, `eval-stream-lost`)
+  with the native worker, each finishing with one attempt and one workload.
+
+### PR-014b — lm-eval evaluator
+
+After PR-015, or alongside it: not a prerequisite for the DecisionEngine, and
+not a `1.0.0a1` blocker unless that release is decided to need benchmark
+evaluation. Split from PR-014 because it needs a resolution step the contract does not
+have yet. An lm-eval task names a mutable definition and a hub dataset. Pinning
+them (task name, version and config digest; lm-eval version, `==0.4.13`
+exactly; dataset path, name and immutable revision SHA; few-shot count;
+generation settings) means resolving mutable references **before** the durable
+request is recorded, because `prepare()` must never resolve anything. The
+run's seed feeds lm-eval's Python, NumPy, Torch and few-shot seeds, and any task
+that cannot honour a seeded contract is refused.
 
 ### PR-015 — DecisionEngine
 

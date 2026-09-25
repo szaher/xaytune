@@ -1,7 +1,7 @@
 """The experiment the runnable examples submit: one SFT candidate, run locally.
 
-Shared by ``02_train.py``, ``03_cancel.py`` and ``04_restart_and_attach.py`` so
-they differ only in what they do with it. ``01_compile_a_candidate.py`` builds
+Shared by ``02_train.py`` to ``05_train_and_evaluate.py``, so they differ only
+in what they do with it. ``01_compile_a_candidate.py`` builds
 the same candidate inline, field by field.
 
 Every value that changes what the model learns is declared. The compilers

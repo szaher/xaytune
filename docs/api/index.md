@@ -9,7 +9,7 @@ This section documents xaytune's Python API.
 | `xaytune.core` | Domain types: identifiers, aggregates, state machines, `CandidateSpec`, execution specs ([reference](core.md)) |
 | `xaytune.experiment` | `EmbeddedControllerHost`, `ExperimentHandle`, `ExperimentSpec` |
 | `xaytune.compilation` | `TrainerCompiler`, `NativeCompiler`, `TRLCompiler` |
-| `xaytune.evaluation` | The `Evaluator` contract |
+| `xaytune.evaluation` | The `Evaluator` contract, and `NativeEvaluator` in `xaytune.evaluation.native` |
 | `xaytune.runtimes` | `RuntimeBackend` and `LocalRuntime` |
 | `xaytune.storage` | SQLite persistence, migrations, `ControlPlaneRepository` |
 

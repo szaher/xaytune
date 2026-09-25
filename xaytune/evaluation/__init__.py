@@ -16,14 +16,15 @@ as training does.
 Evaluation is **not** a trainer callback and never runs inside training
 (ADR-007). It consumes a finished artifact and mutates no training state.
 
-This module is the contract only. The evaluators that wrap Xaytune's metrics
-and lm-eval arrive in PR-014.
+This module is the contract. The built-in evaluator is
+:class:`~xaytune.evaluation.native.NativeEvaluator`.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from xaytune.compilation import SupportResult
 from xaytune.core.capabilities import CapabilityDocument, PluginDescriptor
 from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorDeterminism
 from xaytune.core.execution import EvaluationExecutionSpec
@@ -34,7 +35,16 @@ __all__ = ["EvaluationContext", "Evaluator", "UnsupportedEvaluationError"]
 
 
 class UnsupportedEvaluationError(ValueError):
-    """An evaluator was asked to prepare an evaluation it cannot run as declared."""
+    """An evaluator was asked for an evaluation it cannot run as declared.
+
+    Carries every reason, not the first, for the reason
+    :class:`~xaytune.compilation.UnsupportedCandidateError` does.
+    """
+
+    def __init__(self, evaluator: str, reasons: tuple[str, ...]) -> None:
+        self.evaluator = evaluator
+        self.reasons = reasons
+        super().__init__(f"{evaluator} cannot run this evaluation: " + "; ".join(reasons))
 
 
 class EvaluationContext(FrozenDomainModel):
@@ -72,6 +82,17 @@ class Evaluator(Protocol):
 
     def capabilities(self) -> CapabilityDocument:
         """What this evaluator can measure, and what it needs to run."""
+        ...
+
+    def supports(self, spec: EvaluationSpec) -> SupportResult:
+        """Whether this evaluator can run *spec* exactly as declared, and if not, why.
+
+        Asked when an experiment is submitted, before anything is recorded:
+        an evaluation it would refuse must be refused then, not after hours
+        of training. Only what the spec says is judged -- the subject does not
+        exist yet -- so :meth:`prepare` may still refuse a subject it cannot
+        read. Inspects nothing outside the spec.
+        """
         ...
 
     def prepare(

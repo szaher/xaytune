@@ -93,8 +93,8 @@ xaytune ships three metrics, registered in `xaytune.eval.metrics.metric_registry
 
 | Metric | Function | Description |
 |--------|----------|-------------|
-| `loss` | `compute_loss` | Mean next-token cross-entropy over every target in the dataset: each batch's loss weighted by its target count |
-| `perplexity` | `compute_perplexity` | `exp(loss)`, with `loss` weighted as above |
+| `loss` | `compute_loss` | Mean cross-entropy loss. `evaluate()` and the training evaluation callback weight each batch's loss by its valid next-token target count, giving the mean over every target in the dataset; direct callers may pass `weights` (one non-negative count per loss). Without `weights`, losses are averaged plainly, for backward compatibility. |
+| `perplexity` | `compute_perplexity` | `exp` of the mean loss, weighted exactly as `loss` is: by target count from `evaluate()` and the training callback, by `weights` when a direct caller passes them, and plainly otherwise. |
 | `token_accuracy` | `compute_token_accuracy` | Fraction of next-token targets predicted correctly: the logits at *i* against the label at *i + 1*, labels of `-100` excluded |
 
 ### Custom Metrics

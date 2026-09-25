@@ -205,6 +205,12 @@ and a **decision engine** decides it.
   run, fingerprint, subject and metric values with their evaluator, seed,
   count and uncertainty). A field added to a result later does not change the
   identity of decisions already made.
+- **Attributable.** The repository does not take a proposal's word for what
+  it was decided on. It recomputes the input fingerprint from the stored
+  objective and the cycle's results, and refuses a proposal whose fingerprint
+  differs, names a result twice or not at all, or cites evidence from outside
+  the cycle. It does not check the outcome: which outcome the evidence
+  warrants is the engine's call, and a custom engine may use its own rules.
 - **Nothing guessed.** An objective without a target means "optimize this",
   not "this is good enough". With one candidate there is nothing to compare,
   so the candidate stays `DECIDING`, as it does when a metric is missing. A

@@ -51,7 +51,12 @@ from xaytune.core.domain.action import (
     ActionStatus,
     ActionTarget,
 )
-from xaytune.core.domain.decision import Decision, DecisionOutcome, DecisionProposal
+from xaytune.core.domain.decision import (
+    Decision,
+    DecisionContext,
+    DecisionOutcome,
+    DecisionProposal,
+)
 from xaytune.core.domain.evaluation import (
     EvaluationAttempt,
     EvaluationResult,
@@ -1080,9 +1085,15 @@ class ControlPlaneRepository:
         after deciding sees. Anything else is refused.
 
         The proposal must be about this node's current cycle, in
-        ``DECIDING``, and must name exactly that cycle's results: a decision
-        drawn from an earlier round's results, or from some of this round's,
-        is not attributable to the evidence it claims.
+        ``DECIDING``, and must name exactly that cycle's results, each once:
+        a decision drawn from an earlier round's results, or from some of
+        this round's, is not attributable to the evidence it claims. Its
+        evidence may cite only those results, and its ``input_fingerprint``
+        must be the one the experiment's objective and those results give
+        (:func:`~xaytune.core.domain.decision.decision_input_identity_v1`),
+        recomputed here, not taken on trust. Which outcome those inputs
+        warrant is the engine's to say and is not checked: a custom engine
+        may decide by rules of its own.
 
         Raises:
             AggregateNotFoundError: If the node does not exist.
@@ -1090,7 +1101,9 @@ class ControlPlaneRepository:
             ConcurrentModificationError: If the node moved since it was read.
             InvalidTransitionError: If the node is not in ``DECIDING``.
             ProvenanceError: If the proposal is about another experiment or
-                cycle, or names results other than the cycle's.
+                cycle, names results other than the cycle's or one twice,
+                cites a result outside the cycle, or claims an input
+                fingerprint the durable inputs do not give.
         """
         with write_transaction(self._connection):
             node = self.aggregates.load_node(str(proposal.node_id))
@@ -1115,18 +1128,43 @@ class ControlPlaneRepository:
                     f"decides cycle {proposal.evaluation_cycle}, but the node is in cycle "
                     f"{node.evaluation_cycle}"
                 )
-            cycle_results = {
-                result.id
+            results = tuple(
+                result
                 for run in self.aggregates.evaluation_runs_for_node(
                     str(node.id), cycle=node.evaluation_cycle
                 )
                 if (result := self.aggregates.evaluation_result_for_run(str(run.id))) is not None
-            }
-            if set(proposal.evaluation_result_ids) != cycle_results:
+            )
+            cycle_results = {result.id for result in results}
+            named = proposal.evaluation_result_ids
+            if len(set(named)) != len(named):
+                repeated = sorted({str(i) for i in named if named.count(i) > 1})
+                problems.append(f"names results {repeated} more than once")
+            if set(named) != cycle_results:
                 problems.append(
-                    f"names results {sorted(proposal.evaluation_result_ids)}, but the "
-                    f"cycle's are {sorted(cycle_results)}"
+                    f"names results {sorted(named)}, but the cycle's are {sorted(cycle_results)}"
                 )
+            cited = {evidence.evaluation_result_id for evidence in proposal.evidence}
+            if foreign := cited - cycle_results:
+                problems.append(f"cites results {sorted(foreign)} from outside the cycle")
+            if not problems:
+                # The fingerprint is the record's claim about what was decided
+                # on. Recompute it from the durable inputs rather than trust
+                # the caller's: which outcome follows from those inputs is the
+                # engine's business, but what the inputs were is ours.
+                experiment = self.aggregates.load_experiment(str(node.experiment_id))
+                expected = DecisionContext(
+                    experiment_id=experiment.id,
+                    node_id=node.id,
+                    evaluation_cycle=node.evaluation_cycle,
+                    objective=experiment.objective,
+                    results=results,
+                ).input_fingerprint()
+                if proposal.input_fingerprint != expected:
+                    problems.append(
+                        f"claims input fingerprint {proposal.input_fingerprint}, but the "
+                        f"objective and the cycle's results fingerprint to {expected}"
+                    )
             if problems:
                 raise ProvenanceError(f"decision for node {node.id} " + "; ".join(problems))
             if node.revision != expected_node_revision:

@@ -50,13 +50,34 @@ def _deciding(repo: ControlPlaneRepository, node: Any) -> tuple[Any, Any]:
     return repo.aggregates.load_node(str(node.id)), result
 
 
-def _context(repo: ControlPlaneRepository, node: Any, *results: Any, **objective: Any) -> Any:
+def _objective(repo: ControlPlaneRepository, node: Any, **changes: Any) -> Any:
+    """Put *changes* into the experiment's durable objective, and return it.
+
+    The repository recomputes the input fingerprint from the stored
+    objective, so a test decides against the objective it stores.
+    """
     experiment = repo.aggregates.load_experiment(str(node.experiment_id))
+    objective = experiment.objective.model_copy(update=changes)
+    if objective != experiment.objective:
+        with write_transaction(repo._connection):
+            repo.aggregates._update_experiment(
+                type(experiment).model_validate(
+                    {
+                        **experiment.model_dump(mode="python"),
+                        "objective": objective,
+                        "revision": experiment.revision + 1,
+                    }
+                )
+            )
+    return objective
+
+
+def _context(repo: ControlPlaneRepository, node: Any, *results: Any, **objective: Any) -> Any:
     return DecisionContext(
         experiment_id=node.experiment_id,
         node_id=node.id,
         evaluation_cycle=node.evaluation_cycle,
-        objective=experiment.objective.model_copy(update=objective),
+        objective=_objective(repo, node, **objective),
         results=results,
     )
 
@@ -67,6 +88,23 @@ def _decide(repo: ControlPlaneRepository, node: Any, *results: Any, **objective:
 
     objective.setdefault("primary", ObjectiveMetric(name="accuracy", direction="maximize"))
     return ThresholdDecisionEngine().decide(_context(repo, node, *results, **objective))
+
+
+def _refused_and_untouched(
+    repo: ControlPlaneRepository, node: Any, proposal: Any
+) -> ProvenanceError:
+    """*proposal* is refused, and nothing it would have caused has happened."""
+    deciding = repo.aggregates.load_node(str(node.id))
+    with pytest.raises(ProvenanceError) as refused:
+        repo.record_decision(proposal, expected_node_revision=deciding.revision, actor=_ACTOR)
+    assert repo.aggregates.decision_for_cycle(str(node.id), deciding.evaluation_cycle) is None
+    after = repo.aggregates.load_node(str(node.id))
+    assert (after.status, after.decision_ids) == (ExperimentNodeStatus.DECIDING, ())
+    experiment = repo.aggregates.load_experiment(str(node.experiment_id))
+    assert (experiment.status, experiment.best_node_id) == (ExperimentStatus.ACTIVE, None)
+    kinds = [e.event_type for e in repo.events.events_for_experiment(str(node.experiment_id))]
+    assert "DecisionRecorded" not in kinds
+    return refused.value
 
 
 # ---- applied in one commit ---------------------------------------------------------
@@ -293,6 +331,71 @@ def test_results_of_an_earlier_cycle_do_not_decide_this_one(
     assert repo.aggregates.decision_for_cycle(str(node.id), 1) is None
 
 
+def test_a_forged_input_fingerprint_is_refused(repo: ControlPlaneRepository, node: Any) -> None:
+    """Right node, cycle and results -- but a fingerprint the inputs do not give."""
+    deciding, result = _deciding(repo, node)
+    forged = _decide(repo, deciding, result, target=0.5).model_copy(
+        update={"input_fingerprint": "sha256:invented"}
+    )
+    refused = _refused_and_untouched(repo, node, forged)
+    assert "claims input fingerprint sha256:invented" in str(refused)
+
+
+def test_a_fingerprint_of_another_objective_is_refused(
+    repo: ControlPlaneRepository, node: Any
+) -> None:
+    """A proposal decided against an objective the experiment does not have."""
+    deciding, result = _deciding(repo, node)
+    proposal = _decide(repo, deciding, result, target=0.5)
+    _objective(repo, node, target=0.6)  # the record's objective is no longer the one decided on
+
+    refused = _refused_and_untouched(repo, node, proposal)
+    assert "claims input fingerprint" in str(refused)
+
+
+def test_the_repository_does_not_second_guess_the_outcome(
+    repo: ControlPlaneRepository, node: Any
+) -> None:
+    """Policy is the engine's: an outcome ThresholdDecisionEngine would not choose is recorded."""
+    deciding, result = _deciding(repo, node)
+    proposal = _decide(repo, deciding, result, target=0.5)  # threshold says STOP_SUCCEEDED
+    custom = proposal.model_copy(
+        update={"outcome": DecisionOutcome.REJECT, "engine_name": "custom", "reason": "house rule"}
+    )
+
+    recorded = repo.record_decision(custom, expected_node_revision=deciding.revision, actor=_ACTOR)
+
+    assert recorded.outcome is DecisionOutcome.REJECT
+    assert repo.aggregates.load_node(str(node.id)).status is ExperimentNodeStatus.REJECTED
+
+
+def test_a_result_named_twice_is_refused(repo: ControlPlaneRepository, node: Any) -> None:
+    deciding, result = _deciding(repo, node)
+    twice = _decide(repo, deciding, result, target=0.5).model_copy(
+        update={"evaluation_result_ids": (result.id, result.id)}
+    )
+    refused = _refused_and_untouched(repo, node, twice)
+    assert "more than once" in str(refused)
+
+
+def test_evidence_citing_a_result_outside_the_cycle_is_refused(
+    repo: ControlPlaneRepository, node: Any
+) -> None:
+    deciding, result = _deciding(repo, node)
+    proposal = _decide(repo, deciding, result, target=0.5)
+    elsewhere = EvaluationId.generate()
+    cited = proposal.model_copy(
+        update={
+            "evidence": tuple(
+                evidence.model_copy(update={"evaluation_result_id": elsewhere})
+                for evidence in proposal.evidence
+            )
+        }
+    )
+    refused = _refused_and_untouched(repo, node, cited)
+    assert f"cites results ['{elsewhere}'] from outside the cycle" in str(refused)
+
+
 # ---- deferred --------------------------------------------------------------------
 
 
@@ -343,11 +446,10 @@ def test_the_database_refuses_a_second_decision_for_a_cycle(
         expected_node_revision=deciding.revision,
         actor=_ACTOR,
     )
+    second = Decision.record(_decide(repo, deciding, result, target=0.9), actor=_ACTOR)
     with pytest.raises(sqlite3.IntegrityError):
         with write_transaction(repo._connection):
-            repo.aggregates._insert_decision(
-                Decision.record(_decide(repo, deciding, result, target=0.9), actor=_ACTOR)
-            )
+            repo.aggregates._insert_decision(second)
 
 
 def test_the_database_refuses_a_decision_filed_under_another_experiment(

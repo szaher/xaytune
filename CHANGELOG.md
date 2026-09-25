@@ -23,6 +23,7 @@ planned as `1.0.0a1`, once it can train, evaluate and decide.
   - Migration 007 records each decision, with its evidence and an input fingerprint, in one commit with what it causes: `STOP_SUCCEEDED` completes the node and succeeds the experiment, setting `best_node_id`; `STOP_FAILED` rejects the node and fails the experiment; `REJECT` rejects the node and leaves the experiment `ACTIVE`.
   - `next_stage` gains `"planning"`: the experiment is `ACTIVE` and every candidate was rejected on its merits. It comes only from that scientific outcome; a failed or cancelled candidate is `"failure-handling"`, even beside a rejected one.
   - Idempotent per cycle: a different decision for a decided cycle is refused, and a controller that restarts decides once.
+  - Attributable: recording recomputes the input fingerprint from the stored objective and the cycle's results, and refuses a proposal whose fingerprint differs, that names a result twice, or whose evidence cites a result outside the cycle. The outcome itself is not re-checked; decision policy belongs to the engine.
   - `EmbeddedControllerHost` takes an optional `decision_engine`.
 - **`examples/control_plane/`**, and control-plane *Getting started* and *Concepts* pages in the docs.
 - **A release gate**: publishing a GitHub release fails unless its tag is `v` plus the `pyproject.toml` version, and `xaytune/_version.py` agrees (`scripts/check_release_version.py`). Manual TestPyPI dispatches are not gated.

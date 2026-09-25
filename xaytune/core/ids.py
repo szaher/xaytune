@@ -30,7 +30,10 @@ __all__ = [
     "ArtifactId",
     "CheckpointId",
     "DecisionId",
+    "EvaluationAttemptId",
     "EvaluationId",
+    "EvaluationResultId",
+    "EvaluationRunId",
     "EventId",
     "ExperimentId",
     "ExperimentNodeId",
@@ -191,10 +194,32 @@ class IncidentId(TypedId):
 
 
 class EvaluationId(TypedId):
-    """Identifies an evaluation result."""
+    """Identifies an evaluation result.
+
+    Named before ADR-015 split evaluation into run, attempt and result; the
+    result kept this id, so it is also exported as :data:`EvaluationResultId`.
+    """
 
     __slots__ = ()
     prefix = "eval_"
+
+
+EvaluationResultId = EvaluationId
+"""The name ADR-015 uses for the result's id: the same type, not a new one."""
+
+
+class EvaluationRunId(TypedId):
+    """Identifies an ``EvaluationRun``: one logical evaluation of one subject."""
+
+    __slots__ = ()
+    prefix = "evalrun_"
+
+
+class EvaluationAttemptId(TypedId):
+    """Identifies an ``EvaluationAttempt``: one infrastructure attempt at a run."""
+
+    __slots__ = ()
+    prefix = "evalattempt_"
 
 
 class ArtifactId(TypedId):

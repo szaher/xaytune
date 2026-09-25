@@ -42,6 +42,7 @@ from xaytune.core.errors import IncompatiblePluginError
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import OperationId
 from xaytune.core.refs import RuntimeRef
+from xaytune.core.telemetry import TELEMETRY_V1ALPHA2, TELEMETRY_V1ALPHA3
 from xaytune.runtimes import (
     OperationOutcome,
     RuntimeEventEnvelope,
@@ -65,11 +66,13 @@ _LIVE: frozenset[RuntimeState] = frozenset({"pending", "queued", "starting", "ru
 not an ending, and it is not somewhere a caller should keep waiting."""
 _POLL_SECONDS = 0.02
 
-_TELEMETRY_PROTOCOL = "xaytune.telemetry/v1alpha2"
-"""The telemetry contract this backend's launcher emits.
+_TELEMETRY_PROTOCOLS: frozenset[str] = frozenset({TELEMETRY_V1ALPHA2, TELEMETRY_V1ALPHA3})
+"""The telemetry contracts this backend's launcher emits.
 
-Named here rather than read from the envelope so a plan compiled against
-an older protocol is refused at submission, which is what
+The launcher writes whichever of these the plan declares, so a training
+workload on ``v1alpha2`` and an evaluation on ``v1alpha3`` both run. Named
+here rather than read from the envelope so a plan compiled against any other
+protocol is refused at submission, which is what
 :class:`~xaytune.core.execution.TelemetryContract` exists to make
 possible."""
 
@@ -548,10 +551,13 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"rest would run something other than what was asked for"
         )
 
-    descriptor = plan.spec.compiler.descriptor
+    # Whichever plugin produced the spec -- a compiler or an evaluator -- is
+    # checked the same way; the runtime does not ask which it was.
+    producer = plan.spec.producer
+    descriptor = producer.descriptor
     if descriptor is None:
         return (
-            f"the plan names compiler {plan.spec.compiler.name!r} but carries no "
+            f"the plan names {producer.name!r} as its producer but carries no "
             f"PluginDescriptor; ADR-008 requires every plugin to declare one, and "
             f"a plan whose producer cannot be identified cannot be version-checked "
             f"or traced back to what built it"
@@ -564,9 +570,10 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
         # rejected and the controller learns nothing was started (ADR-008).
         return str(exc)
 
-    if plan.spec.telemetry.protocol_version != _TELEMETRY_PROTOCOL:
+    if plan.spec.telemetry.protocol_version not in _TELEMETRY_PROTOCOLS:
+        spoken = ", ".join(sorted(_TELEMETRY_PROTOCOLS))
         return (
-            f"this runtime speaks {_TELEMETRY_PROTOCOL}, and the plan asks for "
+            f"this runtime speaks {spoken}, and the plan asks for "
             f"{plan.spec.telemetry.protocol_version!r}; a worker and a controller "
             f"that disagree about the telemetry contract should fail at submission "
             f"rather than halfway through a run"

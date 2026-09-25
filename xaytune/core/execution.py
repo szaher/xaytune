@@ -1,14 +1,21 @@
 """What crosses the compile/execute boundary.
 
 ```text
-CandidateSpec            what we are testing
-      ↓ TrainerCompiler
-TrainingExecutionSpec    how to run it, runtime-neutral
-      ↓ CapabilityResolver
+CandidateSpec            what we are testing        EvaluationSpec + subject
+      ↓ TrainerCompiler                                   ↓ Evaluator
+TrainingExecutionSpec    how to run it,             EvaluationExecutionSpec
+      └──────────── runtime-neutral ──────────────────────┘
+                              ↓ CapabilityResolver
 ResolvedExecutionPlan    what a specific runtime will actually execute
       ↓ RuntimeBackend.submit_or_get
 RuntimeRef
 ```
+
+The two specs are siblings, not one type. Training and evaluation stay
+separate domain objects (ADR-015 §2); what they share is **transport** -- an
+entrypoint, a config, an environment, resources -- because a runtime executes
+those mechanically whatever the workload is. :data:`ExecutionSpec` is that
+union at the wire, and only there.
 
 Everything here **leaves the controller's process**, which is the constraint
 that shapes it: JSON-serializable, versioned, no live objects, no closures, no
@@ -26,13 +33,15 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from xaytune.core.capabilities import CapabilityRequirements, PluginDescriptor
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.observability import ObservabilitySpec
+from xaytune.core.refs import ArtifactRef
+from xaytune.core.telemetry import TELEMETRY_V1ALPHA2, TELEMETRY_V1ALPHA3
 
 __all__ = [
     "ArtifactInput",
@@ -43,6 +52,9 @@ __all__ = [
     "DependencySpec",
     "CommandEntrypoint",
     "EntrypointSpec",
+    "EvaluationExecutionSpec",
+    "EvaluatorIdentity",
+    "ExecutionSpec",
     "PythonModuleEntrypoint",
     "ResolvedExecutionPlan",
     "ResourceRequirements",
@@ -58,6 +70,19 @@ class CompilerIdentity(FrozenDomainModel):
     Part of `ExecutionFingerprint`: the same candidate compiled by two
     compilers, or by two versions of one, can execute differently, and
     provenance has to be able to say which one ran.
+    """
+
+    name: str
+    version: str
+    descriptor: PluginDescriptor | None = None
+
+
+class EvaluatorIdentity(FrozenDomainModel):
+    """Which evaluator prepared a spec, and at what version.
+
+    The evaluation counterpart of :class:`CompilerIdentity`: the runtime checks
+    the descriptor the same way (ADR-008), and provenance can say which
+    implementation measured.
     """
 
     name: str
@@ -202,29 +227,24 @@ class TelemetryContract(FrozenDomainModel):
     disagree fail at submission instead of halfway through a run.
     """
 
-    protocol_version: str = "xaytune.telemetry/v1alpha2"
+    protocol_version: str = TELEMETRY_V1ALPHA2
+    """A string rather than the known versions, so a plan asking for one this
+    runtime does not speak reaches the runtime and is refused at submission,
+    naming it -- rather than failing to construct somewhere upstream."""
+
     heartbeat_seconds: int | None = None
     endpoint: str | None = None
 
 
-class TrainingExecutionSpec(FrozenDomainModel):
-    """How to run a candidate — runtime-neutral, and ready to cross a boundary.
+class _WorkloadExecutionSpec(FrozenDomainModel):
+    """What a runtime executes, whatever the workload is for.
 
-    Produced by a :class:`~xaytune.compilation.TrainerCompiler`, consumed by a
-    resolver. It says everything about *what to execute* and nothing about
-    *where*: no cluster, no queue, no node. That separation is what lets the
-    same spec be resolved onto Local, Ray or Training Hub without recompiling
-    the candidate.
-
-    ``candidate_fingerprint`` travels with it so an artifact can be traced back
-    to the hypothesis it tested, across a boundary the candidate itself does
-    not cross.
+    Transport, not domain: an entrypoint, its configuration, its environment
+    and what it needs to be scheduled. A runtime executes these mechanically
+    -- LocalRuntime starts a process from them and never asks whether it
+    trains or evaluates -- so both workload specs carry them, declared once.
+    What a workload *means* is on the subclasses.
     """
-
-    api_version: str = "xaytune.execution/v1alpha1"
-
-    compiler: CompilerIdentity
-    candidate_fingerprint: str
 
     entrypoint: EntrypointSpec
     arguments: tuple[str, ...] = Field(default_factory=tuple)
@@ -249,7 +269,6 @@ class TrainingExecutionSpec(FrozenDomainModel):
 
     resources: ResourceRequirements = Field(default_factory=ResourceRequirements)
 
-    checkpoint: CheckpointExecutionContract = Field(default_factory=CheckpointExecutionContract)
     telemetry: TelemetryContract = Field(default_factory=TelemetryContract)
     observability: ObservabilitySpec = Field(default_factory=ObservabilitySpec)
 
@@ -269,11 +288,97 @@ class TrainingExecutionSpec(FrozenDomainModel):
             )
         return value
 
+    @property
+    def producer(self) -> CompilerIdentity | EvaluatorIdentity:
+        """The plugin that produced this spec, which a runtime version-checks."""
+        raise NotImplementedError
+
+
+class TrainingExecutionSpec(_WorkloadExecutionSpec):
+    """How to run a candidate — runtime-neutral, and ready to cross a boundary.
+
+    Produced by a :class:`~xaytune.compilation.TrainerCompiler`, consumed by a
+    resolver. It says everything about *what to execute* and nothing about
+    *where*: no cluster, no queue, no node. That separation is what lets the
+    same spec be resolved onto Local, Ray or Training Hub without recompiling
+    the candidate.
+
+    ``candidate_fingerprint`` travels with it so an artifact can be traced back
+    to the hypothesis it tested, across a boundary the candidate itself does
+    not cross.
+
+    Its fields are exactly those it had before evaluation existed: a plan's
+    ``request_digest`` hashes all of them, and a field added here would change
+    the digest of every training submission already recorded -- so a restart
+    after an upgrade could not re-issue one it proved was never received.
+    """
+
+    api_version: Literal["xaytune.execution/v1alpha1"] = "xaytune.execution/v1alpha1"
+
+    compiler: CompilerIdentity
+    candidate_fingerprint: str
+
+    checkpoint: CheckpointExecutionContract = Field(default_factory=CheckpointExecutionContract)
+
+    @property
+    def producer(self) -> CompilerIdentity:
+        return self.compiler
+
+
+class EvaluationExecutionSpec(_WorkloadExecutionSpec):
+    """How to run one evaluation of one subject — the sibling of training's spec.
+
+    Produced by an evaluator, consumed by the same resolver and runtimes. It
+    carries no checkpoint contract, because evaluation writes none, and no
+    candidate: what it names is the **subject** being measured and the
+    ``evaluation_fingerprint`` of what measures it.
+
+    Always telemetry ``v1alpha3``: its completion must carry the metrics,
+    which is what makes the result durable without the controller reading
+    the worker's files.
+    """
+
+    api_version: Literal["xaytune.evaluation-execution/v1alpha1"] = (
+        "xaytune.evaluation-execution/v1alpha1"
+    )
+
+    evaluator: EvaluatorIdentity
+    evaluation_fingerprint: str
+    subject: ArtifactRef
+
+    telemetry: TelemetryContract = Field(
+        default_factory=lambda: TelemetryContract(protocol_version=TELEMETRY_V1ALPHA3)
+    )
+
+    @field_validator("telemetry")
+    @classmethod
+    def _results_travel_inline(cls, value: TelemetryContract) -> TelemetryContract:
+        if value.protocol_version != TELEMETRY_V1ALPHA3:
+            raise ValueError(
+                f"an evaluation reports its result under {TELEMETRY_V1ALPHA3}, not "
+                f"{value.protocol_version!r}: earlier versions have no way to carry it"
+            )
+        return value
+
+    @property
+    def producer(self) -> EvaluatorIdentity:
+        return self.evaluator
+
+
+ExecutionSpec = Annotated[
+    TrainingExecutionSpec | EvaluationExecutionSpec, Field(discriminator="api_version")
+]
+"""Either workload's spec, told apart by ``api_version`` -- at the wire only.
+
+Not a domain ``Execution`` (ADR-015 §2 declines one): nothing above the
+resolver handles this union, and training and evaluation remain separate
+types everywhere they mean something."""
+
 
 class ResolvedExecutionPlan(FrozenDomainModel):
     """What a specific runtime will actually execute.
 
-    A :class:`TrainingExecutionSpec` plus the decisions a resolver made against
+    An :data:`ExecutionSpec` plus the decisions a resolver made against
     one runtime's capabilities, and the attempt it is being run for. The spec
     is what to run; this is what will run, and for whom.
 
@@ -284,7 +389,7 @@ class ResolvedExecutionPlan(FrozenDomainModel):
 
     api_version: str = "xaytune.plan/v1alpha1"
 
-    spec: TrainingExecutionSpec
+    spec: ExecutionSpec
     runtime: str
 
     target: RuntimeOperationTarget
@@ -325,6 +430,21 @@ class ResolvedExecutionPlan(FrozenDomainModel):
 
     resolution_notes: tuple[str, ...] = Field(default_factory=tuple)
 
+    @model_validator(mode="after")
+    def _spec_matches_target(self) -> ResolvedExecutionPlan:
+        # The runtime picks the telemetry family from the target, so a
+        # training spec aimed at an evaluation attempt would run a trainer
+        # whose every observation is refused -- or worse, one that looks
+        # like evaluation to everything downstream.
+        expected = _SPEC_FOR_TARGET[self.target.kind]
+        if not isinstance(self.spec, expected):
+            raise ValueError(
+                f"a {self.target.kind} is executed from a {expected.__name__}, not a "
+                f"{type(self.spec).__name__}: the spec and the target are two statements "
+                f"about the same workload"
+            )
+        return self
+
     def request_digest(self, operation_type: Literal["submit", "cancel"]) -> str:
         """The idempotency key for submitting or cancelling this plan (ADR-013).
 
@@ -347,3 +467,11 @@ class ResolvedExecutionPlan(FrozenDomainModel):
         rotation into an ``IdempotencyConflict``.
         """
         return fingerprint({"type": "runtime-request", "operation": operation_type, "plan": self})
+
+
+_SPEC_FOR_TARGET: dict[str, type[_WorkloadExecutionSpec]] = {
+    "training-attempt": TrainingExecutionSpec,
+    "evaluation-attempt": EvaluationExecutionSpec,
+}
+"""Which spec executes each target kind -- the plan's counterpart of the
+envelope's payload-family pairing (ADR-014 §1)."""

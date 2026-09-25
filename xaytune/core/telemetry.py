@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from xaytune.core.domain.evaluation import MetricResult
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.observability import (
     Counter,
@@ -30,6 +31,19 @@ from xaytune.core.resume import (
     ResumeGuarantee,
     StateRestore,
 )
+
+TELEMETRY_V1ALPHA2 = "xaytune.telemetry/v1alpha2"
+TELEMETRY_V1ALPHA3 = "xaytune.telemetry/v1alpha3"
+
+TelemetryProtocolVersion = Literal["xaytune.telemetry/v1alpha2", "xaytune.telemetry/v1alpha3"]
+"""The telemetry protocols a controller reads.
+
+``v1alpha3`` is the first with a durable evaluation result: its
+``EvaluationCompleted`` must carry the final metrics. ``v1alpha2`` stays
+readable -- a training workload started before an upgrade is still adopted
+after it -- and its ``EvaluationCompleted`` carries none. The same version
+with a different payload would not be the same protocol, so the difference is
+a version, enforced on the envelope."""
 
 
 class ResourceMetricObserved(FrozenDomainModel):
@@ -305,7 +319,24 @@ class EvaluationStartedPayload(FrozenDomainModel):
 
 
 class EvaluationCompletedPayload(FrozenDomainModel):
+    """An evaluation finished, and what it measured.
+
+    ``metrics`` is the **authoritative final result set** -- what a decision
+    is drawn from -- carried inline, so the controller records it without
+    reading the worker's files and a remote runtime needs no shared storage.
+    ``MetricObserved`` along the way is observation, not result: a final
+    result is never reconstructed from progress telemetry.
+
+    Only the decision-grade summary travels here. Per-example scores, judge
+    transcripts and raw generations belong in the report ``result_ref``
+    points to.
+
+    Required under ``v1alpha3`` and absent under ``v1alpha2``; the envelope
+    enforces the pairing, since only it knows the version.
+    """
+
     type: Literal["EvaluationCompleted"] = "EvaluationCompleted"
+    metrics: tuple[MetricResult, ...] | None = Field(default=None, min_length=1)
     result_ref: ArtifactRef | None = None
 
 

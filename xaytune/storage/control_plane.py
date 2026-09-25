@@ -12,7 +12,17 @@ create_attempt_with_submit_intent(...)      attempt + INTENDED operation  §4
 confirm_operation / mark_operation_sent / fail_operation
 request_cancellation(...)                   Action + cancel operation     §5
 reconcile_cancellation(...)                 Action settled from observed state
+
+begin_evaluation_cycle(...)                 node EVALUATING + its runs    ADR-015
+create_evaluation_attempt_with_submit_intent(...)
+record_evaluation_result(...)               result + attempt + run + cursor
+reconcile_evaluating_node(...)              wait / DECIDING / EvaluationStalled
 ```
+
+Evaluation shares the journal, the cancellation path and the telemetry cursor
+with training, and none of the aggregates: an evaluation attempt is cancelled
+by the same ``cancel-attempt`` Action through the same operation journal, and
+lives in its own table.
 
 There is still no ``save_experiment()``. The row writers stay private on
 :class:`~xaytune.storage.repository.AggregateStore` and
@@ -29,7 +39,8 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar
 
 from xaytune.core.clock import utc_now
@@ -38,6 +49,12 @@ from xaytune.core.domain.action import (
     ActionOutcome,
     ActionStatus,
     ActionTarget,
+)
+from xaytune.core.domain.evaluation import (
+    EvaluationAttempt,
+    EvaluationResult,
+    EvaluationRun,
+    result_provenance_problems,
 )
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
@@ -50,6 +67,8 @@ from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import (
     ActionId,
+    EvaluationAttemptId,
+    EvaluationRunId,
     EventId,
     ExperimentId,
     ExperimentNodeId,
@@ -60,11 +79,14 @@ from xaytune.core.ids import (
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, ArtifactRef, RuntimeRef
 from xaytune.core.state.status import (
+    EvaluationAttemptStatus,
+    EvaluationRunStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
     RunStatus,
 )
+from xaytune.core.telemetry import EvaluationCompletedPayload
 from xaytune.storage.actions import ActionStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
@@ -76,7 +98,12 @@ from xaytune.storage.journal import (
 )
 from xaytune.storage.repository import AggregateStore
 
-__all__ = ["ControlPlaneRepository", "ProvenanceError", "UnknownOperationTargetError"]
+__all__ = [
+    "ControlPlaneRepository",
+    "EvaluationReconciliation",
+    "ProvenanceError",
+    "UnknownOperationTargetError",
+]
 
 
 class _Transitionable(Protocol):
@@ -102,7 +129,11 @@ _AGGREGATE_TABLES: dict[str, str] = {
     "ExperimentNode": "experiment_nodes",
     "Run": "runs",
     "RunAttempt": "run_attempts",
+    "EvaluationRun": "evaluation_runs",
+    "EvaluationAttempt": "evaluation_attempts",
 }
+
+_AttemptKind = Literal["training-attempt", "evaluation-attempt"]
 
 _ATTEMPT_KINDS: frozenset[str] = frozenset({"training-attempt", "evaluation-attempt"})
 """The target kinds a single cancel operation can address.
@@ -126,11 +157,27 @@ on the same kind of subject, and only the table differs.
 
 _TARGET_TABLES: dict[str, str] = {
     "training-attempt": "run_attempts",
-    # ADR-015's tables arrive with the evaluation lifecycle; until then an
-    # evaluation target has nothing to resolve against and is refused rather
-    # than accepted unchecked.
     "evaluation-attempt": "evaluation_attempts",
 }
+
+
+class EvaluationReconciliation(str, Enum):
+    """What reconciling a node in ``EVALUATING`` concluded (ADR-015 §5).
+
+    Exactly one, always -- the point of stating it as three cases rather than
+    one invariant is that ordinary completion, which passes through "every
+    run terminal, node not yet moved", is the middle case and not an incident.
+    """
+
+    WAITING = "waiting"
+    """A run of the current cycle is still in flight."""
+
+    DECIDING = "deciding"
+    """Every run of the cycle succeeded with a result; the node moved on."""
+
+    STALLED = "stalled"
+    """The cycle can never complete as recorded: no runs, or a run that ended
+    without a result. Recorded as ``EvaluationStalled`` and left visible."""
 
 
 class CancellationSagaRequiredError(StorageError):
@@ -223,19 +270,62 @@ def _require_pristine(aggregate: Any, initial: Any) -> None:
         )
 
 
-def _assert_same_attempt(existing: RunAttempt, requested: RunAttempt) -> None:
+def _assert_same_attempt(
+    existing: RunAttempt | EvaluationAttempt, requested: RunAttempt | EvaluationAttempt
+) -> None:
     """Refuse a replay whose attempt identity differs.
 
     Raises:
         IdempotencyConflictError: Naming each differing field.
     """
+    run_field = "run_id" if isinstance(existing, RunAttempt) else "evaluation_run_id"
     differing = tuple(
         field
-        for field in ("id", "run_id", "attempt_number")
-        if getattr(existing, field) != getattr(requested, field)
+        for field in ("id", run_field, "attempt_number")
+        if getattr(existing, field, None) != getattr(requested, field, None)
     )
     if differing:
         raise IdempotencyConflictError(str(existing.id), differing, kind="attempt")
+
+
+def _require_run_of_cycle(run: EvaluationRun, node: ExperimentNode) -> None:
+    """Refuse an evaluation run that does not belong to the node's current cycle.
+
+    Raises:
+        StorageError: If the run names another node or experiment, the node is
+            not evaluating, or the run belongs to another of its cycles.
+    """
+    if run.node_id != node.id or run.experiment_id != node.experiment_id:
+        raise StorageError(
+            f"evaluation run {run.id} names node {run.node_id} of experiment "
+            f"{run.experiment_id}, not node {node.id} of {node.experiment_id}"
+        )
+    if node.status is not ExperimentNodeStatus.EVALUATING:
+        raise StorageError(
+            f"node {node.id} is {node.status.value}; evaluation runs belong to a node "
+            f"that is evaluating"
+        )
+    if run.evaluation_cycle != node.evaluation_cycle:
+        raise StorageError(
+            f"evaluation run {run.id} is for cycle {run.evaluation_cycle}, but node "
+            f"{node.id} is evaluating cycle {node.evaluation_cycle}: a run of another "
+            f"round would be counted, or waited for, by the wrong one"
+        )
+
+
+def _require_result_of_run(result: EvaluationResult, run: EvaluationRun) -> None:
+    """Refuse a result whose provenance disagrees with the run it names.
+
+    Raises:
+        ProvenanceError: Naming every disagreement
+            (:func:`~xaytune.core.domain.evaluation.result_provenance_problems`).
+    """
+    problems = result_provenance_problems(result, run)
+    if problems:
+        raise ProvenanceError(
+            f"result {result.id} disagrees with run {run.id}, so it would describe an "
+            f"evaluation the run did not perform: " + "; ".join(problems)
+        )
 
 
 class ControlPlaneRepository:
@@ -471,11 +561,12 @@ class ControlPlaneRepository:
 
     def record_telemetry_degraded(
         self,
-        attempt_id: RunAttemptId,
+        attempt_id: RunAttemptId | EvaluationAttemptId,
         *,
         reason: str,
         actor: Actor,
         destinations: tuple[str, ...] = (),
+        kind: Literal["training-attempt", "evaluation-attempt"] = "training-attempt",
     ) -> tuple[int, int]:
         """A dead stream over a live workload: advance the generation, and say so.
 
@@ -497,8 +588,12 @@ class ControlPlaneRepository:
             The new ``(generation, sequence)`` position.
         """
         with write_transaction(self._connection):
-            attempt = self.aggregates.load_attempt(str(attempt_id))
-            generation, sequence = self.aggregates.telemetry_position(str(attempt_id))
+            attempt: RunAttempt | EvaluationAttempt = (
+                self.aggregates.load_attempt(str(attempt_id))
+                if kind == "training-attempt"
+                else self.aggregates.load_evaluation_attempt(str(attempt_id))
+            )
+            generation, sequence = self.aggregates.telemetry_position(str(attempt_id), kind=kind)
             # Already degraded into this generation, and nothing recorded from
             # it since: the same dead stream, found again. A generation that
             # has since carried events and then died is a new degradation.
@@ -510,8 +605,8 @@ class ControlPlaneRepository:
             if already:
                 return generation, -1
             self._connection.execute(
-                "UPDATE run_attempts SET telemetry_generation = ?, telemetry_sequence = -1 "
-                "WHERE id = ?",
+                f"UPDATE {_TARGET_TABLES[kind]} "  # noqa: S608 - table from a literal map
+                "SET telemetry_generation = ?, telemetry_sequence = -1 WHERE id = ?",
                 (generation + 1, str(attempt_id)),
             )
             self._emit(
@@ -527,6 +622,420 @@ class ControlPlaneRepository:
                 },
             )
         return generation + 1, -1
+
+    # ---- ADR-015: evaluation ------------------------------------------------
+
+    def begin_evaluation_cycle(
+        self,
+        node_id: ExperimentNodeId,
+        *,
+        expected_revision: int,
+        runs: Sequence[EvaluationRun],
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[ExperimentNode, tuple[EvaluationRun, ...]]:
+        """Move a node into ``EVALUATING`` and record the runs its new cycle requires.
+
+        One commit: the node's transition -- which advances its
+        ``evaluation_cycle`` -- and every run of that cycle. Split, a crash
+        between them would leave a node evaluating with nothing to evaluate,
+        or runs belonging to a round the node never entered. Each run must
+        name the cycle the node is entering.
+
+        An empty *runs* is recorded as asked. The node then has nothing to
+        wait on, and reconciling it reports the cycle stalled rather than
+        pretending it completed.
+
+        Raises:
+            AggregateNotFoundError: If the node does not exist.
+            ConcurrentModificationError: If it has moved since the caller read it.
+            InvalidTransitionError: If the node cannot enter ``EVALUATING``.
+            StorageError: If a run names another node, experiment or cycle.
+        """
+        for run in runs:
+            _require_pristine(run, EvaluationRunStatus.CREATED)
+
+        with write_transaction(self._connection):
+            current = self.aggregates.get_node(str(node_id))
+            if current is None:
+                raise AggregateNotFoundError("ExperimentNode", str(node_id))
+            if current.revision != expected_revision:
+                raise ConcurrentModificationError("ExperimentNode", str(node_id), expected_revision)
+            moved = current.with_status(ExperimentNodeStatus.EVALUATING)
+            for run in runs:
+                _require_run_of_cycle(run, moved)
+            self.aggregates._update_node(moved)
+            self._emit(
+                moved,
+                "ExperimentNodeStatusChanged",
+                str(moved.experiment_id),
+                actor,
+                destinations,
+                extra={"evaluation_cycle": moved.evaluation_cycle},
+            )
+            for run in runs:
+                self.aggregates._insert_evaluation_run(run)
+                self._emit(run, "EvaluationRunCreated", str(run.experiment_id), actor, destinations)
+        return moved, tuple(runs)
+
+    def create_evaluation_run(
+        self, run: EvaluationRun, *, actor: Actor, destinations: tuple[str, ...] = ()
+    ) -> EvaluationRun:
+        """Add a run -- a replicate, say -- to the cycle a node is evaluating.
+
+        Raises:
+            AggregateNotFoundError: If the node does not exist.
+            StorageError: If the node is not evaluating, or is in another cycle.
+        """
+        _require_pristine(run, EvaluationRunStatus.CREATED)
+        with write_transaction(self._connection):
+            node = self.aggregates.load_node(str(run.node_id))
+            _require_run_of_cycle(run, node)
+            self.aggregates._insert_evaluation_run(run)
+            self._emit(run, "EvaluationRunCreated", str(run.experiment_id), actor, destinations)
+        return run
+
+    def transition_evaluation_run(
+        self,
+        run_id: EvaluationRunId,
+        *,
+        expected_revision: int,
+        new_status: EvaluationRunStatus,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+        reason: str | None = None,
+    ) -> EvaluationRun:
+        """Move an evaluation run to *new_status*, with its event, atomically.
+
+        *reason*, if given, is carried on the event -- why an evaluation
+        failed is part of its history.
+
+        Not to ``SUCCEEDED``: a run succeeds only with its result, through
+        :meth:`record_evaluation_result`, so no record can say an evaluation
+        succeeded without saying what it measured.
+        """
+        if new_status is EvaluationRunStatus.SUCCEEDED:
+            raise StorageError(
+                f"evaluation run {run_id} succeeds only with its result: use "
+                f"record_evaluation_result(), which writes both in one commit"
+            )
+        return self._transition(
+            "EvaluationRun",
+            str(run_id),
+            expected_revision,
+            new_status,
+            self.aggregates.get_evaluation_run,
+            self.aggregates._update_evaluation_run,
+            actor,
+            None,
+            destinations,
+            extra=None if reason is None else {"reason": reason},
+        )
+
+    def transition_evaluation_attempt(
+        self,
+        attempt_id: EvaluationAttemptId,
+        *,
+        expected_revision: int,
+        new_status: EvaluationAttemptStatus,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+        telemetry_position: tuple[int, int] | None = None,
+        reason: str | None = None,
+    ) -> EvaluationAttempt:
+        """Move an evaluation attempt to *new_status*, with its event, atomically.
+
+        *telemetry_position* advances the attempt's durable cursor in the same
+        commit, as for a training attempt. Not to ``SUCCEEDED`` -- see
+        :meth:`transition_evaluation_run`.
+        """
+        if new_status is EvaluationAttemptStatus.SUCCEEDED:
+            raise StorageError(
+                f"evaluation attempt {attempt_id} succeeds only with its result: use "
+                f"record_evaluation_result(), which writes both in one commit"
+            )
+        return self._transition(
+            "EvaluationAttempt",
+            str(attempt_id),
+            expected_revision,
+            new_status,
+            self.aggregates.get_evaluation_attempt,
+            self.aggregates._update_evaluation_attempt,
+            actor,
+            None,
+            destinations,
+            after_write=(
+                None
+                if telemetry_position is None
+                else lambda moved: self.aggregates._advance_telemetry(
+                    str(moved.id), telemetry_position, kind="evaluation-attempt"
+                )
+            ),
+            extra=None if reason is None else {"reason": reason},
+        )
+
+    def hold_evaluation_completion(
+        self,
+        attempt_id: EvaluationAttemptId,
+        completion: EvaluationCompletedPayload,
+        *,
+        telemetry_position: tuple[int, int],
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[EvaluationCompletedPayload, tuple[int, int]]:
+        """Keep an ``EvaluationCompleted`` durably until the workload's end decides it.
+
+        A completion is not yet a result: the workload may still fail on its
+        way out, so it cannot be recorded as one. Held only in memory,
+        though, it could be lost -- a stream that dies over a live workload
+        moves the attempt to a new generation (ADR-014 §1a), and the
+        completion is in the one the next controller no longer reads. So it
+        is written here, with the cursor advanced to it in the same commit:
+        the effect of that event is now "the completion is held", and the
+        cursor never claims more than the record holds.
+
+        The first completion is kept. A worker reports one; a second is not a
+        correction the controller can choose between, and replaying the
+        first after a restart must not replace it.
+
+        Returns:
+            The completion held and its position -- the first one, if one
+            was already held.
+
+        Raises:
+            AggregateNotFoundError: If the attempt does not exist.
+            StorageError: If the attempt has already ended.
+        """
+        with write_transaction(self._connection):
+            attempt = self.aggregates.load_evaluation_attempt(str(attempt_id))
+            if attempt.is_terminal:
+                raise StorageError(
+                    f"evaluation attempt {attempt_id} is {attempt.status.value}; a completion "
+                    f"held for it now could never be settled"
+                )
+            held = self.aggregates.pending_completion(str(attempt_id))
+            if held is not None:
+                return held
+            self.aggregates._hold_completion(str(attempt_id), completion, telemetry_position)
+            self.aggregates._advance_telemetry(
+                str(attempt_id), telemetry_position, kind="evaluation-attempt"
+            )
+            self._emit(
+                attempt,
+                "EvaluationCompletionHeld",
+                self._owning_experiment(attempt),
+                actor,
+                destinations,
+                extra={
+                    "metrics": [metric.name for metric in completion.metrics or ()],
+                    "generation": telemetry_position[0],
+                    "sequence": telemetry_position[1],
+                },
+            )
+        return completion, telemetry_position
+
+    def create_evaluation_attempt_with_submit_intent(
+        self,
+        attempt: EvaluationAttempt,
+        *,
+        request_digest: str,
+        actor: Actor,
+        operation_id: OperationId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[EvaluationAttempt, RuntimeOperation]:
+        """An evaluation attempt and its ``INTENDED`` submit, in one commit (ADR-015 §4).
+
+        The same unit, the same get-or-create and the same journal as
+        :meth:`create_attempt_with_submit_intent`: submitting an evaluation
+        is the same problem as submitting training, solved once.
+
+        Raises:
+            IdempotencyConflictError: If either half exists against a
+                different request.
+            StorageError: If the run has already finished.
+        """
+        created: tuple[EvaluationAttempt, RuntimeOperation] = self._create_with_submit_intent(
+            "evaluation-attempt",
+            attempt,
+            EvaluationAttemptStatus.CREATED,
+            request_digest=request_digest,
+            actor=actor,
+            operation_id=operation_id,
+            destinations=destinations,
+        )
+        return created
+
+    def record_evaluation_result(
+        self,
+        attempt_id: EvaluationAttemptId,
+        result: EvaluationResult,
+        *,
+        expected_revision: int,
+        actor: Actor,
+        telemetry_position: tuple[int, int] | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> EvaluationResult:
+        """Record what an evaluation measured, and that it succeeded, in one commit.
+
+        The result, the attempt's ``SUCCEEDED`` and the run's ``SUCCEEDED``:
+        there is no state in between, so no success without a result and no
+        result without a success. The completion the result comes from was
+        already held durably, with the cursor advanced to it
+        (:meth:`hold_evaluation_completion`), so a crash before this commit
+        loses nothing -- the next controller records the same result from the
+        held completion -- and a crash after it leaves nothing to redo.
+        *telemetry_position* only moves the cursor forward, if at all.
+
+        The result's provenance is checked against the run it names -- every
+        field, including each metric's evaluator, version and seed
+        (``result_provenance_problems``).
+
+        Raises:
+            AggregateNotFoundError: If the attempt does not exist.
+            ConcurrentModificationError: If it has moved since the caller read it.
+            InvalidTransitionError: If the attempt is not running or the run
+                not active.
+            ProvenanceError: If the result disagrees with its run.
+            StorageError: If the run already has a result.
+        """
+        with write_transaction(self._connection):
+            attempt = self.aggregates.get_evaluation_attempt(str(attempt_id))
+            if attempt is None:
+                raise AggregateNotFoundError("EvaluationAttempt", str(attempt_id))
+            if attempt.revision != expected_revision:
+                raise ConcurrentModificationError(
+                    "EvaluationAttempt", str(attempt_id), expected_revision
+                )
+            run = self.aggregates.load_evaluation_run(str(attempt.evaluation_run_id))
+            _require_result_of_run(result, run)
+            if self.aggregates.evaluation_result_for_run(str(run.id)) is not None:
+                raise StorageError(
+                    f"evaluation run {run.id} already has a result; a second would be a "
+                    f"second answer from one execution"
+                )
+
+            succeeded_attempt = attempt.with_status(EvaluationAttemptStatus.SUCCEEDED)
+            succeeded_run = run.with_status(EvaluationRunStatus.SUCCEEDED)
+            self.aggregates._update_evaluation_attempt(succeeded_attempt)
+            self.aggregates._update_evaluation_run(succeeded_run)
+            self.aggregates._insert_evaluation_result(result)
+            if telemetry_position is not None:
+                self.aggregates._advance_telemetry(
+                    str(attempt.id), telemetry_position, kind="evaluation-attempt"
+                )
+
+            experiment_id = str(run.experiment_id)
+            self._emit(
+                succeeded_attempt,
+                "EvaluationAttemptStatusChanged",
+                experiment_id,
+                actor,
+                destinations,
+            )
+            self._emit(
+                succeeded_run, "EvaluationRunStatusChanged", experiment_id, actor, destinations
+            )
+            self._emit(
+                succeeded_run,
+                "EvaluationResultRecorded",
+                experiment_id,
+                actor,
+                destinations,
+                extra={
+                    "result_id": str(result.id),
+                    "metrics": [metric.name for metric in result.metrics],
+                },
+            )
+        return result
+
+    def reconcile_evaluating_node(
+        self,
+        node_id: ExperimentNodeId,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> EvaluationReconciliation:
+        """Resolve a node in ``EVALUATING`` to exactly one of wait, decide or stall.
+
+        ADR-015 §5, over the runs of the node's **current** evaluation cycle
+        only -- a run from an earlier round, however successful, is history:
+
+        ```text
+        a run of this cycle is not terminal                 -> WAITING
+        every run succeeded, each with its result           -> node DECIDING
+        otherwise: no runs, or a run ended without a result -> EvaluationStalled
+        ```
+
+        The middle case **repairs** a lag rather than reporting it: a
+        controller that died between a run's success and the node's
+        transition leaves exactly that state, and this moves the node on.
+
+        A stall is recorded as an ``EvaluationStalled`` event on the node --
+        once per cycle, however often it is reconciled -- and the node stays
+        ``EVALUATING``. It is visible rather than silent, which is the point;
+        what to do about it is a decision, not reconciliation's to make.
+
+        Raises:
+            AggregateNotFoundError: If the node does not exist.
+            StorageError: If the node is not in ``EVALUATING``.
+        """
+        with write_transaction(self._connection):
+            node = self.aggregates.load_node(str(node_id))
+            if node.status is not ExperimentNodeStatus.EVALUATING:
+                raise StorageError(
+                    f"node {node_id} is {node.status.value}, not evaluating; there is no "
+                    f"evaluation cycle to reconcile"
+                )
+            runs = self.aggregates.evaluation_runs_for_node(
+                str(node.id), cycle=node.evaluation_cycle
+            )
+            if any(not run.is_terminal for run in runs):
+                return EvaluationReconciliation.WAITING
+
+            unsatisfied = [
+                run
+                for run in runs
+                if run.status is not EvaluationRunStatus.SUCCEEDED
+                or self.aggregates.evaluation_result_for_run(str(run.id)) is None
+            ]
+            if runs and not unsatisfied:
+                deciding = node.with_status(ExperimentNodeStatus.DECIDING)
+                self.aggregates._update_node(deciding)
+                self._emit(
+                    deciding,
+                    "ExperimentNodeStatusChanged",
+                    str(deciding.experiment_id),
+                    actor,
+                    destinations,
+                    extra={"evaluation_cycle": deciding.evaluation_cycle},
+                )
+                return EvaluationReconciliation.DECIDING
+
+            already = any(
+                event.event_type == "EvaluationStalled"
+                and event.payload.get("evaluation_cycle") == node.evaluation_cycle
+                for event in self.events.events_for_aggregate(str(node.id))
+            )
+            if not already:
+                reason = (
+                    "the cycle has no evaluation runs"
+                    if not runs
+                    else "evaluation runs ended without a result: "
+                    + ", ".join(f"{run.id} ({run.status.value})" for run in unsatisfied)
+                )
+                self._emit(
+                    node,
+                    "EvaluationStalled",
+                    str(node.experiment_id),
+                    actor,
+                    destinations,
+                    extra={
+                        "evaluation_cycle": node.evaluation_cycle,
+                        "reason": reason,
+                        "runs": [str(run.id) for run in unsatisfied],
+                    },
+                )
+            return EvaluationReconciliation.STALLED
 
     # ---- ADR-005 §4 ----------------------------------------------------
 
@@ -564,20 +1073,53 @@ class ControlPlaneRepository:
                 attempt's run or number.
             ValueError: If *attempt* is not a freshly created aggregate.
         """
+        return self._create_with_submit_intent(
+            "training-attempt",
+            attempt,
+            RunAttemptStatus.CREATED,
+            request_digest=request_digest,
+            actor=actor,
+            operation_id=operation_id,
+            destinations=destinations,
+        )
+
+    def _create_with_submit_intent(
+        self,
+        kind: Literal["training-attempt", "evaluation-attempt"],
+        attempt: Any,
+        initial: Any,
+        *,
+        request_digest: str,
+        actor: Actor,
+        operation_id: OperationId | None,
+        destinations: tuple[str, ...],
+    ) -> tuple[Any, RuntimeOperation]:
+        """ADR-005 §4 for either kind of attempt: the attempt and its intent, one commit.
+
+        One implementation rather than one per workload, so training and
+        evaluation cannot come to record intent differently.
+        """
         operation = RuntimeOperation(
             id=operation_id or OperationId.generate(),
-            target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id)),
+            target=RuntimeOperationTarget(kind=kind, id=str(attempt.id)),
             type="submit",
             request_digest=request_digest,
         )
 
-        _require_pristine(attempt, RunAttemptStatus.CREATED)
+        _require_pristine(attempt, initial)
+
+        if kind == "training-attempt":
+            loader: Callable[[str], Any] = self.aggregates.get_attempt
+            created_event = "RunAttemptCreated"
+        else:
+            loader = self.aggregates.get_evaluation_attempt
+            created_event = "EvaluationAttemptCreated"
 
         with write_transaction(self._connection):
             existing = self.operations.get(str(operation.id))
             if existing is not None:
                 self.operations._assert_same_request(existing, operation)
-                stored_attempt = self.aggregates.get_attempt(existing.target.id)
+                stored_attempt = loader(existing.target.id)
                 if stored_attempt is None:
                     raise StorageError(
                         f"operation {existing.id} references attempt "
@@ -592,10 +1134,20 @@ class ControlPlaneRepository:
                 _assert_same_attempt(stored_attempt, attempt)
                 return stored_attempt, existing
 
-            experiment_id = self._experiment_of_run(str(attempt.run_id))
-            self.aggregates._insert_attempt(attempt)
+            if kind == "training-attempt":
+                experiment_id = self._experiment_of_run(str(attempt.run_id))
+                self.aggregates._insert_attempt(attempt)
+            else:
+                run = self.aggregates.load_evaluation_run(str(attempt.evaluation_run_id))
+                if run.is_terminal:
+                    raise StorageError(
+                        f"evaluation run {run.id} is {run.status.value}; a new attempt at "
+                        f"a finished run would execute an evaluation nothing will record"
+                    )
+                experiment_id = str(run.experiment_id)
+                self.aggregates._insert_evaluation_attempt(attempt)
             stored = self.operations._insert(operation)
-            self._emit(attempt, "RunAttemptCreated", experiment_id, actor, destinations)
+            self._emit(attempt, created_event, experiment_id, actor, destinations)
             self._emit_operation(
                 stored, "RuntimeOperationIntended", experiment_id, actor, destinations
             )
@@ -891,18 +1443,18 @@ class ControlPlaneRepository:
                         id=ActionId.generate(),
                         experiment_id=experiment.id,
                         type="cancel-attempt",
-                        target=ActionTarget(kind="training-attempt", id=str(attempt.id)),
+                        target=ActionTarget(kind=kind, id=attempt_id),
                         proposed_by=actor,
                         reason=reason,
                         parent_action_id=executing.id,
                     ),
                     OperationId.generate(),
-                    _cancel_digest("training-attempt", str(attempt.id)),
+                    _cancel_digest(kind, attempt_id),
                     str(experiment.id),
                     actor,
                     destinations,
                 )
-                for attempt in self._live_attempts(str(experiment.id))
+                for kind, attempt_id in self._live_attempt_targets(str(experiment.id))
             )
             self._emit_action(executing, "CancellationRequested", actor, destinations)
 
@@ -977,6 +1529,17 @@ class ControlPlaneRepository:
                         self._emit(
                             cancelled_run, "RunStatusChanged", experiment_id, actor, destinations
                         )
+                for evaluation in self.aggregates.evaluation_runs_for_node(str(node.id)):
+                    if not evaluation.is_terminal:
+                        cancelled_evaluation = evaluation.with_status(EvaluationRunStatus.CANCELLED)
+                        self.aggregates._update_evaluation_run(cancelled_evaluation)
+                        self._emit(
+                            cancelled_evaluation,
+                            "EvaluationRunStatusChanged",
+                            experiment_id,
+                            actor,
+                            destinations,
+                        )
                 if not node.is_terminal:
                     cancelled_node = node.with_status(ExperimentNodeStatus.CANCELLED)
                     self.aggregates._update_node(cancelled_node)
@@ -1011,8 +1574,8 @@ class ControlPlaneRepository:
         """
         operations = tuple(
             operation
-            for attempt in self._attempts_of(experiment_id)
-            for operation in self.operations.for_target("training-attempt", str(attempt.id))
+            for kind, attempt_id in self._attempt_targets(experiment_id)
+            for operation in self.operations.for_target(kind, attempt_id)
             if operation.state in ("intended", "sent")
         )
         actions = tuple(
@@ -1030,9 +1593,44 @@ class ControlPlaneRepository:
             children.append((child, self.operations.get(caused[0]) if caused else None))
         return tuple(children)
 
-    def _live_attempts(self, experiment_id: str) -> tuple[RunAttempt, ...]:
-        """Every attempt of the experiment that has not reached a terminal state."""
-        return tuple(a for a in self._attempts_of(experiment_id) if not a.is_terminal)
+    def _live_attempts(self, experiment_id: str) -> tuple[RunAttempt | EvaluationAttempt, ...]:
+        """Every attempt of the experiment, of either kind, not yet terminal.
+
+        Evaluation attempts count: ``CANCELLED`` means no owned workload is
+        executing (ADR-013 §6), and an evaluation is an owned workload.
+        """
+        training: tuple[RunAttempt | EvaluationAttempt, ...] = self._attempts_of(experiment_id)
+        evaluation: tuple[RunAttempt | EvaluationAttempt, ...] = self._evaluation_attempts_of(
+            experiment_id
+        )
+        return tuple(attempt for attempt in (*training, *evaluation) if not attempt.is_terminal)
+
+    def _live_attempt_targets(self, experiment_id: str) -> tuple[tuple[_AttemptKind, str], ...]:
+        """``(kind, id)`` of every live attempt, for addressing its cancel operation."""
+        return tuple(
+            (kind, attempt_id)
+            for kind, attempt_id in self._attempt_targets(experiment_id)
+            if not self._cancellable_attempt(kind, attempt_id).is_terminal
+        )
+
+    def _attempt_targets(self, experiment_id: str) -> tuple[tuple[_AttemptKind, str], ...]:
+        """``(kind, id)`` of every attempt of the experiment, training then evaluation."""
+        return (
+            *(("training-attempt", str(a.id)) for a in self._attempts_of(experiment_id)),
+            *(
+                ("evaluation-attempt", str(a.id))
+                for a in self._evaluation_attempts_of(experiment_id)
+            ),
+        )
+
+    def _evaluation_attempts_of(self, experiment_id: str) -> tuple[EvaluationAttempt, ...]:
+        """Every evaluation attempt of the experiment, through its nodes and runs."""
+        return tuple(
+            attempt
+            for node in self.aggregates.nodes_for_experiment(experiment_id)
+            for run in self.aggregates.evaluation_runs_for_node(str(node.id))
+            for attempt in self.aggregates.evaluation_attempts_for_run(str(run.id))
+        )
 
     def _attempts_of(self, experiment_id: str) -> tuple[RunAttempt, ...]:
         """Every attempt of the experiment, through its nodes and runs."""
@@ -1126,6 +1724,7 @@ class ControlPlaneRepository:
         destinations: tuple[str, ...],
         *,
         after_write: Callable[[AggregateT], None] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> AggregateT:
         """Load, transition and persist an aggregate, with its event.
 
@@ -1165,6 +1764,7 @@ class ControlPlaneRepository:
                 self._owning_experiment(moved),
                 actor,
                 destinations,
+                extra=extra,
             )
         return moved
 
@@ -1255,13 +1855,9 @@ class ControlPlaneRepository:
             return target.id
         if target.kind == "run":
             return self._experiment_of_run(target.id)
-        if target.kind == "training-attempt":
-            attempt = self.aggregates.get_attempt(target.id)
-            if attempt is None:
-                raise UnknownOperationTargetError(target.kind, target.id)
-            return self._experiment_of_run(str(attempt.run_id))
-        # node / evaluation-run / evaluation-attempt: the first has no
-        # cancellation type yet, the others wait for ADR-015's tables.
+        if target.kind in _ATTEMPT_KINDS:
+            return self._experiment_of_attempt(target.kind, target.id)
+        # node / evaluation-run: neither has a cancellation type yet.
         raise UnknownOperationTargetError(target.kind, target.id)
 
     def _replay_cancellation(
@@ -1350,15 +1946,25 @@ class ControlPlaneRepository:
         which is `SUPERSEDED`. Collapsing both into `SUPERSEDED` would lose the
         distinction the outcome enum was introduced to carry.
         """
-        if target.kind != "training-attempt":
-            raise UnknownOperationTargetError(target.kind, target.id)
-
-        attempt = self.aggregates.load_attempt(target.id)
+        attempt = self._cancellable_attempt(target.kind, target.id)
         if not attempt.is_terminal:
             return None
-        if attempt.status is RunAttemptStatus.CANCELLED:
+        if attempt.status.value == "cancelled":
             return ActionOutcome.NOOP
         return ActionOutcome.SUPERSEDED
+
+    def _cancellable_attempt(self, kind: str, attempt_id: str) -> RunAttempt | EvaluationAttempt:
+        """The attempt a cancellation targets, of either kind.
+
+        Raises:
+            UnknownOperationTargetError: If the kind is not an attempt kind.
+            AggregateNotFoundError: If the attempt does not exist.
+        """
+        if kind == "training-attempt":
+            return self.aggregates.load_attempt(attempt_id)
+        if kind == "evaluation-attempt":
+            return self.aggregates.load_evaluation_attempt(attempt_id)
+        raise UnknownOperationTargetError(kind, attempt_id)
 
     def _observed_outcome(self, action: Action) -> tuple[ActionStatus, ActionOutcome | None] | None:
         """Derive a cancellation's resolution from what is actually recorded.
@@ -1380,18 +1986,15 @@ class ControlPlaneRepository:
         Retrying is a **new** effect under an explicit policy, not a silent
         resurrection of this one.
         """
-        if action.target.kind != "training-attempt":
-            raise UnknownOperationTargetError(action.target.kind, action.target.id)
-
+        attempt = self._cancellable_attempt(action.target.kind, action.target.id)
         caused = [
             op
             for op in self.operations.for_target(action.target.kind, action.target.id)
             if op.caused_by_action_id == action.id
         ]
-        attempt = self.aggregates.load_attempt(action.target.id)
 
         if attempt.is_terminal:
-            if attempt.status is not RunAttemptStatus.CANCELLED:
+            if attempt.status.value != "cancelled":
                 return ActionStatus.SUCCEEDED, ActionOutcome.SUPERSEDED
             # Cancelled -- but only claim credit if our effect was confirmed.
             if any(op.state == "confirmed" for op in caused):
@@ -1463,6 +2066,10 @@ class ControlPlaneRepository:
             return str(aggregate.experiment_id)
         if isinstance(aggregate, RunAttempt):
             return self._experiment_of_run(str(aggregate.run_id))
+        if isinstance(aggregate, EvaluationRun):
+            return str(aggregate.experiment_id)
+        if isinstance(aggregate, EvaluationAttempt):
+            return self._experiment_of_evaluation_run(str(aggregate.evaluation_run_id))
         raise StorageError(f"{type(aggregate).__name__} has no owning experiment")
 
     def _experiment_of_run(self, run_id: str) -> str:
@@ -1474,17 +2081,40 @@ class ControlPlaneRepository:
             raise AggregateNotFoundError("Run", run_id)
         return str(row["experiment_id"])
 
-    def _experiment_of_operation(self, operation: RuntimeOperation) -> str:
-        """Resolve an operation's experiment through the attempt it targets."""
-        table = _TARGET_TABLES.get(operation.target.kind)
-        if table != "run_attempts":
-            raise UnknownOperationTargetError(operation.target.kind, operation.target.id)
+    def _experiment_of_evaluation_run(self, run_id: str) -> str:
+        """Resolve an evaluation run's experiment."""
         row = self._connection.execute(
-            "SELECT run_id FROM run_attempts WHERE id = ?", (operation.target.id,)
+            "SELECT experiment_id FROM evaluation_runs WHERE id = ?", (run_id,)
         ).fetchone()
         if row is None:
-            raise UnknownOperationTargetError(operation.target.kind, operation.target.id)
-        return self._experiment_of_run(str(row["run_id"]))
+            raise AggregateNotFoundError("EvaluationRun", run_id)
+        return str(row["experiment_id"])
+
+    def _experiment_of_operation(self, operation: RuntimeOperation) -> str:
+        """Resolve an operation's experiment through the attempt it targets."""
+        return self._experiment_of_attempt(operation.target.kind, operation.target.id)
+
+    def _experiment_of_attempt(self, kind: str, attempt_id: str) -> str:
+        """Resolve the experiment of a training or evaluation attempt.
+
+        Raises:
+            UnknownOperationTargetError: If no such attempt exists.
+        """
+        if kind == "training-attempt":
+            row = self._connection.execute(
+                "SELECT run_id FROM run_attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise UnknownOperationTargetError(kind, attempt_id)
+            return self._experiment_of_run(str(row["run_id"]))
+        if kind == "evaluation-attempt":
+            row = self._connection.execute(
+                "SELECT evaluation_run_id FROM evaluation_attempts WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise UnknownOperationTargetError(kind, attempt_id)
+            return self._experiment_of_evaluation_run(str(row["evaluation_run_id"]))
+        raise UnknownOperationTargetError(kind, attempt_id)
 
     def _require_target(self, target: RuntimeOperationTarget) -> None:
         """Enforce ADR-005 §10.1, which SQLite cannot."""

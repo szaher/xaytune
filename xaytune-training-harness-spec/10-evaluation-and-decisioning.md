@@ -4,7 +4,7 @@
 > **Evaluation has a durable execution lifecycle — see ADR-015.** The
 > `EvaluationSpec → EvaluationResult` shape below describes the *scientific*
 > contract. Operationally an evaluation is a workload: it queues, fails, gets
-> preempted, is retried and can be in flight across a controller restart. It
+> preempted, is retried as a new attempt and can be in flight across a controller restart. It
 > therefore has `EvaluationRun` and `EvaluationAttempt`, which follow the same
 > **lifecycle principles** as `Run` and `RunAttempt` — every non-terminal state
 > reaches `FAILED` and `CANCELLED`, and `PREEMPTED` applies from `QUEUED`
@@ -41,13 +41,27 @@ Evaluation has its own protocol and execution path.
 class EvaluationSpec(BaseModel):
     api_version: str = "xaytune.eval/v1alpha1"
 
-    evaluators: list[EvaluatorSpec]
+    evaluator: EvaluatorSpec          # one; it may measure many metrics
 
     dataset: DatasetRef | None
     slices: list[str]
 
     metadata: dict[str, Any]
 ```
+
+**One evaluator per spec.** One `EvaluationRun` is then one subject, one spec,
+one evaluator -- so one `EvaluatorDeterminism` class -- and one seed and
+replicate, and whether its result can be reused is never ambiguous. Several
+evaluators are several `EvaluationRun`s in one evaluation cycle:
+
+```text
+evaluation cycle
+├── run A → lm-eval
+├── run B → task evaluator
+└── run C → LLM judge
+```
+
+rather than one run mixing evaluators with different reproducibility.
 
 **`seed` is deliberately not here.** It belongs to `EvaluationRun`, exactly as
 seed and replicate belong to `Run` (ADR-015 §3). If the seed were part of the
@@ -112,24 +126,30 @@ This metadata contributes to `EvaluationFingerprint`.
 ## 5. EvaluationResult
 
 ```python
-class EvaluationResult(BaseModel):
-    id: EvaluationResultId
+class EvaluationResult(FrozenDomainModel):
+    id: EvaluationResultId            # = EvaluationId
 
     evaluation_run_id: EvaluationRunId
     node_id: ExperimentNodeId
-    artifact_ref: ArtifactRef
+    subject: ArtifactRef              # what was measured: the run's subject
 
     evaluation_fingerprint: str
 
-    metrics: list[MetricResult]
-    constraints: list[ConstraintResult]
-
-    status: EvaluationStatus
-
-    artifacts: list[ArtifactRef]
+    metrics: tuple[MetricResult, ...] # at least one
+    artifacts: tuple[ArtifactRef, ...]  # reports; producer = this result
 
     created_at: datetime
 ```
+
+There is no `status`: a result exists only for a run that `SUCCEEDED`, written
+in the same commit, so a result is never pending or failed. There are no
+`constraints` yet either; constraint evaluation arrives with the DecisionEngine
+(PR-015). Every provenance field must agree with the run -- node, fingerprint,
+subject (identity and digest), each metric's evaluator, evaluator version and
+seed, and each report's producer -- and the repository refuses a result that
+does not. The database independently refuses the column-level subset: a result
+whose run, node, evaluation fingerprint, subject artifact id or subject digest
+disagrees with its run, a second result for one run, and any edit.
 
 `evaluation_run_id` is required, not convenience. After ADR-015 a node can hold
 several `EvaluationRun`s over the same subject and fingerprint — replicates 0,
@@ -146,17 +166,24 @@ meaningful if each sample can be traced to the run that drew it.
 ```python
 class Evaluator(Protocol):
     descriptor: PluginDescriptor
+    determinism: EvaluatorDeterminism
 
     def capabilities(self) -> CapabilityDocument: ...
 
-    async def prepare(
+    def prepare(
         self,
-        artifact: ArtifactRef,
+        subject: ArtifactRef,
         spec: EvaluationSpec,
+        context: EvaluationContext,   # run id, seed, replicate, output location
     ) -> EvaluationExecutionSpec: ...
 ```
 
-Execution may be local or remote.
+`prepare()` is **synchronous and deterministic**, like `TrainerCompiler.compile()`:
+it builds a request and never performs the evaluation. A re-issued evaluation is
+rebuilt from the record and its digest checked against the one recorded, which
+an evaluator reading the clock or the network would break. The spec it returns
+is resolved, submitted and observed like any other; execution may be local or
+remote. `xaytune.evaluation` holds the contract.
 
 ## 7. Initial evaluators
 

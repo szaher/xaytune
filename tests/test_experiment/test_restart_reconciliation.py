@@ -63,10 +63,10 @@ def _spec(tmp_path: Path):
     )
 
 
-def _crash(tmp_path: Path, mode: str) -> str:
+def _crash(tmp_path: Path, mode: str, spec: Any = None) -> str:
     """Submit in a controller process that is killed at *mode*; return the experiment id."""
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(_spec(tmp_path).model_dump_json())
+    spec_path.write_text((spec or _spec(tmp_path)).model_dump_json())
     completed = subprocess.run(
         [
             sys.executable,

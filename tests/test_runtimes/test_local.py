@@ -1195,13 +1195,29 @@ def test_telemetry_is_ordered_and_names_the_plans_target(runtime: LocalRuntime) 
 
 
 def test_an_evaluation_target_gets_evaluation_telemetry(runtime: LocalRuntime) -> None:
-    """The family follows the target, and the envelope will not let it not."""
+    """The family follows the target, and the envelope will not let it not.
+
+    An evaluation target is executed from an evaluation spec: a plan pairing
+    a training spec with it is refused before it reaches the runtime.
+    """
+    from xaytune.core.execution import EvaluationExecutionSpec, EvaluatorIdentity
+    from xaytune.core.ids import ArtifactId
+    from xaytune.core.refs import ArtifactRef
+
     target = RuntimeOperationTarget(kind="evaluation-attempt", id="ea_1")
+    plan = ResolvedExecutionPlan(
+        spec=EvaluationExecutionSpec(
+            evaluator=EvaluatorIdentity(name="fake", version="0.1.0", descriptor=_DESCRIPTOR),
+            evaluation_fingerprint="sha256:" + "0" * 64,
+            subject=ArtifactRef(id=ArtifactId.generate(), kind="model", uri="/m"),
+            entrypoint=CommandEntrypoint(argv=_python("pass")),
+        ),
+        runtime="local",
+        target=target,
+    )
 
     async def scenario() -> list[object]:
-        ref = await runtime.submit_or_get(
-            OperationId.generate(), _plan(*_python("pass"), target=target)
-        )
+        ref = await runtime.submit_or_get(OperationId.generate(), plan)
         await _settle(runtime, ref)
         return [event async for event in runtime.watch(ref)]
 

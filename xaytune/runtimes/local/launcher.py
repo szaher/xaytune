@@ -170,6 +170,10 @@ class _EventWriter:
         trace_context: Any = None,
     ) -> None:
         envelope = RuntimeEventEnvelope(
+            # The contract the plan declared, not a constant: a training
+            # workload writes v1alpha2 and an evaluation v1alpha3, and both
+            # are read (the runtime refused any other at submission).
+            protocol_version=self._plan.spec.telemetry.protocol_version,  # type: ignore[arg-type]
             event_id=f"{self._plan.target.id}-{self._generation}-{self._sequence}",
             target=self._plan.target,
             stream_generation=self._generation,

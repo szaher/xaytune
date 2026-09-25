@@ -62,7 +62,7 @@ class EvaluationAttempt(AggregateModel):
 The state machines follow the **same lifecycle principles** as `Run` and
 `RunAttempt` — not the same tables. Evaluation produces no checkpoints, so it
 has no `CHECKPOINTING` state and nothing to recover into, so no `RECOVERING`
-either. A failed evaluation is retried as a new attempt.
+either. A retry creates a new attempt; it never `RECOVER`s the old one.
 
 ```text
 EvaluationRun
@@ -259,3 +259,50 @@ silent-stall failure into a detected one.
    targeting the `evaluation-attempt` (ADR-013 §6a), committed with its cancel
    operation as ADR-005 §5 requires — evaluation cancellation uses the same path
    as training, not a parallel one.
+
+## Implementation notes (PR-013)
+
+- **"Required runs" are the runs of the node's current evaluation cycle.** A
+  node can evaluate, decide, return to `ACTIVE` and evaluate again, so §5 would
+  be unsound over all of a node's runs: the first round's successful results
+  would satisfy the second. `ExperimentNode.evaluation_cycle` advances in the
+  same write as the transition into `EVALUATING`, every `EvaluationRun` records
+  its cycle, and the cycle's runs are written in that same commit
+  (`begin_evaluation_cycle`). Reconciliation reads only the current cycle.
+- **A completion is held durably.** An `EvaluationCompleted` is not yet a
+  result -- the workload may still fail -- so it is written to the attempt
+  (`pending_completion_json`) in the commit that advances the cursor past it,
+  and becomes the result only when the runtime reports success. A stream that
+  dies over the live workload moves the attempt to a new generation (ADR-014
+  §1a); the completion is in the record, not that stream, so neither that nor
+  a controller crash can lose it.
+- **Preemption has no retry yet.** A preempted attempt is `PREEMPTED` and its
+  run `FAILED`, so no run stays `ACTIVE` with nothing executing it; the node
+  then stalls. A retry policy, when one exists, creates a new attempt.
+- **A result agrees with its run in every provenance field**: node,
+  fingerprint, subject (identity *and* digest -- two artifacts can share
+  bytes), and each metric's evaluator, evaluator version and seed, a missing
+  seed included. A report's producer is stamped by the controller with the
+  result's id; a worker-supplied producer is refused. The repository
+  enforces **all** of this (`result_provenance_problems`), and a worker
+  reporting drift fails its evaluation, with the reason on the event. The
+  database independently enforces the column-level subset -- the result's
+  run, node, evaluation fingerprint, subject artifact id and subject digest,
+  one result per run, and immutability -- so a writer that bypassed the
+  repository still cannot misfile a result; the per-metric and report rules
+  live in the payload and are the repository's.
+- **A stall is recorded, not raised.** `EvaluationStalled` is an event on the
+  node, once per cycle; the node stays `EVALUATING`. What to do about it is a
+  decision.
+- **Success needs the result.** `EvaluationRun` and `EvaluationAttempt` reach
+  `SUCCEEDED` only through `record_evaluation_result`, together with the
+  result; no other path can write it. Results are rows of their own
+  (`evaluation_results`, migration 006), one per run, immutable, and a trigger
+  refuses one whose node, fingerprint or subject disagrees with its run.
+- **Implemented:** AC-1, 2, 3, 4b, 4c, 5, 6, 7 -- and AC-4's declaration half:
+  every evaluator declares its `EvaluatorDeterminism`, recorded with the bound
+  spec. **Not yet:** the reuse lookup itself (AC-4, 4a). The identity it keys
+  on is indexed (`idx_evaluation_runs_reuse`); the lookup and
+  `EvaluationReusePolicy` come with the planner, which is what would ask for a
+  replicate.
+

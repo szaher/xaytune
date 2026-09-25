@@ -7,13 +7,13 @@ has gone, return a handle that says the same things.
 
 **What ``wait()`` means.** Controller quiescence: every piece of work this
 controller can currently execute for the experiment is settled, and its
-telemetry has been drained. It does *not* mean the experiment is finished. In
-this phase a successful training run leaves the node ``ACTIVE`` awaiting
-evaluation and the experiment ``ACTIVE`` awaiting a decision, neither of which
-exists yet -- so :class:`ExperimentResult` says it is quiescent and names the
-stage that would run next, and a caller never has to infer success from
-``wait()`` having returned. When evaluation becomes executable, ``wait()``
-waits through it, and its meaning does not change.
+telemetry has been drained. It does *not* mean the experiment is finished.
+With evaluation configured, ``wait()`` waits through it: the node reaches
+``DECIDING`` with its results, and the experiment stays ``ACTIVE`` awaiting a
+decision nothing makes yet. Without it, a trained node stays ``ACTIVE``. Either
+way :class:`ExperimentResult` says it is quiescent and names the stage that
+would run next, so a caller never has to infer success from ``wait()`` having
+returned.
 """
 
 from __future__ import annotations
@@ -22,11 +22,14 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Literal
 
+from xaytune.core.domain.evaluation import EvaluationResult
 from xaytune.core.domain.event import DomainEvent
-from xaytune.core.ids import ExperimentId, ExperimentNodeId, RunId
+from xaytune.core.ids import EvaluationRunId, ExperimentId, ExperimentNodeId, RunId
 from xaytune.core.immutable import FrozenDomainModel
 from xaytune.core.refs import ArtifactRef
 from xaytune.core.state.status import (
+    EvaluationAttemptStatus,
+    EvaluationRunStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -36,15 +39,22 @@ from xaytune.core.state.status import (
 if TYPE_CHECKING:
     from xaytune.experiment.host import EmbeddedControllerHost
 
-__all__ = ["ExperimentHandle", "ExperimentResult", "NodeOutcome", "RunOutcome"]
+__all__ = [
+    "EvaluationOutcome",
+    "ExperimentHandle",
+    "ExperimentResult",
+    "NodeOutcome",
+    "RunOutcome",
+]
 
-NextStage = Literal["evaluation", "failure-handling"]
+NextStage = Literal["evaluation", "decision", "failure-handling"]
 """Advisory: the controller work that would move the experiment on.
 
 Deliberately not named after a status. ``"evaluation"`` is not
-``ExperimentNodeStatus.EVALUATING`` -- nothing has entered it -- and there is
-no ``"decision"``, because ``DECIDING`` means something specific (a node
-reached through evaluation) and a failed training run has not been there."""
+``ExperimentNodeStatus.EVALUATING``: it is the next work for a trained node
+nothing has evaluated, or the evaluation still running. ``"decision"`` is
+reached only through evaluation -- a node in ``DECIDING`` with its results --
+and is advice, not a DecisionEngine: none exists yet (PR-015)."""
 
 _FOLLOW_INTERVAL_SECONDS = 0.05
 
@@ -58,12 +68,23 @@ class RunOutcome(FrozenDomainModel):
     artifacts: tuple[ArtifactRef, ...] = ()
 
 
+class EvaluationOutcome(FrozenDomainModel):
+    """One evaluation run, as the record has it, with its result if it produced one."""
+
+    evaluation_run_id: EvaluationRunId
+    evaluation_cycle: int
+    status: EvaluationRunStatus
+    attempt_status: EvaluationAttemptStatus | None
+    result: EvaluationResult | None = None
+
+
 class NodeOutcome(FrozenDomainModel):
-    """One candidate and its runs."""
+    """One candidate, its runs and its evaluations."""
 
     node_id: ExperimentNodeId
     status: ExperimentNodeStatus
     runs: tuple[RunOutcome, ...] = ()
+    evaluations: tuple[EvaluationOutcome, ...] = ()
 
 
 class ExperimentResult(FrozenDomainModel):
@@ -78,9 +99,11 @@ class ExperimentResult(FrozenDomainModel):
             than leaving it implied.
         next_stage: Advisory controller work that would move the experiment
             on, if it could run -- never a status any aggregate is in:
-            ``"evaluation"`` for a trained candidate, ``"failure-handling"``
-            for one whose runs all failed or were cancelled (retry, recover or
-            give up: none exists yet). ``None`` once the experiment is
+            ``"decision"`` for a node evaluated into ``DECIDING``,
+            ``"evaluation"`` for a trained candidate nothing has evaluated (or
+            whose evaluation is still running), ``"failure-handling"`` for one
+            whose runs or evaluations failed or were cancelled (retry, recover
+            or give up: none exists yet). ``None`` once the experiment is
             terminal.
     """
 

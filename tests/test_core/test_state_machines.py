@@ -9,9 +9,13 @@ import pytest
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.state import (
     ATTEMPT_MACHINE,
+    EVALUATION_ATTEMPT_MACHINE,
+    EVALUATION_RUN_MACHINE,
     EXPERIMENT_MACHINE,
     NODE_MACHINE,
     RUN_MACHINE,
+    EvaluationAttemptStatus,
+    EvaluationRunStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -106,11 +110,55 @@ ATTEMPT_EDGES = (
     }
 )
 
+# ADR-015 §1, transcribed from its tables.
+EVALUATION_RUN_EDGES = {
+    (EvaluationRunStatus.CREATED, EvaluationRunStatus.ACTIVE),
+    (EvaluationRunStatus.CREATED, EvaluationRunStatus.CANCELLED),
+    (EvaluationRunStatus.CREATED, EvaluationRunStatus.FAILED),
+    (EvaluationRunStatus.ACTIVE, EvaluationRunStatus.SUCCEEDED),
+    (EvaluationRunStatus.ACTIVE, EvaluationRunStatus.FAILED),
+    (EvaluationRunStatus.ACTIVE, EvaluationRunStatus.CANCELLED),
+}
+
+_EVALUATION_ATTEMPT_NON_TERMINAL = [
+    EvaluationAttemptStatus.CREATED,
+    EvaluationAttemptStatus.QUEUED,
+    EvaluationAttemptStatus.STARTING,
+    EvaluationAttemptStatus.RUNNING,
+]
+EVALUATION_ATTEMPT_EDGES = (
+    {
+        (EvaluationAttemptStatus.CREATED, EvaluationAttemptStatus.QUEUED),
+        (EvaluationAttemptStatus.QUEUED, EvaluationAttemptStatus.STARTING),
+        (EvaluationAttemptStatus.STARTING, EvaluationAttemptStatus.RUNNING),
+        (EvaluationAttemptStatus.RUNNING, EvaluationAttemptStatus.SUCCEEDED),
+    }
+    | {
+        (state, outcome)
+        for state in _EVALUATION_ATTEMPT_NON_TERMINAL
+        for outcome in (EvaluationAttemptStatus.CANCELLED, EvaluationAttemptStatus.FAILED)
+    }
+    | {
+        (state, EvaluationAttemptStatus.PREEMPTED)
+        for state in _EVALUATION_ATTEMPT_NON_TERMINAL
+        if state is not EvaluationAttemptStatus.CREATED
+    }
+)
+
 MACHINES = [
     pytest.param(EXPERIMENT_MACHINE, ExperimentStatus, EXPERIMENT_EDGES, id="experiment"),
     pytest.param(NODE_MACHINE, ExperimentNodeStatus, NODE_EDGES, id="node"),
     pytest.param(RUN_MACHINE, RunStatus, RUN_EDGES, id="run"),
     pytest.param(ATTEMPT_MACHINE, RunAttemptStatus, ATTEMPT_EDGES, id="attempt"),
+    pytest.param(
+        EVALUATION_RUN_MACHINE, EvaluationRunStatus, EVALUATION_RUN_EDGES, id="evaluation-run"
+    ),
+    pytest.param(
+        EVALUATION_ATTEMPT_MACHINE,
+        EvaluationAttemptStatus,
+        EVALUATION_ATTEMPT_EDGES,
+        id="evaluation-attempt",
+    ),
 ]
 
 
@@ -283,3 +331,24 @@ class TestTableConstruction:
                     RunStatus.CANCELLED: set(),
                 },
             )
+
+
+class TestEvaluationMachines:
+    """ADR-015 AC-1 and AC-2: evaluation's own states, not training's."""
+
+    def test_evaluation_attempts_have_no_checkpointing_or_recovering(self):
+        names = {status.name for status in EvaluationAttemptStatus}
+        assert "CHECKPOINTING" not in names
+        assert "RECOVERING" not in names
+
+    def test_preemption_applies_from_queued_onwards_only(self):
+        preemptable = {
+            state
+            for state in EvaluationAttemptStatus
+            if EVALUATION_ATTEMPT_MACHINE.can(state, EvaluationAttemptStatus.PREEMPTED)
+        }
+        assert preemptable == {
+            EvaluationAttemptStatus.QUEUED,
+            EvaluationAttemptStatus.STARTING,
+            EvaluationAttemptStatus.RUNNING,
+        }

@@ -11,7 +11,9 @@ A handle is a way of asking the durable record about one experiment; see
 does not yet exist.
 """
 
+from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec
 from xaytune.experiment.handle import (
+    EvaluationOutcome,
     ExperimentHandle,
     ExperimentResult,
     NodeOutcome,
@@ -30,6 +32,9 @@ __all__ = [
     "CompilerSpec",
     "ControllerNotRunningError",
     "EmbeddedControllerHost",
+    "EvaluationOutcome",
+    "EvaluationSpec",
+    "EvaluatorSpec",
     "ExperimentHandle",
     "ExperimentResult",
     "ExperimentSpec",

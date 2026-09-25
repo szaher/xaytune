@@ -28,10 +28,28 @@ issues one, but two observers whose writes would conflict. Leases that make
 one host the owner belong to the daemon host, not to this one.
 
 The controller loop only turns observations into transitions. It does not
-decide scientific outcomes: a successful run leaves the node ``ACTIVE``,
-because the next thing that can happen to it is evaluation, and the experiment
-``ACTIVE``, because ending an experiment is a decision (implementation plan,
-PR-012).
+decide scientific outcomes. A successful run leaves the node ``ACTIVE`` when
+no evaluation is configured, because the next thing that can happen to it is
+evaluation, and the experiment ``ACTIVE``, because ending an experiment is a
+decision (implementation plan, PR-012).
+
+**Evaluation, when the spec asks for it** (ADR-015, PR-013):
+
+```text
+training run SUCCEEDED
+   ├── node ACTIVE → EVALUATING, cycle n, EvaluationRun   one commit
+   ├── EvaluationAttempt + INTENDED operation              one commit
+   ├── runtime.submit_or_get()                             the same journal
+   ├── observe: EvaluationCompleted(metrics) held durably,
+   │   with the cursor advanced to it                      one commit
+   ├── the runtime says the workload succeeded:
+   │   result + attempt + run SUCCEEDED                    one commit
+   └── node EVALUATING → DECIDING                          reconciled, not assumed
+```
+
+It reaches ``DECIDING`` and stops: deciding is PR-015's. An evaluation in
+flight is adopted after a restart exactly as training is, through the same
+reconciliation.
 """
 
 from __future__ import annotations
@@ -47,6 +65,14 @@ from xaytune.compilation import (
     TrainerCompiler,
     UnsupportedCandidateError,
 )
+from xaytune.core.domain.evaluation import (
+    EvaluationAttempt,
+    EvaluationResult,
+    EvaluationRun,
+    EvaluationSpec,
+    EvaluatorSpec,
+    result_provenance_problems,
+)
 from xaytune.core.domain.event import DomainEvent
 from xaytune.core.domain.experiment import (
     CandidateSpecSnapshot,
@@ -59,6 +85,9 @@ from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import XaytuneError
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import (
+    EvaluationAttemptId,
+    EvaluationId,
+    EvaluationRunId,
     ExperimentId,
     ExperimentNodeId,
     RunAttemptId,
@@ -66,8 +95,14 @@ from xaytune.core.ids import (
 )
 from xaytune.core.refs import Actor, ArtifactRef, ControllerHostRef, RuntimeRef
 from xaytune.core.sqlite import connect
-from xaytune.core.state.machines import ATTEMPT_MACHINE, RUN_MACHINE
+from xaytune.core.state.machines import (
+    ATTEMPT_MACHINE,
+    EVALUATION_ATTEMPT_MACHINE,
+    RUN_MACHINE,
+)
 from xaytune.core.state.status import (
+    EvaluationAttemptStatus,
+    EvaluationRunStatus,
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
@@ -75,10 +110,14 @@ from xaytune.core.state.status import (
 )
 from xaytune.core.telemetry import (
     ArtifactProducedPayload,
+    EvaluationCompletedPayload,
+    EvaluationStartedPayload,
     TrainingStartedPayload,
     WorkerReadyPayload,
 )
+from xaytune.evaluation import EvaluationContext, Evaluator
 from xaytune.experiment.handle import (
+    EvaluationOutcome,
     ExperimentHandle,
     ExperimentResult,
     NextStage,
@@ -87,7 +126,7 @@ from xaytune.experiment.handle import (
 )
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.runtimes import RuntimeBackend, RuntimeStatus, StreamCursor
-from xaytune.storage.control_plane import ControlPlaneRepository
+from xaytune.storage.control_plane import ControlPlaneRepository, EvaluationReconciliation
 from xaytune.storage.migrations import migrate
 
 __all__ = [
@@ -125,6 +164,24 @@ _RUNTIME_OUTCOME: Mapping[str, tuple[RunAttemptStatus, RunStatus]] = {
     "failed": (RunAttemptStatus.FAILED, RunStatus.FAILED),
     "cancelled": (RunAttemptStatus.CANCELLED, RunStatus.CANCELLED),
 }
+
+_EVALUATION_PATH = (
+    EvaluationAttemptStatus.QUEUED,
+    EvaluationAttemptStatus.STARTING,
+    EvaluationAttemptStatus.RUNNING,
+)
+
+_EVALUATION_OUTCOME: Mapping[str, tuple[EvaluationAttemptStatus, EvaluationRunStatus]] = {
+    "failed": (EvaluationAttemptStatus.FAILED, EvaluationRunStatus.FAILED),
+    "cancelled": (EvaluationAttemptStatus.CANCELLED, EvaluationRunStatus.CANCELLED),
+    # Preempted: the attempt says so, and the run fails -- there is no retry
+    # policy yet, and a run left ACTIVE over a preempted attempt would have
+    # nothing executing it. A retry, when there is one, is a new attempt; it
+    # never recovers this one.
+    "preempted": (EvaluationAttemptStatus.PREEMPTED, EvaluationRunStatus.FAILED),
+}
+"""How an evaluation that did not succeed ends. Success is not here: it is
+recorded only with its result, through ``record_evaluation_result``."""
 
 
 class UnknownImplementationError(XaytuneError):
@@ -173,6 +230,11 @@ def _default_compilers() -> dict[str, Callable[[], TrainerCompiler]]:
     return {"native": NativeCompiler, "trl": TRLCompiler}
 
 
+def _default_evaluators() -> dict[str, Callable[[], Evaluator]]:
+    """None yet: the evaluators wrapping Xaytune's metrics and lm-eval are PR-014's."""
+    return {}
+
+
 def _local_runtime(config: Mapping[str, Any]) -> RuntimeBackend:
     from xaytune.runtimes.local import LocalRuntime
 
@@ -198,6 +260,8 @@ class EmbeddedControllerHost:
             :class:`CompilerSpec` resolves through.
         runtimes: Runtime factories by kind, each taking the spec's config.
             Defaults to ``local``.
+        evaluators: Evaluator factories by name, the registry a recorded
+            ``EvaluatorSpec`` resolves through. None are built in yet.
     """
 
     def __init__(
@@ -206,6 +270,7 @@ class EmbeddedControllerHost:
         *,
         compilers: Mapping[str, Callable[[], TrainerCompiler]] | None = None,
         runtimes: Mapping[str, Callable[[Mapping[str, Any]], RuntimeBackend]] | None = None,
+        evaluators: Mapping[str, Callable[[], Evaluator]] | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -219,6 +284,7 @@ class EmbeddedControllerHost:
         # every compiler the built-in ones anyway.
         self._compilers = dict(_default_compilers() if compilers is None else compilers)
         self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
+        self._evaluators = dict(_default_evaluators() if evaluators is None else evaluators)
         self._runtimes: dict[str, RuntimeBackend] = {}
         # One observer per attempt, keyed by experiment then attempt: an
         # experiment can have several live attempts, and each must stay
@@ -236,8 +302,8 @@ class EmbeddedControllerHost:
         recorded; training continues under a controller task in this process.
 
         Raises:
-            UnknownImplementationError: If the spec names a compiler or runtime
-                this host cannot resolve.
+            UnknownImplementationError: If the spec names a compiler, runtime
+                or evaluator this host cannot resolve.
             UnsupportedCandidateError: If the compiler cannot run the candidate
                 exactly as declared. Nothing is recorded in either case: a spec
                 that cannot run is refused at submission, not after.
@@ -247,8 +313,9 @@ class EmbeddedControllerHost:
         if not support:
             raise UnsupportedCandidateError(compiler.descriptor.name, support.reasons)
         runtime = self._runtime(spec.runtime)
+        evaluation = None if spec.evaluation is None else self._bind_evaluation(spec.evaluation)
 
-        experiment = self._record_experiment(spec, compiler, runtime)
+        experiment = self._record_experiment(spec, compiler, runtime, evaluation)
         node = self._record_node(experiment, spec)
         run = self._record_run(node, spec.seed)
 
@@ -344,7 +411,7 @@ class EmbeddedControllerHost:
 
         nodes: list[NodeOutcome] = []
         settled = True
-        trained = False
+        trained = deciding = evaluating = False
         for node in aggregates.nodes_for_experiment(str(experiment_id)):
             runs: list[RunOutcome] = []
             for run in aggregates.runs_for_node(str(node.id)):
@@ -362,7 +429,31 @@ class EmbeddedControllerHost:
                         artifacts=final.artifact_refs if final else (),
                     )
                 )
-            nodes.append(NodeOutcome(node_id=node.id, status=node.status, runs=tuple(runs)))
+            evaluations: list[EvaluationOutcome] = []
+            for evaluation_run in aggregates.evaluation_runs_for_node(str(node.id)):
+                evaluation_attempts = aggregates.evaluation_attempts_for_run(str(evaluation_run.id))
+                settled = settled and evaluation_run.is_terminal
+                evaluating = evaluating or not evaluation_run.is_terminal
+                evaluations.append(
+                    EvaluationOutcome(
+                        evaluation_run_id=evaluation_run.id,
+                        evaluation_cycle=evaluation_run.evaluation_cycle,
+                        status=evaluation_run.status,
+                        attempt_status=(
+                            evaluation_attempts[-1].status if evaluation_attempts else None
+                        ),
+                        result=aggregates.evaluation_result_for_run(str(evaluation_run.id)),
+                    )
+                )
+            deciding = deciding or node.status is ExperimentNodeStatus.DECIDING
+            nodes.append(
+                NodeOutcome(
+                    node_id=node.id,
+                    status=node.status,
+                    runs=tuple(runs),
+                    evaluations=tuple(evaluations),
+                )
+            )
 
         # Quiescent means no control work is unresolved -- not only that every
         # run has ended. An effect with no known outcome, or an action still in
@@ -374,9 +465,13 @@ class EmbeddedControllerHost:
         next_stage: NextStage | None
         if experiment.is_terminal:
             next_stage = None
-        elif trained:
+        elif deciding:
+            next_stage = "decision"
+        elif trained or evaluating:
             next_stage = "evaluation"
         else:
+            # Training failed or was cancelled, or an evaluation ended without
+            # a result and the node's cycle stalled.
             next_stage = "failure-handling"
 
         return ExperimentResult(
@@ -446,6 +541,9 @@ class EmbeddedControllerHost:
             return
         self._settle(attempt_id, run_id, *outcome, status=status)
         self._reconcile_cancellations(experiment_id)
+        if outcome[1] is RunStatus.SUCCEEDED:
+            run = self.repository.aggregates.load_run(str(run_id))
+            await self._continue_to_evaluation(experiment_id, run.node_id)
 
     # ---- issuing and reconciling submissions (ADR-013) -----------------------
 
@@ -483,18 +581,21 @@ class EmbeddedControllerHost:
     async def _issue(
         self,
         experiment_id: ExperimentId,
-        run_id: RunId,
-        attempt_id: RunAttemptId,
+        run_id: RunId | EvaluationRunId,
+        attempt_id: RunAttemptId | EvaluationAttemptId,
         operation: RuntimeOperation,
         plan: ResolvedExecutionPlan,
         runtime: RuntimeBackend,
     ) -> None:
         """Issue a recorded submission, record its outcome, and observe it.
 
-        A runtime's definitive refusal fails the operation and settles the
-        attempt. Any other error leaves the operation INTENDED -- an unknown
-        outcome is for reconciliation, not to be written down as a failure.
+        The same for training and evaluation: the plan's target says which
+        attempt it is for. A runtime's definitive refusal fails the operation
+        and settles the attempt. Any other error leaves the operation INTENDED
+        -- an unknown outcome is for reconciliation, not to be written down as
+        a failure.
         """
+        kind = plan.target.kind
         try:
             reference = await runtime.submit_or_get(operation.id, plan)
         except Exception as exc:
@@ -502,7 +603,7 @@ class EmbeddedControllerHost:
                 self.repository.fail_operation(
                     operation.id, expected_revision=operation.revision, actor=_ACTOR
                 )
-                self._settle(attempt_id, run_id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+                self._settle_refused(kind, experiment_id, run_id, attempt_id)
                 return
             raise
         operation = self.repository.confirm_operation(
@@ -511,23 +612,60 @@ class EmbeddedControllerHost:
             actor=_ACTOR,
             runtime_ref=reference,
         )
-        self._adopt(experiment_id, run_id, attempt_id, runtime, reference)
+        self._adopt(kind, experiment_id, run_id, attempt_id, runtime, reference)
 
     def _adopt(
         self,
+        kind: str,
         experiment_id: ExperimentId,
-        run_id: RunId,
-        attempt_id: RunAttemptId,
+        run_id: RunId | EvaluationRunId,
+        attempt_id: RunAttemptId | EvaluationAttemptId,
         runtime: RuntimeBackend,
         reference: RuntimeRef,
     ) -> None:
         """Observe a workload the runtime has, whoever issued it."""
-        self._advance_attempt(attempt_id, RunAttemptStatus.QUEUED)
+        observe: Any
+        if kind == "training-attempt":
+            self._advance_attempt(RunAttemptId(attempt_id), RunAttemptStatus.QUEUED)
+            observe = self._observe(
+                experiment_id, RunAttemptId(attempt_id), RunId(run_id), runtime, reference
+            )
+        else:
+            self._advance_evaluation_attempt(
+                EvaluationAttemptId(attempt_id), EvaluationAttemptStatus.QUEUED
+            )
+            observe = self._observe_evaluation(
+                experiment_id,
+                EvaluationAttemptId(attempt_id),
+                EvaluationRunId(run_id),
+                runtime,
+                reference,
+            )
         observers = self._controllers.setdefault(str(experiment_id), {})
         observers[str(attempt_id)] = asyncio.create_task(
-            self._observe(experiment_id, attempt_id, run_id, runtime, reference),
-            name=f"xaytune-controller-{experiment_id}-{attempt_id}",
+            observe, name=f"xaytune-controller-{experiment_id}-{attempt_id}"
         )
+
+    def _settle_refused(
+        self,
+        kind: str,
+        experiment_id: ExperimentId,
+        run_id: RunId | EvaluationRunId,
+        attempt_id: RunAttemptId | EvaluationAttemptId,
+    ) -> None:
+        """Settle an attempt whose submission the runtime definitively refused."""
+        if kind == "training-attempt":
+            self._settle(
+                RunAttemptId(attempt_id), RunId(run_id), RunAttemptStatus.FAILED, RunStatus.FAILED
+            )
+            return
+        self._settle_evaluation(
+            EvaluationAttemptId(attempt_id),
+            EvaluationRunId(run_id),
+            EvaluationAttemptStatus.FAILED,
+            EvaluationRunStatus.FAILED,
+        )
+        self._reconcile_node_of(EvaluationRunId(run_id))
 
     def _driving(self, experiment_id: ExperimentId) -> bool:
         """Whether this host is still observing any of the experiment's attempts."""
@@ -537,9 +675,10 @@ class EmbeddedControllerHost:
     async def _reconcile(self, experiment: Experiment) -> None:
         """Adopt an experiment's unsettled work after the process driving it died.
 
-        For every attempt that has not reached an outcome, its submit
-        operation decides what happens -- and a submission is issued only when
-        the runtime positively says it never received it:
+        For every attempt that has not reached an outcome -- training or
+        evaluation, the same rule -- its submit operation decides what happens,
+        and a submission is issued only when the runtime positively says it
+        never received it:
 
         ```text
         CONFIRMED, reference recorded      adopt the workload
@@ -551,13 +690,20 @@ class EmbeddedControllerHost:
                                            "finished and forgotten" (ADR-013)
         ```
 
+        Then whatever a crash between two commits left behind: a trained node
+        whose evaluation cycle never began, an evaluation run with no attempt
+        (so no intent, so nothing can have been started), a node whose
+        evaluation finished but which never moved on. Each is carried forward
+        from the record; none is guessed.
+
         Each implementation is resolved, and its version checked, only on a
         path that uses it: the runtime where an external effect is looked up,
-        adopted or cancelled; the compiler only where a request is rebuilt.
-        An experiment with nothing unsettled needs neither, so its record can
-        be attached to after the runtime that ran it is gone. A cancellation
-        still in flight is carried on: its intended effects are issued, which
-        the runtime treats as idempotent under the same operation id.
+        adopted or cancelled; the compiler or evaluator only where a request
+        is rebuilt. An experiment with nothing unsettled needs none of them,
+        so its record can be attached to after the runtime that ran it is
+        gone. A cancellation still in flight is carried on: its intended
+        effects are issued, which the runtime treats as idempotent under the
+        same operation id.
         """
         if experiment.runtime is None:
             # Recorded before a host drove experiments: nothing to adopt with.
@@ -567,32 +713,74 @@ class EmbeddedControllerHost:
         for node in aggregates.nodes_for_experiment(str(experiment.id)):
             for run in aggregates.runs_for_node(str(node.id)):
                 for attempt in aggregates.attempts_for_run(str(run.id)):
-                    if attempt.is_terminal:
-                        continue
-                    await self._reconcile_attempt(experiment, run, attempt)
+                    if not attempt.is_terminal:
+                        await self._reconcile_submission(
+                            "training-attempt", experiment, run.id, attempt.id
+                        )
+            await self._reconcile_evaluation(experiment, node.id)
 
         for action in self.repository.actions.for_target("experiment", str(experiment.id)):
             if action.type == "cancel-experiment" and not action.is_terminal:
                 await self._cancel(experiment.id, reason=action.reason)
 
-    async def _reconcile_attempt(
+    async def _reconcile_evaluation(
+        self, experiment: Experiment, node_id: ExperimentNodeId
+    ) -> None:
+        """Carry one node's evaluation forward from wherever a crash left it."""
+        aggregates = self.repository.aggregates
+        node = aggregates.load_node(str(node_id))
+        if node.status is ExperimentNodeStatus.ACTIVE:
+            # Trained, and the cycle never began: begin it now.
+            await self._continue_to_evaluation(experiment.id, node.id)
+            return
+        if node.status is not ExperimentNodeStatus.EVALUATING:
+            return
+
+        for evaluation_run in aggregates.evaluation_runs_for_node(
+            str(node.id), cycle=node.evaluation_cycle
+        ):
+            if evaluation_run.is_terminal:
+                continue
+            attempts = aggregates.evaluation_attempts_for_run(str(evaluation_run.id))
+            live = [attempt for attempt in attempts if not attempt.is_terminal]
+            for attempt in live:
+                await self._reconcile_submission(
+                    "evaluation-attempt", experiment, evaluation_run.id, attempt.id
+                )
+            if not attempts:
+                # No attempt means no intent was ever recorded, so nothing can
+                # have been started: issuing now is the first issue, not a
+                # re-issue.
+                await self._start_evaluation_run(experiment, evaluation_run)
+            elif not live:
+                # Every attempt ended and the run was never settled: the crash
+                # fell between the two. Settle it from the attempt's outcome.
+                final = attempts[-1]
+                outcome = _EVALUATION_OUTCOME.get(final.status.value)
+                if outcome is not None:
+                    self._settle_evaluation(final.id, evaluation_run.id, *outcome)
+        self._reconcile_node(node.id)
+
+    async def _reconcile_submission(
         self,
+        kind: str,
         experiment: Experiment,
-        run: Run,
-        attempt: RunAttempt,
+        run_id: RunId | EvaluationRunId,
+        attempt_id: RunAttemptId | EvaluationAttemptId,
     ) -> None:
         """Adopt, settle, escalate or -- only on proven absence -- re-issue one attempt.
 
-        Settling a submission the record already shows failed needs nothing
-        but the record. Rediscovering an effect that exists needs the runtime,
-        and nothing else. The compiler becomes a dependency only when the
-        original request must be rebuilt, so that is the only branch that
-        resolves one: a workload already running is adopted even if its
-        compiler is no longer installed.
+        One rule for both workloads. Settling a submission the record already
+        shows failed needs nothing but the record. Rediscovering an effect
+        that exists needs the runtime, and nothing else. The compiler or
+        evaluator becomes a dependency only when the original request must be
+        rebuilt, so that is the only branch that resolves one: a workload
+        already running is adopted even if what built its request is no
+        longer installed.
         """
         submissions = [
             op
-            for op in self.repository.operations.for_target("training-attempt", str(attempt.id))
+            for op in self.repository.operations.for_target(kind, str(attempt_id))
             if op.type == "submit"
         ]
         if not submissions:
@@ -601,14 +789,14 @@ class EmbeddedControllerHost:
 
         if submission.state == "failed":
             # Crashed between recording the refusal and settling the attempt.
-            self._settle(attempt.id, run.id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            self._settle_refused(kind, experiment.id, run_id, attempt_id)
             return
 
         # From here on the external effect is interpreted, so the runtime that
         # tracks it is needed -- and it must be the one that recorded it.
         runtime = self._recorded_runtime(experiment)
         if submission.state == "confirmed" and submission.runtime_ref is not None:
-            self._adopt(experiment.id, run.id, attempt.id, runtime, submission.runtime_ref)
+            self._adopt(kind, experiment.id, run_id, attempt_id, runtime, submission.runtime_ref)
             return
 
         outcome = await runtime.lookup_operation(submission.id)
@@ -616,7 +804,7 @@ class EmbeddedControllerHost:
             self.repository.fail_operation(
                 submission.id, expected_revision=submission.revision, actor=_ACTOR
             )
-            self._settle(attempt.id, run.id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            self._settle_refused(kind, experiment.id, run_id, attempt_id)
             return
         if outcome is not None:
             assert outcome.runtime_ref is not None
@@ -626,34 +814,432 @@ class EmbeddedControllerHost:
                 actor=_ACTOR,
                 runtime_ref=outcome.runtime_ref,
             )
-            self._adopt(experiment.id, run.id, attempt.id, runtime, outcome.runtime_ref)
+            self._adopt(kind, experiment.id, run_id, attempt_id, runtime, outcome.runtime_ref)
             return
 
         resilience = runtime.capabilities().resilience
         if resilience is None or resilience.reports_completed_operations is not True:
             self._escalations[str(experiment.id)] = (
-                f"submission {submission.id} for attempt {attempt.id} is unconfirmed and the "
+                f"submission {submission.id} for {kind} {attempt_id} is unconfirmed and the "
                 f"runtime has no record of it, but this runtime cannot report completed "
                 f"operations: it may have run and been forgotten, so it is not re-issued"
             )
             return
 
-        # Only now is the original request rebuilt, so only now is the
-        # compiler needed -- and it must be the one that built the original.
-        if experiment.compiler is None:
-            raise ImplementationMismatchError(
-                f"submission {submission.id} must be re-issued, but the record names no "
-                f"compiler to rebuild its request with"
-            )
-        compiler = self._compiler(experiment.compiler.name)
-        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
-        plan = self._plan(experiment, run, attempt.id, compiler)
+        # Only now is the original request rebuilt, so only now is its builder
+        # needed -- and it must be the one that built the original.
+        plan = self._rebuild_plan(kind, experiment, run_id, attempt_id, submission)
         if plan.request_digest("submit") != submission.request_digest:
             raise ImplementationMismatchError(
                 f"re-issuing submission {submission.id} would send a different request than "
-                f"the one recorded; the candidate or its compilation changed"
+                f"the one recorded; what it describes, or how it is built, changed"
             )
-        await self._issue(experiment.id, run.id, attempt.id, submission, plan, runtime)
+        await self._issue(experiment.id, run_id, attempt_id, submission, plan, runtime)
+
+    def _rebuild_plan(
+        self,
+        kind: str,
+        experiment: Experiment,
+        run_id: RunId | EvaluationRunId,
+        attempt_id: RunAttemptId | EvaluationAttemptId,
+        submission: RuntimeOperation,
+    ) -> ResolvedExecutionPlan:
+        """Rebuild a recorded submission's plan with the implementation that built it.
+
+        Raises:
+            ImplementationMismatchError: If the record names no builder, or
+                this host provides a different version of it.
+            UnknownImplementationError: If this host has no such builder.
+        """
+        if kind == "training-attempt":
+            if experiment.compiler is None:
+                raise ImplementationMismatchError(
+                    f"submission {submission.id} must be re-issued, but the record names no "
+                    f"compiler to rebuild its request with"
+                )
+            compiler = self._compiler(experiment.compiler.name)
+            _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
+            run = self.repository.aggregates.load_run(str(run_id))
+            return self._plan(experiment, run, RunAttemptId(attempt_id), compiler)
+
+        evaluation_run = self.repository.aggregates.load_evaluation_run(str(run_id))
+        evaluator = self._recorded_evaluator(evaluation_run.spec)
+        return self._evaluation_plan(
+            experiment, evaluation_run, EvaluationAttemptId(attempt_id), evaluator
+        )
+
+    # ---- evaluation (ADR-015) ------------------------------------------------
+
+    async def _continue_to_evaluation(
+        self, experiment_id: ExperimentId, node_id: ExperimentNodeId
+    ) -> None:
+        """Begin the node's next evaluation cycle, if its training is done and asks for one.
+
+        Only once every training run of the node has ended, one succeeded, and
+        no cancellation is in flight: evaluating a node whose experiment is
+        being cancelled would start a workload the cancellation must then
+        chase. The trained model -- the successful run's ``model`` artifact --
+        is the subject. A successful run with no model is still recorded as a
+        cycle, with no run in it, so reconciliation reports it stalled rather
+        than the node sitting ``ACTIVE`` with nobody saying why.
+
+        The run's seed is the training run's, and its replicate 1: the
+        embedded controller's default for the first evaluation sample, not a
+        coupling. An evaluation seed means nothing about training, stays
+        outside ``EvaluationFingerprint``, and a planner may schedule further
+        replicates with seeds of its own.
+        """
+        aggregates = self.repository.aggregates
+        experiment = aggregates.load_experiment(str(experiment_id))
+        if experiment.evaluation is None or experiment.is_terminal:
+            return
+        if self._cancelling(experiment_id):
+            return
+        node = aggregates.load_node(str(node_id))
+        if node.status is not ExperimentNodeStatus.ACTIVE:
+            return
+        runs = aggregates.runs_for_node(str(node.id))
+        if not runs or any(not run.is_terminal for run in runs):
+            return
+        trained = [run for run in runs if run.status is RunStatus.SUCCEEDED]
+        if not trained:
+            return
+        run = trained[-1]
+        subject = _trained_model(aggregates.attempts_for_run(str(run.id)))
+
+        evaluation_runs: tuple[EvaluationRun, ...] = ()
+        if subject is not None:
+            evaluation_runs = (
+                EvaluationRun(
+                    id=EvaluationRunId.generate(),
+                    experiment_id=experiment.id,
+                    node_id=node.id,
+                    evaluation_cycle=node.evaluation_cycle + 1,
+                    spec=experiment.evaluation,
+                    subject=subject,
+                    evaluation_fingerprint=experiment.evaluation.evaluation_fingerprint(),
+                    seed=run.seed,
+                    replicate=1,
+                ),
+            )
+        node, _ = self.repository.begin_evaluation_cycle(
+            node.id, expected_revision=node.revision, runs=evaluation_runs, actor=_ACTOR
+        )
+        for evaluation_run in evaluation_runs:
+            await self._start_evaluation_run(experiment, evaluation_run)
+        if not evaluation_runs:
+            self._reconcile_node(node.id)
+
+    async def _start_evaluation_run(self, experiment: Experiment, run: EvaluationRun) -> None:
+        """Record an evaluation attempt with its intent, then issue it.
+
+        The evaluator that prepares the request is the one the record names,
+        at the recorded version: a request this host would build differently
+        is refused rather than run under the old one's name.
+        """
+        aggregates = self.repository.aggregates
+        run = aggregates.load_evaluation_run(str(run.id))
+        if run.status is EvaluationRunStatus.CREATED:
+            run = self.repository.transition_evaluation_run(
+                run.id,
+                expected_revision=run.revision,
+                new_status=EvaluationRunStatus.ACTIVE,
+                actor=_ACTOR,
+            )
+        evaluator = self._recorded_evaluator(run.spec)
+        attempt = EvaluationAttempt(
+            id=EvaluationAttemptId.generate(),
+            evaluation_run_id=run.id,
+            attempt_number=len(aggregates.evaluation_attempts_for_run(str(run.id))) + 1,
+        )
+        plan = self._evaluation_plan(experiment, run, attempt.id, evaluator)
+        attempt, operation = self.repository.create_evaluation_attempt_with_submit_intent(
+            attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
+        )
+        runtime = self._recorded_runtime(experiment)
+        await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
+
+    def _evaluation_plan(
+        self,
+        experiment: Experiment,
+        run: EvaluationRun,
+        attempt_id: EvaluationAttemptId,
+        evaluator: Evaluator,
+    ) -> ResolvedExecutionPlan:
+        """The evaluation attempt's plan, built from the durable record alone.
+
+        Like :meth:`_plan`, so a re-issued evaluation is the same request by
+        construction, and its digest is still checked. On the experiment's
+        runtime: choosing another for evaluation is a later decision.
+
+        Raises:
+            ValueError: If the evaluator prepared a spec for another evaluation
+                or another subject than the run names.
+        """
+        assert experiment.runtime is not None and experiment.artifact_root is not None
+        spec = evaluator.prepare(
+            run.subject,
+            run.spec,
+            EvaluationContext(
+                experiment_id=str(experiment.id),
+                node_id=str(run.node_id),
+                evaluation_run_id=str(run.id),
+                seed=run.seed,
+                replicate=run.replicate,
+                output_uri=str(Path(experiment.artifact_root) / "evaluations" / str(run.id)),
+            ),
+        )
+        if spec.evaluation_fingerprint != run.evaluation_fingerprint or spec.subject != run.subject:
+            raise ValueError(
+                f"evaluator {evaluator.descriptor.name!r} prepared a request for another "
+                f"evaluation or subject than run {run.id} names"
+            )
+        return ResolvedExecutionPlan(
+            spec=spec,
+            runtime=experiment.runtime.kind,
+            target=RuntimeOperationTarget(kind="evaluation-attempt", id=str(attempt_id)),
+        )
+
+    async def _observe_evaluation(
+        self,
+        experiment_id: ExperimentId,
+        attempt_id: EvaluationAttemptId,
+        run_id: EvaluationRunId,
+        runtime: RuntimeBackend,
+        reference: RuntimeRef,
+    ) -> None:
+        """Turn one evaluation's telemetry into durable transitions, then settle it.
+
+        Success takes **two** facts: an ``EvaluationCompleted`` carrying the
+        metrics, and the runtime reporting that the workload succeeded. An exit
+        of 0 with no completion is not a success: the evaluation produced no
+        result, so it failed.
+
+        The completion is held durably, with its telemetry position, in the
+        same commit that advances the cursor to it
+        (``hold_evaluation_completion``). It is not yet an ``EvaluationResult``
+        -- the workload may still fail on its way out, and runtime success is
+        still required. Because it is durable, a change of stream generation
+        or a controller restart cannot lose it: whichever controller sees the
+        workload end reads the completion from the record, not from a stream.
+        """
+        aggregates = self.repository.aggregates
+        generation, sequence = aggregates.telemetry_position(
+            str(attempt_id), kind="evaluation-attempt"
+        )
+        async for envelope in runtime.watch(
+            reference, StreamCursor(generation=generation, sequence=sequence)
+        ):
+            observation = envelope.payload.data
+            position = (envelope.stream_generation, envelope.sequence)
+            if isinstance(observation, WorkerReadyPayload):
+                self._advance_evaluation_attempt(
+                    attempt_id, EvaluationAttemptStatus.STARTING, position
+                )
+            elif isinstance(observation, EvaluationStartedPayload):
+                self._advance_evaluation_attempt(
+                    attempt_id, EvaluationAttemptStatus.RUNNING, position
+                )
+            elif isinstance(observation, EvaluationCompletedPayload):
+                # Held durably, not in memory: the stream it arrived on may
+                # die before the workload ends, and this controller with it.
+                self.repository.hold_evaluation_completion(
+                    attempt_id, observation, telemetry_position=position, actor=_ACTOR
+                )
+
+        status = await runtime.get_status(reference)
+        if status.state in _LIVE_STATES:
+            self.repository.record_telemetry_degraded(
+                attempt_id,
+                reason=status.detail or "the telemetry stream ended while the workload ran",
+                actor=_ACTOR,
+                kind="evaluation-attempt",
+            )
+            while status.state in _LIVE_STATES:
+                await asyncio.sleep(_OUTCOME_POLL_SECONDS)
+                status = await runtime.get_status(reference)
+
+        if status.state == "succeeded":
+            # Read from the record, not from this stream: the completion may
+            # have arrived on an earlier generation, or to an earlier host.
+            completion = aggregates.pending_completion(str(attempt_id))
+            if completion is not None and completion[0].metrics:
+                self._record_evaluation_result(attempt_id, run_id, *completion)
+            else:
+                # Exit 0 is an operating-system fact. Without the completion
+                # carrying its metrics, the evaluation measured nothing that
+                # was recorded, and inventing a result is the one thing this
+                # must not do.
+                self._settle_evaluation(
+                    attempt_id,
+                    run_id,
+                    EvaluationAttemptStatus.FAILED,
+                    EvaluationRunStatus.FAILED,
+                    reason="the workload exited successfully without reporting its result",
+                )
+        elif status.state in _EVALUATION_OUTCOME:
+            self._settle_evaluation(attempt_id, run_id, *_EVALUATION_OUTCOME[status.state])
+        else:
+            self._escalations[str(experiment_id)] = (
+                f"evaluation attempt {attempt_id} ended with no recorded outcome "
+                f"({status.detail or status.state}); it is left unsettled rather than guessed"
+            )
+            return
+        self._reconcile_node_of(run_id)
+        self._reconcile_cancellations(experiment_id)
+
+    def _record_evaluation_result(
+        self,
+        attempt_id: EvaluationAttemptId,
+        run_id: EvaluationRunId,
+        completion: EvaluationCompletedPayload,
+        position: tuple[int, int],
+    ) -> None:
+        """Record the result a completed evaluation carried, with its success.
+
+        Unless it cannot be attributed to this run. What the worker reported
+        is checked against the run first (``result_provenance_problems``): a
+        metric from another evaluator, version or seed, or a report naming its
+        own producer -- which the worker cannot know, since the result's id
+        is assigned here -- fails the evaluation, with the reason recorded.
+        A result the record cannot attribute is not a result.
+        """
+        aggregates = self.repository.aggregates
+        run = aggregates.load_evaluation_run(str(run_id))
+        result_id = EvaluationId.generate()
+        problems: list[str] = []
+        artifacts: tuple[ArtifactRef, ...] = ()
+        if completion.result_ref is not None:
+            report = completion.result_ref
+            if report.producer_evaluation_id is not None or report.producer_attempt_id is not None:
+                problems.append(
+                    f"the worker named a producer for its report {report.id}; only the "
+                    f"controller can, once the result exists"
+                )
+            artifacts = (
+                report.model_copy(
+                    update={"producer_evaluation_id": result_id, "producer_attempt_id": None}
+                ),
+            )
+        assert completion.metrics is not None
+        result = EvaluationResult(
+            id=result_id,
+            evaluation_run_id=run.id,
+            node_id=run.node_id,
+            subject=run.subject,
+            evaluation_fingerprint=run.evaluation_fingerprint,
+            metrics=completion.metrics,
+            artifacts=artifacts,
+        )
+        problems.extend(result_provenance_problems(result, run))
+        if problems:
+            self._settle_evaluation(
+                attempt_id,
+                run_id,
+                EvaluationAttemptStatus.FAILED,
+                EvaluationRunStatus.FAILED,
+                reason="the reported result cannot be attributed to this run: "
+                + "; ".join(problems),
+            )
+            return
+        # A worker that reported completion without first reporting its start
+        # still ran: the machine requires RUNNING before SUCCEEDED.
+        attempt = self._advance_evaluation_attempt(attempt_id, EvaluationAttemptStatus.RUNNING)
+        self.repository.record_evaluation_result(
+            attempt.id,
+            result,
+            expected_revision=attempt.revision,
+            actor=_ACTOR,
+            telemetry_position=position,
+        )
+
+    def _advance_evaluation_attempt(
+        self,
+        attempt_id: EvaluationAttemptId,
+        target: EvaluationAttemptStatus,
+        position: tuple[int, int] | None = None,
+    ) -> EvaluationAttempt:
+        """Move an evaluation attempt forward to *target*, through each state between.
+
+        Only ever forward, as for training: a late observation is a no-op.
+        """
+        attempt = self.repository.aggregates.load_evaluation_attempt(str(attempt_id))
+        if attempt.is_terminal:
+            return attempt
+        path = _EVALUATION_PATH
+        index = path.index(attempt.status) if attempt.status in path else -1
+        steps = path[index + 1 : path.index(target) + 1]
+        for number, status in enumerate(steps, start=1):
+            attempt = self.repository.transition_evaluation_attempt(
+                attempt.id,
+                expected_revision=attempt.revision,
+                new_status=status,
+                actor=_ACTOR,
+                telemetry_position=position if number == len(steps) else None,
+            )
+        return attempt
+
+    def _settle_evaluation(
+        self,
+        attempt_id: EvaluationAttemptId,
+        run_id: EvaluationRunId,
+        attempt_status: EvaluationAttemptStatus,
+        run_status: EvaluationRunStatus,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        """Record how an evaluation that did not succeed ended, and why if known."""
+        aggregates = self.repository.aggregates
+        attempt = aggregates.load_evaluation_attempt(str(attempt_id))
+        if not attempt.is_terminal and EVALUATION_ATTEMPT_MACHINE.can(
+            attempt.status, attempt_status
+        ):
+            self.repository.transition_evaluation_attempt(
+                attempt.id,
+                expected_revision=attempt.revision,
+                new_status=attempt_status,
+                actor=_ACTOR,
+                reason=reason,
+            )
+        run = aggregates.load_evaluation_run(str(run_id))
+        if not run.is_terminal:
+            self.repository.transition_evaluation_run(
+                run.id,
+                expected_revision=run.revision,
+                new_status=run_status,
+                actor=_ACTOR,
+                reason=reason,
+            )
+
+    def _reconcile_node_of(self, run_id: EvaluationRunId) -> None:
+        run = self.repository.aggregates.load_evaluation_run(str(run_id))
+        self._reconcile_node(run.node_id)
+
+    def _reconcile_node(self, node_id: ExperimentNodeId) -> EvaluationReconciliation | None:
+        """Wait, decide or stall a node in ``EVALUATING`` (ADR-015 §5).
+
+        Skipped while a cancellation is in flight: the evaluations it stopped
+        ended without results by design, and calling that a stall would
+        record an incident the operator caused on purpose.
+        """
+        node = self.repository.aggregates.load_node(str(node_id))
+        if node.status is not ExperimentNodeStatus.EVALUATING:
+            return None
+        if self._cancelling(node.experiment_id):
+            return None
+        return self.repository.reconcile_evaluating_node(node.id, actor=_ACTOR)
+
+    def _cancelling(self, experiment_id: ExperimentId) -> bool:
+        return any(
+            action.type == "cancel-experiment" and not action.is_terminal
+            for action in self.repository.actions.for_target("experiment", str(experiment_id))
+        )
+
+    def _recorded_evaluator(self, spec: EvaluationSpec) -> Evaluator:
+        """The evaluator the record names, at the version it names."""
+        evaluator = self._evaluator(spec.evaluator.name)
+        _require_version("evaluator", spec.evaluator, evaluator.descriptor.plugin_version)
+        return evaluator
 
     # ---- cancellation (ADR-013 §6) -----------------------------------------
 
@@ -661,11 +1247,11 @@ class EmbeddedControllerHost:
         """Record the cancellation saga, then carry out its effects.
 
         Intent first, in one commit: the experiment's Action and a child
-        Action and cancel operation per live attempt. Then each effect,
-        confirmed once the runtime has accepted it. Nothing here moves the
-        experiment: it reaches ``CANCELLED`` when reconciliation sees that no
-        attempt is live, which for a running workload is after the controller
-        has observed it stop.
+        Action and cancel operation per live attempt -- training or
+        evaluation. Then each effect, confirmed once the runtime has accepted
+        it. Nothing here moves the experiment: it reaches ``CANCELLED`` when
+        reconciliation sees that no attempt is live, which for a running
+        workload is after the controller has observed it stop.
 
         An effect that cannot be issued -- no recorded reference, a runtime
         that raised -- is left ``INTENDED``, and the experiment stays
@@ -680,7 +1266,7 @@ class EmbeddedControllerHost:
             for child, operation in children:
                 if operation is None or operation.state != "intended":
                     continue
-                reference = self._submitted_reference(child.target.id)
+                reference = self._submitted_reference(child.target.kind, child.target.id)
                 if reference is None:
                     continue
                 # Resolved per effect, so cancelling an experiment with no
@@ -698,17 +1284,37 @@ class EmbeddedControllerHost:
             if action.type == "cancel-experiment" and not action.is_terminal:
                 self.repository.reconcile_experiment_cancellation(action.id, actor=_ACTOR)
 
-    def _submitted_reference(self, attempt_id: str) -> RuntimeRef | None:
+    def _submitted_reference(self, kind: str, attempt_id: str) -> RuntimeRef | None:
         """The runtime reference the attempt's confirmed submission recorded."""
-        for operation in self.repository.operations.for_target("training-attempt", attempt_id):
+        for operation in self.repository.operations.for_target(kind, attempt_id):
             if operation.type == "submit" and operation.runtime_ref is not None:
                 return operation.runtime_ref
         return None
 
     # ---- durable writes --------------------------------------------------
 
+    def _bind_evaluation(self, spec: EvaluationSpec) -> EvaluationSpec:
+        """Resolve the evaluator and record which implementation it is (ADR-016).
+
+        The version and determinism are the evaluator's own declarations, read
+        now, so the record says which evaluator measured -- and a restarted
+        host rebuilding the request can check it has the same one.
+        """
+        evaluator = self._evaluator(spec.evaluator.name)
+        bound = EvaluatorSpec(
+            name=spec.evaluator.name,
+            version=evaluator.descriptor.plugin_version,
+            determinism=evaluator.determinism,
+            config=spec.evaluator.config,
+        )
+        return spec.model_copy(update={"evaluator": bound})
+
     def _record_experiment(
-        self, spec: ExperimentSpec, compiler: TrainerCompiler, runtime: RuntimeBackend
+        self,
+        spec: ExperimentSpec,
+        compiler: TrainerCompiler,
+        runtime: RuntimeBackend,
+        evaluation: EvaluationSpec | None,
     ) -> Experiment:
         experiment = Experiment(
             id=ExperimentId.generate(),
@@ -724,6 +1330,7 @@ class EmbeddedControllerHost:
                 update={"version": runtime.descriptor.plugin_version}  # type: ignore[attr-defined]
             ),
             artifact_root=spec.artifact_root,
+            evaluation=evaluation,
         )
         self.repository.create_experiment(experiment, actor=_ACTOR)
         return self.repository.transition_experiment(
@@ -865,6 +1472,14 @@ class EmbeddedControllerHost:
         _require_version("runtime", spec, runtime.descriptor.plugin_version)  # type: ignore[attr-defined]
         return runtime
 
+    def _evaluator(self, name: str) -> Evaluator:
+        factory = self._evaluators.get(name)
+        if factory is None:
+            raise UnknownImplementationError(
+                f"no evaluator named {name!r}; this host knows {sorted(self._evaluators)}"
+            )
+        return factory()
+
     def _runtime(self, spec: RuntimeSpec) -> RuntimeBackend:
         factory = self._runtime_factories.get(spec.kind)
         if factory is None:
@@ -878,6 +1493,15 @@ class EmbeddedControllerHost:
         return self._runtimes[key]
 
 
+def _trained_model(attempts: tuple[RunAttempt, ...]) -> ArtifactRef | None:
+    """The model the run's successful attempt published, if it published one."""
+    for attempt in reversed(attempts):
+        if attempt.status is RunAttemptStatus.SUCCEEDED:
+            models = [a for a in attempt.artifact_refs if a.kind == "model"]
+            return models[-1] if models else None
+    return None
+
+
 def _is_refusal(exc: BaseException) -> bool:
     """Whether *exc* is a runtime's definitive refusal of a plan."""
     from xaytune.runtimes.local import UnsupportedPlanError
@@ -885,10 +1509,12 @@ def _is_refusal(exc: BaseException) -> bool:
     return isinstance(exc, UnsupportedPlanError)
 
 
-def _require_version(kind: str, spec: CompilerSpec | RuntimeSpec, available: str) -> None:
+def _require_version(
+    kind: str, spec: CompilerSpec | RuntimeSpec | EvaluatorSpec, available: str
+) -> None:
     """Refuse to continue work recorded against a different implementation version."""
     if spec.version != available:
-        name = spec.name if isinstance(spec, CompilerSpec) else spec.kind
+        name = spec.kind if isinstance(spec, RuntimeSpec) else spec.name
         raise ImplementationMismatchError(
             f"the record names {kind} {name!r} at version {spec.version}, but this host "
             f"provides {available}; continuing its work with a different version is refused"

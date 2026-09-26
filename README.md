@@ -19,11 +19,12 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 
 **[Documentation](https://szaher.github.io/xaytune/)** | **[Control-plane getting started](https://szaher.github.io/xaytune/control-plane/getting-started/)** | **[Examples](https://github.com/szaher/xaytune/tree/main/examples/control_plane/)** | **[Architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/README.md)**
 
-> **Pre-release.** The control plane described here is on `main` and is not in
-> a release yet. The package on PyPI, `0.6.0`, is the trainer library described
-> under [Legacy trainer API](#legacy-trainer-api), which remains available. The
-> first release of the control plane is planned as `1.0.0a1`: declare an
-> experiment, train, evaluate, and make a durable, deterministic decision.
+> **Alpha.** `1.0.0a1` is the first release of the control plane: declare an
+> experiment, train, evaluate, and make a durable, deterministic decision. It
+> is a pre-release, so `pip install xaytune` still installs `0.6.0`; see
+> [Install](#install). Expect the control-plane API to change before `1.0.0`.
+> The trainer library from `0.6.0` is still included, as the
+> [Legacy trainer API](#legacy-trainer-api).
 
 ## What Xaytune owns, and what it delegates
 
@@ -185,8 +186,18 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 
 ## Install
 
-From PyPI, `pip install xaytune` installs **0.6.0, the legacy trainer API**. To
-use the control plane described above, install from a clone of `main`:
+```bash
+pip install "xaytune==1.0.0a1"          # the control plane, and the legacy trainer API
+pip install "xaytune[trl]==1.0.0a1"     # adds the TRL trainer
+```
+
+`1.0.0a1` is a pre-release, so pip installs it only when asked: by version, as
+above, or unpinned with `pip install --upgrade --pre xaytune` (`--upgrade`
+matters where `0.6.0` is already installed, which pip would otherwise keep). A
+plain `pip install xaytune` still installs **0.6.0, the legacy trainer API**
+alone.
+
+To install exactly what CI tests, or to work on Xaytune, install from a clone:
 
 ```bash
 git clone https://github.com/szaher/xaytune && cd xaytune
@@ -201,7 +212,8 @@ imports without them, and training runs in separate worker processes that do.
 
 Xaytune began as an opinionated PyTorch training library, and that library is
 still here: `finetune`, `pretrain`, `align`, `evaluate`, the `xaytune` CLI, and
-multi-stage pipelines. It is what PyPI's `0.6.0` contains. It stays available
+multi-stage pipelines. It is what PyPI's `0.6.0` contains, and `1.0.0a1` still
+includes it. It stays available
 through the transition, and its trainer is what `NativeCompiler` runs, behind
 the new compile/execute boundary.
 
@@ -238,7 +250,7 @@ the control plane.
 
 ### Legacy quickstart
 
-Install the released package with `pip install xaytune`; optional extras include
+`pip install xaytune` installs it (`0.6.0`), as does `1.0.0a1`; optional extras include
 `[wandb]`, `[mlflow]`, `[tensorboard]`, `[deepspeed]`, `[eval]` (lm-eval-harness),
 `[studio]` and `[all]`. The notebooks in [`examples/`](https://github.com/szaher/xaytune/tree/main/examples/) use this API.
 

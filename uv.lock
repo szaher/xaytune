@@ -5839,7 +5839,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/4a/29/a31940c848521f072
 
 [[package]]
 name = "xaytune"
-version = "0.6.0"
+version = "1.0.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "bitsandbytes" },

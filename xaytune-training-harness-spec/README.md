@@ -156,10 +156,10 @@ The ADR gate is **per-ADR, not global** — an ADR must be settled before the wo
 that depends on it, not before all work. See `15-implementation-plan.md`
 §Phase 0 for which ADRs are ratified, accepted, or still open, and what each
 still-open one blocks. **Bands A–D are complete for the first release:
-PR-004 through PR-014 have merged, through the native evaluator, and PR-015
-adds deterministic decisions, closing train → evaluate → decide. The lm-eval
-evaluator (PR-014b) is a separate integration, not a prerequisite for
-`1.0.0a1`.** The remaining `Proposed` ADRs gate later bands.
+PR-004 through PR-015 have merged, through the native evaluator and
+deterministic decisions, closing train → evaluate → decide, released as
+`1.0.0a1`. The lm-eval evaluator (PR-014b) is a separate integration, and was
+not a prerequisite for it.** The remaining `Proposed` ADRs gate later bands.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

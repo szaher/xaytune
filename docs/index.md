@@ -11,21 +11,23 @@ answer: **what should this training experiment do next?**
 **Xaytune controls the experiment.** Trainer integrations compile training intent.
 Runtime integrations execute it. Infrastructure schedules and runs the workloads.
 
-!!! info "Pre-release"
-    The control plane is on `main` and is not in a release yet. The package on
-    PyPI, `0.6.0`, is the [legacy trainer API](getting-started.md), which remains
-    available. The first control-plane release is planned as `1.0.0a1`: declare
-    an experiment, train, evaluate, and make a durable, deterministic decision.
+!!! info "Alpha"
+    `1.0.0a1` is the first release of the control plane: declare an experiment,
+    train, evaluate, and make a durable, deterministic decision. It is a
+    pre-release: install it with `pip install "xaytune==1.0.0a1"` (a plain
+    `pip install xaytune` still installs `0.6.0`), and expect the API to change
+    before `1.0.0`. The [legacy trainer API](getting-started.md) is still
+    included.
 
 ## Start here
 
 - [Control-plane getting started](control-plane/getting-started.md): install
-  from `main`, compile a candidate, train it, cancel it, and attach to it from
+  it, compile a candidate, train it, cancel it, and attach to it from
   another process.
 - [Control-plane concepts](control-plane/concepts.md): candidates, compilers,
   runtimes, the durable record, and what `wait()` means.
 - [Legacy trainer API](getting-started.md): `finetune`, `align`, the CLI and
-  pipelines from the `0.6.0` package.
+  pipelines, from `0.6.0` and still included.
 
 ## What Xaytune owns, and what it delegates
 
@@ -110,7 +112,7 @@ the order the remaining work lands in.
 ## Legacy trainer API
 
 Xaytune began as an opinionated PyTorch training library. That library is what
-PyPI's `0.6.0` contains, and it stays available: SFT with LoRA/QLoRA, DPO and
+PyPI's `0.6.0` contains, and `1.0.0a1` still includes it: SFT with LoRA/QLoRA, DPO and
 GRPO alignment, evaluation, export, multi-stage pipelines, YAML configuration,
 callbacks and logging integrations. Its trainer is what `NativeCompiler` runs,
 behind the compile/execute boundary.

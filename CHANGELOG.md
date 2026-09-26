@@ -1,14 +1,46 @@
 # Changelog
 
-## Unreleased
+## 1.0.0a1
 
-Everything below is on `main` and not yet released; `pyproject.toml` stays at
-`0.6.0` until it is. The first release of the experiment control plane is
-planned as `1.0.0a1`, once it can train, evaluate and decide.
+The first release of the experiment control plane, and a **pre-release**:
+`pip install xaytune` still installs `0.6.0`; install this one with
+`pip install "xaytune==1.0.0a1"` (unpinned, and upgrading an existing
+install: `pip install --upgrade --pre xaytune`). It closes one
+loop end to end: declare an experiment and a candidate, train it, evaluate
+the trained model, and make a durable, deterministic decision, with every
+step on a record that a restarted controller resumes from.
+
+Expect the control-plane API to change before `1.0.0`. The legacy trainer API
+from `0.6.0` (`finetune`, `align`, `evaluate`, the CLI and pipelines) is still
+included.
+
+**Upgrading from 0.6.0.** Nothing is removed. Two changes can alter what an
+existing program sees:
+
+- Metrics from `xaytune.eval.evaluate()` and in-training evaluation change,
+  because the earlier values were wrong (see *Fixed — evaluation metrics*).
+- Top-level imports are lazy: `import xaytune` no longer imports torch (see
+  *Changed*).
+
+**Known limitations of this alpha.**
+
+- One runtime, `LocalRuntime`: workers are processes on the controller's
+  machine. Ray, Kubernetes and other runtimes are planned.
+- One candidate per experiment. There is no planner, branching, budget or
+  policy gate yet. An experiment whose candidate is rejected stays `ACTIVE`
+  with `next_stage == "planning"`, and nothing proposes the next candidate;
+  cancel it to end it.
+- Decisions compare point estimates with thresholds; nothing is claimed
+  statistically. An objective without a target is not decided.
+- The built-in evaluator is `native` (next-token loss, perplexity and token
+  accuracy). lm-eval benchmarks are a planned integration.
+- The TRL trainer supports exactly `trl` 1.13 and `transformers` 5.17.
+- Workers can occasionally hang while loading a model
+  ([#35](https://github.com/szaher/xaytune/issues/35)).
 
 ### Added — the experiment control plane
 
-- **Durable persistence** (`xaytune.storage`): SQLite, versioned migrations 001–006, revision-based optimistic concurrency, and atomic state + event + outbox transactions. A `RuntimeOperation` journal records every external effect before it is attempted, and Actions record requests such as cancellation together with their outcomes.
+- **Durable persistence** (`xaytune.storage`): SQLite, versioned migrations 001–007, revision-based optimistic concurrency, and atomic state + event + outbox transactions. A `RuntimeOperation` journal records every external effect before it is attempted, and Actions record requests such as cancellation together with their outcomes.
 - **`CandidateSpec` and versioned fingerprints**: `CandidateFingerprint`, `RunHistoryFingerprint`, `ArtifactLineageFingerprint`.
 - **Compile/execute boundary** (`xaytune.compilation`): `TrainerCompiler`, `TrainingExecutionSpec` and `ResolvedExecutionPlan`, with `NativeCompiler` and `TRLCompiler` for full-parameter SFT. A candidate that leaves a training-relevant value undeclared is refused, with every reason.
 - **`LocalRuntime`** (`xaytune.runtimes`): workers run as separate processes, submission is idempotent through `submit_or_get`, and telemetry is versioned (v1alpha2 for training, v1alpha3 for evaluation) with a durable cursor.

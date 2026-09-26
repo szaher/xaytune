@@ -5,12 +5,21 @@ model, through the control plane: compiled, submitted, observed, cancelled,
 adopted by a second process, evaluated, and decided. Every step has a runnable script in
 [`examples/control_plane/`](https://github.com/szaher/xaytune/tree/main/examples/control_plane).
 
-!!! note "Pre-release"
-    The control plane is on `main`, not in the `0.6.0` package on PyPI. Install
-    it from a clone as below. For the `finetune()` / CLI library that `0.6.0`
-    contains, see the [legacy trainer API](../getting-started.md).
+!!! note "Alpha"
+    The control plane was first released in `1.0.0a1`, a pre-release: expect
+    its API to change before `1.0.0`. For the `finetune()` / CLI library, see
+    the [legacy trainer API](../getting-started.md).
 
 ## Install
+
+```bash
+pip install "xaytune==1.0.0a1"           # or, unpinned: pip install --upgrade --pre xaytune
+pip install "xaytune[trl]==1.0.0a1"      # the TRL trainer as well
+```
+
+A plain `pip install xaytune` skips pre-releases and installs `0.6.0`, which
+has no control plane. To install exactly what CI tests, from `uv.lock`, use a
+clone:
 
 ```bash
 git clone https://github.com/szaher/xaytune && cd xaytune
@@ -18,7 +27,7 @@ uv sync --locked                 # or: pip install -e .
 uv sync --locked --extra trl     # the TRL trainer as well; or: pip install -e ".[trl]"
 ```
 
-`--locked` installs exactly what CI tests, from `uv.lock`. The TRL trainer
+`--locked` installs exactly what CI tests, from `uv.lock`. Either way, the TRL trainer
 supports one minor release each of `trl` (1.13) and `transformers` (5.17), and
 refuses to train on any other. See [Getting Started](../getting-started.md#supported-trl-and-transformers-releases)
 for why.

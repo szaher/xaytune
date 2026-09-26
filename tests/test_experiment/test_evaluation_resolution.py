@@ -28,9 +28,10 @@ from tests.test_experiment.test_evaluation_restart import (
 )
 from tests.test_experiment.test_restart_reconciliation import _CountingSubmissions, _crash, _spec
 from xaytune.compilation import SupportResult
+from xaytune.core.capabilities import CapabilityDocument
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.immutable import thaw
-from xaytune.evaluation import UnsupportedEvaluationError
+from xaytune.evaluation import Evaluator, ResolvableEvaluator, UnsupportedEvaluationError
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +80,22 @@ class _Reassigns(ScriptedEvaluator):
         return spec.model_copy(
             update={"evaluator": spec.evaluator.model_copy(update={"name": "another"})}
         )
+
+
+class _BeforeResolution:
+    """The evaluator contract as it was before resolution existed: no ``resolve()``."""
+
+    descriptor = ScriptedEvaluator.descriptor
+    determinism = ScriptedEvaluator.determinism
+
+    def capabilities(self) -> CapabilityDocument:
+        return CapabilityDocument()
+
+    def supports(self, spec: EvaluationSpec) -> SupportResult:
+        return SupportResult(supported=True)
+
+    def prepare(self, subject: Any, spec: EvaluationSpec, context: Any) -> Any:
+        return ScriptedEvaluator().prepare(subject, spec, context)
 
 
 def _refused(tmp_path: Path, evaluator: type) -> tuple[UnsupportedEvaluationError, tuple]:
@@ -136,6 +153,25 @@ def test_resolution_cannot_reassign_the_evaluator(tmp_path: Path) -> None:
 
     assert "does not reassign it" in refused.reasons[0]
     assert experiments == ()
+
+
+def test_an_evaluator_without_resolve_is_recorded_as_declared(tmp_path: Path) -> None:
+    """Resolution is optional: an evaluator written before it existed still evaluates."""
+    evaluator = _BeforeResolution()
+    assert isinstance(evaluator, Evaluator)
+    assert not isinstance(evaluator, ResolvableEvaluator)
+    submitted = _pinning(tmp_path)
+
+    result, experiment, _ = _drive(tmp_path, submitted, evaluators={"scripted": _BeforeResolution})
+
+    assert result.next_stage == "decision", "trained, evaluated, and waiting to be decided"
+    recorded = experiment.evaluation.evaluator.config
+    assert recorded["resolve_to"] == "pinned-at-submission", "nothing resolved it"
+    assert "pin" not in recorded
+    (node,) = result.nodes
+    (evaluated,) = node.evaluations
+    assert evaluated.result is not None
+    assert evaluated.result.evaluation_fingerprint == experiment.evaluation.evaluation_fingerprint()
 
 
 # ---- after a restart -----------------------------------------------------------------

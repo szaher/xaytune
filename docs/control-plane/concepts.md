@@ -168,7 +168,9 @@ the evaluation twice when it is submitted:
 supports(declared) → resolve() → supports(resolved) → recorded and fingerprinted
 ```
 
-`resolve()` pins every mutable reference. For `lm-eval` those are the task's
+`resolve()` is optional: an evaluator that implements it
+(`ResolvableEvaluator`) pins every mutable reference, and one that does not has
+its spec recorded as declared. For `lm-eval` those references are the task's
 definition (by digest, under lm-eval 0.4.13 exactly) and its dataset (by Hub
 commit). It is the only step allowed to use the network. The second
 `supports()` judges what the name turned out to be. `gsm8k` passes as a name

@@ -121,7 +121,12 @@ from xaytune.core.telemetry import (
     WorkerReadyPayload,
 )
 from xaytune.decision import DecisionEngine, ThresholdDecisionEngine, UndecidableError
-from xaytune.evaluation import EvaluationContext, Evaluator, UnsupportedEvaluationError
+from xaytune.evaluation import (
+    EvaluationContext,
+    Evaluator,
+    ResolvableEvaluator,
+    UnsupportedEvaluationError,
+)
 from xaytune.experiment.handle import (
     EvaluationOutcome,
     ExperimentHandle,
@@ -1400,7 +1405,8 @@ class EmbeddedControllerHost:
         ```
 
         ``resolve()`` pins what the spec names mutably -- a benchmark task and
-        its dataset -- and is asked only here: the resolved spec is what is
+        its dataset. It is optional (:class:`ResolvableEvaluator`), and asked
+        only here: the resolved spec is what is
         recorded and fingerprinted, and nothing after submission, restart
         included, resolves it again. It is judged twice because what a spec
         resolves to can be something the evaluator refuses though the spec
@@ -1421,7 +1427,9 @@ class EmbeddedControllerHost:
         support = evaluator.supports(spec)
         if not support:
             raise UnsupportedEvaluationError(name, support.reasons)
-        resolved = evaluator.resolve(spec)
+        # Optional (ResolvableEvaluator): an evaluator with nothing to pin has
+        # its spec recorded as declared.
+        resolved = evaluator.resolve(spec) if isinstance(evaluator, ResolvableEvaluator) else spec
         if resolved.evaluator.name != spec.evaluator.name:
             raise UnsupportedEvaluationError(
                 name,

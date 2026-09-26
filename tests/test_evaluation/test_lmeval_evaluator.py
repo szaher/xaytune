@@ -386,3 +386,11 @@ def test_the_eval_extra_and_the_lock_pin_the_release_tasks_are_bound_under() -> 
     with (root / "uv.lock").open("rb") as file:
         (locked,) = [p for p in tomllib.load(file)["package"] if p["name"] == "lm-eval"]
     assert locked["version"] == LM_EVAL_VERSION
+
+
+def test_it_resolves_and_the_native_evaluator_needs_not() -> None:
+    from xaytune.evaluation import ResolvableEvaluator
+    from xaytune.evaluation.native import NativeEvaluator
+
+    assert isinstance(LMEvalEvaluator(_Resolver()), ResolvableEvaluator)
+    assert isinstance(NativeEvaluator(), Evaluator)

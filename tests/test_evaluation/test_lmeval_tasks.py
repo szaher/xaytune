@@ -1,6 +1,8 @@
 """What the real resolver binds, against lm-eval's own task registry. No network.
 
-Needs lm-eval 0.4.13 (the ``eval`` extra) and is skipped without it. The Hub is
+Needs lm-eval 0.4.13 (the ``eval`` extra) and is skipped without it -- except
+where ``XAYTUNE_REQUIRE_LMEVAL`` is set, as in CI's ``lm-eval`` job, where a
+missing lm-eval fails instead of skipping the suite that job exists for. The Hub is
 replaced by a function that names a commit, so these read lm-eval's task
 definitions -- installed files -- and nothing else. Whether the dataset really
 loads at that commit is the example run, not a unit test.
@@ -8,11 +10,15 @@ loads at that commit is the example run, not a unit test.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
 
-pytest.importorskip("lm_eval")
+if os.environ.get("XAYTUNE_REQUIRE_LMEVAL"):
+    import lm_eval  # noqa: F401
+else:
+    pytest.importorskip("lm_eval")
 
 from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec  # noqa: E402
 from xaytune.evaluation import UnsupportedEvaluationError  # noqa: E402

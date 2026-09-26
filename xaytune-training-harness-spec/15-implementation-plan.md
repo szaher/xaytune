@@ -619,9 +619,12 @@ Built after `1.0.0a1`. It was split from PR-014 because it needs a resolution
 step the contract did not have: an lm-eval task names a mutable definition and
 a hub dataset, and `prepare()` must never resolve anything. As built:
 
-- **`Evaluator.resolve(spec)`**, called once, at submission, between two
-  checks: `supports(declared) → resolve() → supports(resolved) → recorded and
-  fingerprinted`.
+- **`ResolvableEvaluator.resolve(spec)`**, an optional capability the host
+  detects, called once, at submission, between two checks:
+  `supports(declared) → resolve() → supports(resolved) → recorded and
+  fingerprinted`. The `Evaluator` contract is unchanged; an evaluator without
+  `resolve()` has its spec recorded as declared, which a test pins with an
+  evaluator written to the pre-PR-014b contract.
   - It is the only evaluator step allowed to use the network.
   - The second `supports()` exists because a name can pass the first check
     and resolve into something refused, such as `gsm8k`, a generation task.

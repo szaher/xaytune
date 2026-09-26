@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **The `lm-eval` evaluator** (`xaytune.evaluation.lmeval`, worker `xaytune.workers.eval_lmeval`), registered by default. It runs one lm-eval-harness task on the trained model, such as `arc_easy` or `hellaswag`, and reports `acc` and `acc_norm`, each with lm-eval's standard error and the number of documents actually scored (after `limit`). It is `SEEDED`: the run's seed is lm-eval's Python, NumPy, Torch and few-shot seed.
+  - A task name is **resolved at submission** into a binding: the task's definition by digest, under lm-eval 0.4.13 exactly, and its Hub dataset by commit. The binding is stored in `evaluator.config["binding"]`, so the evaluation fingerprint names the pinned task, not the name. The worker refuses to run if the installed definition no longer matches the digest, and loads the dataset at the recorded commit.
+  - It accepts one registered, YAML-defined task scored by log-likelihood (`multiple_choice` or `loglikelihood`) that reports only `acc` and `acc_norm`. It refuses groups and tags, tasks implemented in custom Python, unsafe-code tasks, datasets that need remote code or cannot be pinned to a commit, and generation tasks. Generation brings decoding settings, stop sequences, filters and answer extraction that no binding pins yet.
+- **`ResolvableEvaluator.resolve(spec)`**, an optional evaluator step and the only one allowed to use the network. The host calls it once, at submission, between two `supports()` checks: `supports(declared) → resolve() → supports(resolved)`. The resolved spec is what is recorded and fingerprinted. After a restart the request is rebuilt from the record, and `resolve()` is never called again. The `Evaluator` contract itself is unchanged: an evaluator without `resolve()` has nothing to pin, its spec is recorded as declared, and custom evaluators keep working as they are.
+- **`examples/control_plane/06_train_and_benchmark.py`**: train, run an lm-eval task, and decide on `acc`.
+
+### Changed
+
+- The `eval` extra pins `lm-eval[hf]==0.4.13` (it was `lm-eval>=0.4`). An lm-eval release defines the tasks it ships, so the evaluator binds and runs tasks under that release only. The legacy `benchmark_evaluate()` uses the same extra.
+
 ## 1.0.0a1
 
 The first release of the experiment control plane, and a **pre-release**:

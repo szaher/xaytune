@@ -219,6 +219,39 @@ versions it ran with.
 
 Run it: `python examples/control_plane/05_train_and_evaluate.py --model ... --dataset ... --held-out ...`.
 
+### A benchmark task, with lm-eval
+
+The built-in `lm-eval` evaluator runs one lm-eval-harness task. It needs the
+`eval` extra, which pins lm-eval to 0.4.13 exactly, and access to the Hugging
+Face Hub.
+
+```python
+evaluation = EvaluationSpec(
+    evaluator=EvaluatorSpec(
+        name="lm-eval",
+        config={
+            "task": "arc_easy",       # a registered, log-likelihood task
+            "num_fewshot": 0,
+            "batch_size": 4,
+            "precision": "fp32",
+            "limit": 20,              # optional: only the first 20 documents
+        },
+    ),
+)
+```
+
+A task name is not yet an evaluation: its definition and its dataset can both
+change. `submit()` **resolves** it first. It records the task's definition by
+digest and the dataset by its current Hub commit under
+`evaluator.config["binding"]`, and that binding is what is recorded and
+fingerprinted. It checks the spec before resolving and again after, so a
+name that resolves into something unsupported, such as the generation task
+`gsm8k`, is refused before anything trains. The metrics are `acc` and
+`acc_norm`, each with lm-eval's standard error and the number of documents
+scored.
+
+Run it: `python examples/control_plane/06_train_and_benchmark.py --model ... --dataset ... --task arc_easy --limit 20 --target 0.3`.
+
 ## 6. Decide
 
 The experiment's `Objective` says what counts as good enough. With a
@@ -267,4 +300,6 @@ the control plane.
 
 The `native` evaluator, likewise, reads only local plain text and evaluates in
 `fp32`. It refuses slices, a dataset revision or split, and dataset
-fingerprints it cannot verify.
+fingerprints it cannot verify. The `lm-eval` evaluator runs one YAML-defined,
+log-likelihood task that reports `acc` or `acc_norm`, in `fp32`. It refuses
+groups, generation tasks, custom-code tasks and datasets it cannot pin.

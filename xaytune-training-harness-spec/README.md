@@ -158,8 +158,8 @@ that depends on it, not before all work. See `15-implementation-plan.md`
 still-open one blocks. **Bands A–D are complete for the first release:
 PR-004 through PR-015 have merged, through the native evaluator and
 deterministic decisions, closing train → evaluate → decide, released as
-`1.0.0a1`. The lm-eval evaluator (PR-014b) is a separate integration, and was
-not a prerequisite for it.** The remaining `Proposed` ADRs gate later bands.
+`1.0.0a1`. The lm-eval evaluator (PR-014b) followed as a separate
+integration; it was not a prerequisite for that release.** The remaining `Proposed` ADRs gate later bands.
 
 Implement in this order. This is the single authoritative sequence; the numbered
 phases in `15-implementation-plan.md` follow it:

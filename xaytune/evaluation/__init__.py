@@ -3,8 +3,22 @@
 An :class:`Evaluator` turns *what to measure, on what* into *how to run it*:
 
 ```text
-EvaluationSpec + subject ArtifactRef  ──prepare──>  EvaluationExecutionSpec
+EvaluationSpec  ──supports──>  ──resolve──>  ──supports──>  recorded     (at submission)
+recorded EvaluationSpec + subject ArtifactRef  ──prepare──>  EvaluationExecutionSpec
 ```
+
+**Resolution happens once, before anything is recorded, and is optional.** A
+spec may name something mutable -- a benchmark task whose definition and
+dataset live on a hub -- and the record must not. An evaluator with such
+references also implements :class:`ResolvableEvaluator`: its ``resolve()``
+pins every one to an immutable reference, and is the only phase allowed to
+reach the network. The host calls it at submission, between two
+``supports()`` checks: the first judges what the caller declared, the second
+what it resolved to, since a task can pass the first and resolve into
+something the evaluator cannot run exactly. An evaluator without
+``resolve()`` has nothing to pin, and its spec is recorded as declared. The
+recorded spec is what is fingerprinted. It is never resolved again: after a
+restart, ``prepare()`` rebuilds the request from the record alone.
 
 The sibling of :class:`~xaytune.compilation.TrainerCompiler`, and held to the
 same rule: **an evaluator prepares; it never executes.** The spec it returns
@@ -16,8 +30,9 @@ as training does.
 Evaluation is **not** a trainer callback and never runs inside training
 (ADR-007). It consumes a finished artifact and mutates no training state.
 
-This module is the contract. The built-in evaluator is
-:class:`~xaytune.evaluation.native.NativeEvaluator`.
+This module is the contract. The built-in evaluators are
+:class:`~xaytune.evaluation.native.NativeEvaluator` and
+:class:`~xaytune.evaluation.lmeval.LMEvalEvaluator`.
 """
 
 from __future__ import annotations
@@ -31,7 +46,12 @@ from xaytune.core.execution import EvaluationExecutionSpec
 from xaytune.core.immutable import FrozenDomainModel
 from xaytune.core.refs import ArtifactRef
 
-__all__ = ["EvaluationContext", "Evaluator", "UnsupportedEvaluationError"]
+__all__ = [
+    "EvaluationContext",
+    "Evaluator",
+    "ResolvableEvaluator",
+    "UnsupportedEvaluationError",
+]
 
 
 class UnsupportedEvaluationError(ValueError):
@@ -107,5 +127,31 @@ class Evaluator(Protocol):
         Raises:
             UnsupportedEvaluationError: If it cannot run the evaluation as
                 declared.
+        """
+        ...
+
+
+@runtime_checkable
+class ResolvableEvaluator(Protocol):
+    """An :class:`Evaluator` whose specs name something mutable, to pin at submission.
+
+    Optional: the host detects it, and an evaluator without it has its spec
+    recorded as declared, so every evaluator written against the contract
+    before resolution existed works unchanged.
+    """
+
+    def resolve(self, spec: EvaluationSpec) -> EvaluationSpec:
+        """*spec* with every mutable reference pinned, for the record.
+
+        Called once, at submission, after :meth:`supports` has accepted
+        *spec* and before it is asked again about the result. The only
+        method allowed to read anything outside its arguments -- the
+        network included -- because its answer is recorded, and nothing
+        downstream reads the mutable thing again. An evaluator with nothing
+        to pin need not implement it. Must not change the evaluator's name.
+
+        Raises:
+            UnsupportedEvaluationError: If something *spec* names cannot be
+                pinned, with every reason.
         """
         ...

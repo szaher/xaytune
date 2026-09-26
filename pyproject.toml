@@ -64,7 +64,11 @@ deepspeed = ["deepspeed>=0.14"]
 # that happens to a user. Kept equal to SUPPORTED_VERSIONS in that module,
 # which the worker checks before training (tests/test_workers/test_trl_versions.py).
 trl = ["trl>=1.13,<1.14", "transformers>=5.17,<5.18"]
-eval = ["lm-eval>=0.4"]
+# Exactly one release. A task's definition ships inside lm-eval, so the release
+# is part of what a task is: xaytune.evaluation.lmeval binds tasks under it and
+# the worker refuses any other. Kept equal to LM_EVAL_VERSION in
+# xaytune/workers/eval_lmeval_schema.py (tests/test_evaluation/test_lmeval_evaluator.py).
+eval = ["lm-eval[hf]==0.4.13"]
 wandb = ["wandb>=0.16"]
 mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]

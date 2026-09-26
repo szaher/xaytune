@@ -158,6 +158,38 @@ accuracy on a local held-out file pinned by its content digest. It is
 so it does not promise the same number everywhere. Other evaluators are
 registered with `EmbeddedControllerHost(..., evaluators={"name": factory})`.
 
+**Resolved once, at submission.** A spec can name something that changes:
+the `lm-eval` evaluator takes a benchmark task name such as `arc_easy`, whose
+definition ships inside lm-eval and whose dataset lives on the Hugging Face
+Hub. The record must not hold anything that can change. So the host checks
+the evaluation twice when it is submitted:
+
+```text
+supports(declared) → resolve() → supports(resolved) → recorded and fingerprinted
+```
+
+`resolve()` is optional: an evaluator that implements it
+(`ResolvableEvaluator`) pins every mutable reference, and one that does not has
+its spec recorded as declared. For `lm-eval` those references are the task's
+definition (by digest, under lm-eval 0.4.13 exactly) and its dataset (by Hub
+commit). It is the only step allowed to use the network. The second
+`supports()` judges what the name turned out to be. `gsm8k` passes as a name
+and is then refused as a generation task, before anything trains. The
+resolved spec is what is recorded, so its fingerprint names the pinned task,
+not the name. Nothing resolves it again: after a restart, the request is
+rebuilt from the record, and the worker refuses to run a task whose installed
+definition no longer matches the recorded digest.
+
+`lm-eval` accepts one registered task at a time, defined in YAML, scored by
+log-likelihood (`multiple_choice` or `loglikelihood`), and reporting `acc` and
+`acc_norm`. It refuses groups, tags, tasks implemented in custom Python,
+unsafe-code tasks, datasets it cannot pin to a commit, and generation tasks.
+Generation brings decoding settings, stop sequences, filters and answer
+extraction that decide the score, and no binding pins those yet. Each metric
+records lm-eval's standard error and the number of documents actually scored,
+after `limit`. It is `SEEDED`: the run's seed is lm-eval's Python, NumPy,
+Torch and few-shot seed.
+
 **No result stands in for a run.** Evaluating the same model the same way
 twice runs twice. Reusing an earlier result (ADR-015's reuse lookup) is a
 separate, later decision.
@@ -224,6 +256,6 @@ and a **decision engine** decides it.
 
 These are designed in the specification and planned, but **not
 implemented**: decisions that compare candidates (promotion, noise-aware
-comparison across replicates), an lm-eval evaluator, reusing earlier
+comparison across replicates), lm-eval generation tasks, reusing earlier
 evaluation results, policy and budgets, checkpoints and semantic recovery,
 planners and branching, daemon hosting, and runtimes other than local.

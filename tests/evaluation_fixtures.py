@@ -66,6 +66,20 @@ class ScriptedEvaluator:
     def supports(self, spec: EvaluationSpec) -> SupportResult:
         return SupportResult(supported=True)
 
+    def resolve(self, spec: EvaluationSpec) -> EvaluationSpec:
+        """*spec* as it is -- unless its config has ``resolve_to``.
+
+        Then that value is pinned as ``pin``, and ``resolve_to`` is gone: a
+        stand-in for resolving a mutable reference, so a test can tell a
+        resolved spec from the one submitted, and see which was recorded.
+        """
+        config = thaw(spec.evaluator.config)
+        if "resolve_to" not in config:
+            return spec
+        config["pin"] = config.pop("resolve_to")
+        evaluator = spec.evaluator.model_copy(update={"config": config})
+        return spec.model_copy(update={"evaluator": evaluator})
+
     def prepare(
         self, subject: ArtifactRef, spec: EvaluationSpec, context: EvaluationContext
     ) -> EvaluationExecutionSpec:

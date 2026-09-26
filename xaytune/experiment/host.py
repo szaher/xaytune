@@ -121,7 +121,12 @@ from xaytune.core.telemetry import (
     WorkerReadyPayload,
 )
 from xaytune.decision import DecisionEngine, ThresholdDecisionEngine, UndecidableError
-from xaytune.evaluation import EvaluationContext, Evaluator, UnsupportedEvaluationError
+from xaytune.evaluation import (
+    EvaluationContext,
+    Evaluator,
+    ResolvableEvaluator,
+    UnsupportedEvaluationError,
+)
 from xaytune.experiment.handle import (
     EvaluationOutcome,
     ExperimentHandle,
@@ -237,9 +242,10 @@ def _default_compilers() -> dict[str, Callable[[], TrainerCompiler]]:
 
 
 def _default_evaluators() -> dict[str, Callable[[], Evaluator]]:
+    from xaytune.evaluation.lmeval import LMEvalEvaluator
     from xaytune.evaluation.native import NativeEvaluator
 
-    return {"native": NativeEvaluator}
+    return {"native": NativeEvaluator, "lm-eval": LMEvalEvaluator}
 
 
 def _local_runtime(config: Mapping[str, Any]) -> RuntimeBackend:
@@ -1392,7 +1398,19 @@ class EmbeddedControllerHost:
     # ---- durable writes --------------------------------------------------
 
     def _bind_evaluation(self, spec: EvaluationSpec) -> EvaluationSpec:
-        """Resolve the evaluator and record which implementation it is (ADR-016).
+        """Resolve the evaluator and the spec, and record which implementation it is (ADR-016).
+
+        ```text
+        supports(declared) → resolve() → supports(resolved) → recorded
+        ```
+
+        ``resolve()`` pins what the spec names mutably -- a benchmark task and
+        its dataset. It is optional (:class:`ResolvableEvaluator`), and asked
+        only here: the resolved spec is what is
+        recorded and fingerprinted, and nothing after submission, restart
+        included, resolves it again. It is judged twice because what a spec
+        resolves to can be something the evaluator refuses though the spec
+        as declared was not.
 
         The version and determinism are the evaluator's own declarations, read
         now, so the record says which evaluator measured -- and a restarted
@@ -1400,21 +1418,38 @@ class EmbeddedControllerHost:
 
         Raises:
             UnsupportedEvaluationError: If the evaluator cannot run the spec as
-                declared. Asked here, at submission, so an evaluation that
-                would be refused is refused before hours of training rather
-                than after them.
+                declared or as resolved, or cannot pin it. Asked here, at
+                submission, so an evaluation that would be refused is refused
+                before hours of training rather than after them.
         """
         evaluator = self._evaluator(spec.evaluator.name)
+        name = evaluator.descriptor.name
         support = evaluator.supports(spec)
         if not support:
-            raise UnsupportedEvaluationError(evaluator.descriptor.name, support.reasons)
+            raise UnsupportedEvaluationError(name, support.reasons)
+        # Optional (ResolvableEvaluator): an evaluator with nothing to pin has
+        # its spec recorded as declared.
+        resolved = evaluator.resolve(spec) if isinstance(evaluator, ResolvableEvaluator) else spec
+        if resolved.evaluator.name != spec.evaluator.name:
+            raise UnsupportedEvaluationError(
+                name,
+                (
+                    f"resolving named evaluator {resolved.evaluator.name!r}, not "
+                    f"{spec.evaluator.name!r}; resolution pins a spec, it does not reassign it",
+                ),
+            )
+        support = evaluator.supports(resolved)
+        if not support:
+            raise UnsupportedEvaluationError(
+                name, tuple(f"as resolved: {reason}" for reason in support.reasons)
+            )
         bound = EvaluatorSpec(
-            name=spec.evaluator.name,
+            name=resolved.evaluator.name,
             version=evaluator.descriptor.plugin_version,
             determinism=evaluator.determinism,
-            config=spec.evaluator.config,
+            config=resolved.evaluator.config,
         )
-        return spec.model_copy(update={"evaluator": bound})
+        return resolved.model_copy(update={"evaluator": bound})
 
     def _record_experiment(
         self,

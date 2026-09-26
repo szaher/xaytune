@@ -36,7 +36,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Experiment lifecycle and durable controller state | Available |
 | Candidate identity and scientific lineage | Available |
 | Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
-| Evaluation orchestration | Available: the built-in native evaluator; lm-eval planned |
+| Evaluation orchestration | Available: the built-in native evaluator, and lm-eval benchmark tasks pinned at submission (on `main`, unreleased) |
 | Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
 | Policy gates, budgets and agent-driven control | Planned |
@@ -78,9 +78,7 @@ Status as of **2026-09-25**, after PR-015:
 
 Policy and budgets, checkpoints and semantic recovery, a rule-based planner
 and branching (with decisions that compare candidates), daemon hosting, an LLM
-planner, and Ray / TorchFT / Training Hub integrations. An lm-eval evaluator, with
-pinned task and dataset versions, is a planned integration alongside them.
-None of these exist yet.
+planner, and Ray / TorchFT / Training Hub integrations. None of these exist yet.
 
 ## Architecture
 
@@ -101,7 +99,7 @@ the order the remaining work lands in.
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval planned |
+| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval evaluator on `main` |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

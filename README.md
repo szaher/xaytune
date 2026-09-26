@@ -33,7 +33,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Experiment lifecycle and durable controller state | Available |
 | Candidate identity and scientific lineage | Available |
 | Training orchestration across trainer backends | Available: Native and TRL, on a local runtime |
-| Evaluation orchestration | Available: the built-in native evaluator; lm-eval planned |
+| Evaluation orchestration | Available: the built-in native evaluator, and lm-eval benchmark tasks pinned at submission (on `main`, unreleased) |
 | Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
 | Policy gates, budgets and agent-driven control | Planned |
@@ -127,10 +127,6 @@ builds them:
 5. **An LLM planner** proposing candidates under policy.
 6. **Ray, TorchFT and Training Hub** integrations.
 
-Alongside them, an **lm-eval evaluator** is a planned integration, with each
-task's definition and dataset pinned to immutable versions when the
-experiment is submitted.
-
 None of these exist yet, and nothing in this repository should be read as
 claiming they do.
 
@@ -176,7 +172,7 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval planned |
+| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval evaluator on `main` |
 | E — policy and budget over the Action substrate | Planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |

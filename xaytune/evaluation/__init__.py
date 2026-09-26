@@ -3,8 +3,20 @@
 An :class:`Evaluator` turns *what to measure, on what* into *how to run it*:
 
 ```text
-EvaluationSpec + subject ArtifactRef  ──prepare──>  EvaluationExecutionSpec
+EvaluationSpec  ──supports──>  ──resolve──>  ──supports──>  recorded     (at submission)
+recorded EvaluationSpec + subject ArtifactRef  ──prepare──>  EvaluationExecutionSpec
 ```
+
+**Resolution happens once, before anything is recorded.** A spec may name
+something mutable -- a benchmark task whose definition and dataset live on a
+hub -- and the record must not. ``resolve()`` pins every such reference to an
+immutable one, and is the only phase allowed to reach the network. The host
+calls it at submission, between two ``supports()`` checks: the first judges
+what the caller declared, the second what it resolved to, since a task can
+pass the first and resolve into something the evaluator cannot run exactly.
+The resolved spec is what is recorded and fingerprinted. It is never
+resolved again: after a restart, ``prepare()`` rebuilds the request from the
+record alone.
 
 The sibling of :class:`~xaytune.compilation.TrainerCompiler`, and held to the
 same rule: **an evaluator prepares; it never executes.** The spec it returns
@@ -92,6 +104,23 @@ class Evaluator(Protocol):
         of training. Only what the spec says is judged -- the subject does not
         exist yet -- so :meth:`prepare` may still refuse a subject it cannot
         read. Inspects nothing outside the spec.
+        """
+        ...
+
+    def resolve(self, spec: EvaluationSpec) -> EvaluationSpec:
+        """*spec* with every mutable reference pinned, for the record.
+
+        Called once, at submission, after :meth:`supports` has accepted
+        *spec* and before it is asked again about the result. The only
+        method allowed to read anything outside its arguments -- the
+        network included -- because its answer is recorded, and nothing
+        downstream reads the mutable thing again. An evaluator with nothing
+        to pin returns *spec* unchanged. Must not change the evaluator's
+        name.
+
+        Raises:
+            UnsupportedEvaluationError: If something *spec* names cannot be
+                pinned, with every reason.
         """
         ...
 

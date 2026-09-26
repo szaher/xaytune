@@ -13,6 +13,7 @@ uses the experiment control plane, first released in `1.0.0a1`. See
 | [03_cancel.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/03_cancel.py) | Cancel a running experiment | As above |
 | [04_restart_and_attach.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/04_restart_and_attach.py) | Submit, end the process, adopt the running workload from another | As above |
 | [05_train_and_evaluate.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/05_train_and_evaluate.py) | Train, evaluate with the built-in `native` evaluator, and decide against a loss `--target`: the whole loop | As above, plus a held-out JSONL file |
+| [06_train_and_benchmark.py](https://github.com/szaher/xaytune/blob/main/examples/control_plane/06_train_and_benchmark.py) | Train, run an lm-eval task bound at submission to a task digest and dataset commit, and decide on `acc` | As above, plus the `eval` extra and Hub access |
 
 ## Legacy trainer API
 

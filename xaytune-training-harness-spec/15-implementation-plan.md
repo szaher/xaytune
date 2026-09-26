@@ -615,16 +615,52 @@ into PR-014b:
 
 ### PR-014b — lm-eval evaluator
 
-After PR-015, or alongside it: not a prerequisite for the DecisionEngine, and
-not a `1.0.0a1` blocker unless that release is decided to need benchmark
-evaluation. Split from PR-014 because it needs a resolution step the contract does not
-have yet. An lm-eval task names a mutable definition and a hub dataset. Pinning
-them (task name, version and config digest; lm-eval version, `==0.4.13`
-exactly; dataset path, name and immutable revision SHA; few-shot count;
-generation settings) means resolving mutable references **before** the durable
-request is recorded, because `prepare()` must never resolve anything. The
-run's seed feeds lm-eval's Python, NumPy, Torch and few-shot seeds, and any task
-that cannot honour a seeded contract is refused.
+Built after `1.0.0a1`. It was split from PR-014 because it needs a resolution
+step the contract did not have: an lm-eval task names a mutable definition and
+a hub dataset, and `prepare()` must never resolve anything. As built:
+
+- **`Evaluator.resolve(spec)`**, called once, at submission, between two
+  checks: `supports(declared) → resolve() → supports(resolved) → recorded and
+  fingerprinted`.
+  - It is the only evaluator step allowed to use the network.
+  - The second `supports()` exists because a name can pass the first check
+    and resolve into something refused, such as `gsm8k`, a generation task.
+  - Resolution may not rename the evaluator.
+  - Nothing resolves again after submission: on restart, `prepare()` rebuilds
+    the request from the record, which a test pins with an evaluator that
+    fails if asked.
+  - `NativeEvaluator.resolve()` returns its spec unchanged.
+- **`LMEvalTaskBinding`**, recorded under `EvaluatorSpec.config["binding"]`, so
+  the `EvaluationFingerprint` covers it and no migration is needed. It holds:
+  - the task, and its `metadata.version`;
+  - a digest of the task's YAML definition, with includes merged and function
+    references made independent of the install location;
+  - the lm-eval release, `0.4.13` exactly, which the `eval` extra pins;
+  - the dataset path, name and Hub **commit**;
+  - the `output_type`, `num_fewshot` and the task's metric list.
+
+  A binding supplied by the caller is refused, and `limit`, `batch_size` and
+  `precision` stay ordinary config.
+- **What is accepted.** One registered task, defined in YAML, scored by
+  log-likelihood (`multiple_choice` or `loglikelihood`), reporting only `acc`
+  and `acc_norm`.
+  - Refused: groups and tags, tasks implemented in custom Python, `unsafe_code`,
+    `custom_dataset`, datasets needing `trust_remote_code`, a dataset the Hub
+    cannot pin, and a task with no explicit `metric_list`.
+  - Generation is refused because it adds unpinned surface (decoding settings,
+    stop sequences, filters, answer extraction), not because it samples.
+  - Binding reads the task's YAML only and imports none of its Python.
+- **The worker** (`xaytune.workers.eval_lmeval`, telemetry v1alpha3).
+  - It refuses another lm-eval release, and a task whose installed definition
+    no longer digests to the binding.
+  - It loads the dataset through the task's `dataset_kwargs` at the recorded
+    commit, and scores in fp32.
+  - The run's seed is lm-eval's Python, NumPy, Torch and few-shot seed.
+  - Each metric records lm-eval's standard error and its **effective** sample
+    count, which is the documents scored after `limit`, not the dataset's size.
+- **`SEEDED`**, and no reuse, as for `native`.
+- **`examples/control_plane/06_train_and_benchmark.py`** trains, runs `arc_easy`
+  (`--limit 20`) and decides on `acc`.
 
 ### PR-015 — DecisionEngine
 

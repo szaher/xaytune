@@ -17,8 +17,9 @@ uv sync --locked --extra trl     # for --compiler trl; or: pip install -e ".[trl
 | `03_cancel.py` | Cancel while training; the record says `CANCELLED` only once the workload has stopped | As above |
 | `04_restart_and_attach.py` | `start` submits and exits while training continues; `attach` adopts it from a new process | As above |
 | `05_train_and_evaluate.py` | Train, evaluate with the built-in `native` evaluator, and decide against a loss `--target`: the experiment ends `SUCCEEDED` or `FAILED` | As above, plus a held-out JSONL file |
+| `06_train_and_benchmark.py` | Train, run an lm-eval task (`--task arc_easy --limit 20`) bound at submission to a task digest and dataset commit, and decide on `acc` | As above, plus the `eval` extra and Hub access |
 
-`sft_experiment.py` is the experiment 02 to 05 share.
+`sft_experiment.py` is the experiment 02 to 06 share.
 
 **The model** is a local Hugging Face directory (`save_pretrained` output).
 A hub name is refused, because without a pinned revision it names whatever

@@ -152,6 +152,10 @@ class NativeEvaluator:
         reasons = tuple(_refusals(spec))
         return SupportResult(supported=not reasons, reasons=reasons)
 
+    def resolve(self, spec: EvaluationSpec) -> EvaluationSpec:
+        """*spec* as it is: :func:`local_dataset` pinned the data before submission."""
+        return spec
+
     def prepare(
         self, subject: ArtifactRef, spec: EvaluationSpec, context: EvaluationContext
     ) -> EvaluationExecutionSpec:

@@ -36,7 +36,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Evaluation orchestration | Available: the built-in native evaluator, and lm-eval benchmark tasks pinned at submission (on `main`, unreleased) |
 | Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
-| Policy gates, budgets and agent-driven control | Planned |
+| Policy gates, budgets and agent-driven control | Budgets available: runs, failures and parallel runs, on a durable ledger (on `main`, unreleased); policy gates and agent control planned |
 
 | Xaytune delegates |
 |---|
@@ -118,7 +118,8 @@ run next, if any. See
 In the order the [implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
 builds them:
 
-1. **Policy and budgets** over the Action substrate.
+1. **Policy** over the Action substrate, and budgets on what nothing measures
+   yet (GPU-hours, tokens, cost).
 2. **Checkpoints, semantic recovery and interventions.**
 3. **A rule-based planner and experiment branching**, and with it decisions
    that compare candidates -- promotion, and noise-aware comparison across

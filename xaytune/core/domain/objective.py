@@ -53,14 +53,19 @@ class Objective(_Frozen):
 class BudgetSpec(_Frozen):
     """Declared limits for an experiment.
 
-    Every field is optional. On-prem environments commonly bound GPU-hours with
-    no currency cost attached.
+    Every field is optional, and every limit is finite and non-negative. A
+    zero limit is valid and admits nothing. ``max_parallel_runs`` is a
+    capacity, not a quota: at least one run must be able to run.
+
+    What each limit means, and which are enforced, is
+    :mod:`xaytune.core.domain.budget`. On-prem environments commonly bound
+    GPU-hours with no currency cost attached.
     """
 
-    max_runs: int | None = None
-    max_parallel_runs: int | None = None
-    max_gpu_hours: float | None = None
-    max_wall_time_seconds: int | None = None
-    max_tokens: int | None = None
-    max_cost: Decimal | None = None
-    max_failures: int | None = None
+    max_runs: int | None = Field(default=None, ge=0)
+    max_parallel_runs: int | None = Field(default=None, ge=1)
+    max_gpu_hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    max_wall_time_seconds: int | None = Field(default=None, ge=0)
+    max_tokens: int | None = Field(default=None, ge=0)
+    max_cost: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    max_failures: int | None = Field(default=None, ge=0)

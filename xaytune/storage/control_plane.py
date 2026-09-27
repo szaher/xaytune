@@ -41,6 +41,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
+from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar
 
@@ -50,6 +51,17 @@ from xaytune.core.domain.action import (
     ActionOutcome,
     ActionStatus,
     ActionTarget,
+)
+from xaytune.core.domain.budget import (
+    BudgetDimension,
+    BudgetExhaustedError,
+    BudgetLedgerEntry,
+    BudgetStatus,
+    BudgetSubjectKind,
+    CapacityUnavailableError,
+    LedgerEntryKind,
+    budget_status,
+    limits,
 )
 from xaytune.core.domain.decision import (
     Decision,
@@ -95,6 +107,7 @@ from xaytune.core.state.status import (
 )
 from xaytune.core.telemetry import EvaluationCompletedPayload
 from xaytune.storage.actions import ActionStore
+from xaytune.storage.budget import BudgetLedgerStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
 from xaytune.storage.graph import ExperimentGraph
@@ -355,6 +368,7 @@ class ControlPlaneRepository:
         self.events = EventJournal(connection)
         self.operations = OperationJournal(connection)
         self.actions = ActionStore(connection)
+        self.budget = BudgetLedgerStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
@@ -401,13 +415,32 @@ class ControlPlaneRepository:
         return node
 
     def create_run(self, run: Run, *, actor: Actor, destinations: tuple[str, ...] = ()) -> Run:
-        """Create a run, its creation event and any outbox records."""
+        """Create a run, its creation event and any outbox records.
+
+        With a ``max_runs`` budget, the run's reservation is written in the
+        same commit; a budget with no run left refuses it before anything is
+        written.
+
+        Raises:
+            BudgetExhaustedError: If a quota the run needs is used up.
+        """
         _require_pristine(run, RunStatus.CREATED)
 
         with write_transaction(self._connection):
             self._require_consistent_run(run)
+            self._require_budget(str(run.experiment_id), new_run=True)
             self.aggregates._insert_run(run)
             self._emit(run, "RunCreated", str(run.experiment_id), actor, destinations)
+            self._ledger(
+                str(run.experiment_id),
+                BudgetDimension.RUNS,
+                LedgerEntryKind.RESERVE,
+                Decimal(1),
+                BudgetSubjectKind.RUN,
+                str(run.id),
+                actor,
+                destinations,
+            )
         return run
 
     def transition_experiment(
@@ -669,6 +702,8 @@ class ControlPlaneRepository:
             ConcurrentModificationError: If it has moved since the caller read it.
             InvalidTransitionError: If the node cannot enter ``EVALUATING``.
             StorageError: If a run names another node, experiment or cycle.
+            BudgetExhaustedError: If a quota the evaluation would spend is
+                used up; nothing is written, and the node stays where it is.
         """
         for run in runs:
             _require_pristine(run, EvaluationRunStatus.CREATED)
@@ -679,6 +714,8 @@ class ControlPlaneRepository:
                 raise AggregateNotFoundError("ExperimentNode", str(node_id))
             if current.revision != expected_revision:
                 raise ConcurrentModificationError("ExperimentNode", str(node_id), expected_revision)
+            if runs:
+                self._require_budget(str(current.experiment_id), new_run=False)
             moved = current.with_status(ExperimentNodeStatus.EVALUATING)
             for run in runs:
                 _require_run_of_cycle(run, moved)
@@ -936,6 +973,7 @@ class ControlPlaneRepository:
             succeeded_run = run.with_status(EvaluationRunStatus.SUCCEEDED)
             self.aggregates._update_evaluation_attempt(succeeded_attempt)
             self.aggregates._update_evaluation_run(succeeded_run)
+            self._settle_budget(succeeded_attempt, actor, destinations)
             self.aggregates._insert_evaluation_result(result)
             if telemetry_position is not None:
                 self.aggregates._advance_telemetry(
@@ -1282,6 +1320,344 @@ class ControlPlaneRepository:
 
     # ---- ADR-005 §4 ----------------------------------------------------
 
+    # ---- the budget ledger (PR-016) ---------------------------------------
+
+    def budget_status(self, experiment_id: ExperimentId | str) -> BudgetStatus | None:
+        """The experiment's budget as the ledger stands, or ``None`` if nothing is limited."""
+        experiment = self.aggregates.load_experiment(str(experiment_id))
+        if not limits(experiment.budget):
+            return None
+        return budget_status(experiment.budget, self.budget.entries(str(experiment_id)))
+
+    def exhaust_budget(
+        self,
+        experiment_id: ExperimentId | str,
+        *,
+        reasons: tuple[str, ...],
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> bool:
+        """End an ``ACTIVE`` experiment as ``BUDGET_EXHAUSTED`` -- once nothing is running.
+
+        A quota being used up stops the *next* effect at once, but not one
+        already running: an experiment is terminal only when no workload it
+        owns is still executing, so ``wait()`` never sees it ended while a
+        worker lives. With an attempt still live this writes nothing and
+        returns ``False``; asked again once it has ended, it ends the
+        experiment.
+
+        Returns:
+            Whether the experiment is now ``BUDGET_EXHAUSTED`` by this call.
+        """
+        with write_transaction(self._connection):
+            experiment = self.aggregates.load_experiment(str(experiment_id))
+            if experiment.status is not ExperimentStatus.ACTIVE:
+                return False
+            if self._live_attempts(str(experiment_id)):
+                return False
+            moved = experiment.with_status(ExperimentStatus.BUDGET_EXHAUSTED)
+            self.aggregates._update_experiment(moved)
+            self._emit(moved, "ExperimentStatusChanged", str(moved.id), actor, destinations)
+            self._emit(
+                moved,
+                "BudgetExhausted",
+                str(moved.id),
+                actor,
+                destinations,
+                extra={"reasons": list(reasons)},
+            )
+        return True
+
+    def settle_budget(
+        self,
+        experiment_id: ExperimentId | str,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> int:
+        """Write any settlement the record implies and the ledger lacks. A safety net.
+
+        Every entry is written with the change that causes it, so this
+        normally finds nothing. It exists for a record the ledger cannot
+        already account for -- one written before the ledger, say -- and is
+        idempotent: each entry it writes is the one the change would have.
+
+        Returns:
+            How many entries it wrote.
+        """
+        with write_transaction(self._connection):
+            before = len(self.budget.entries(str(experiment_id)))
+            for node in self.aggregates.nodes_for_experiment(str(experiment_id)):
+                for run in self.aggregates.runs_for_node(str(node.id)):
+                    for attempt in self.aggregates.attempts_for_run(str(run.id)):
+                        for operation in self.operations.for_target(
+                            "training-attempt", str(attempt.id)
+                        ):
+                            if operation.type == "submit" and operation.state == "confirmed":
+                                self._commit_budget(
+                                    str(experiment_id), str(attempt.id), actor, destinations
+                                )
+                        self._settle_budget(attempt, actor, destinations)
+                    self._settle_budget(run, actor, destinations)
+                for evaluation in self.aggregates.evaluation_runs_for_node(str(node.id)):
+                    for measured in self.aggregates.evaluation_attempts_for_run(str(evaluation.id)):
+                        self._settle_budget(measured, actor, destinations)
+            return len(self.budget.entries(str(experiment_id))) - before
+
+    def _require_budget(self, experiment_id: str, *, new_run: bool) -> None:
+        """Refuse a new effect a used-up quota cannot cover. Capacity is not judged here.
+
+        A new run needs one run left; any effect needs failures not yet used
+        up. Reaching a limit exactly is enough to stop the next
+        effect.
+
+        Raises:
+            BudgetExhaustedError: With every used-up quota.
+        """
+        experiment = self.aggregates.load_experiment(experiment_id)
+        if not limits(experiment.budget):
+            return
+        status = budget_status(experiment.budget, self.budget.entries(experiment_id))
+        reasons = []
+        for dimension in status.dimensions:
+            if dimension.kind == "capacity":
+                continue
+            if dimension.dimension is BudgetDimension.RUNS:
+                if new_run and dimension.remaining < 1:
+                    reasons.append(
+                        f"runs: {dimension.consumed} consumed and {dimension.outstanding} "
+                        f"reserved of {dimension.limit}; no run is left for another"
+                    )
+            elif dimension.remaining <= 0:
+                reasons.append(
+                    f"{dimension.dimension.value}: {dimension.consumed} consumed of "
+                    f"{dimension.limit}"
+                )
+        if reasons:
+            raise BudgetExhaustedError(experiment_id, tuple(reasons))
+
+    def _require_capacity(self, experiment_id: str) -> None:
+        """Refuse a training attempt while every parallel-run slot is held.
+
+        Raises:
+            CapacityUnavailableError: If none is free; the caller waits.
+        """
+        experiment = self.aggregates.load_experiment(experiment_id)
+        if BudgetDimension.PARALLEL_RUNS not in limits(experiment.budget):
+            return
+        status = budget_status(experiment.budget, self.budget.entries(experiment_id))
+        slots = status.of(BudgetDimension.PARALLEL_RUNS)
+        assert slots is not None
+        if slots.outstanding >= slots.limit:
+            raise CapacityUnavailableError(
+                experiment_id, BudgetDimension.PARALLEL_RUNS, slots.limit
+            )
+
+    def _commit_budget(
+        self, experiment_id: str, attempt_id: str, actor: Actor, destinations: tuple[str, ...]
+    ) -> None:
+        """A training submission took effect: its slot and its run are committed.
+
+        Provenance only -- a commit subtracts nothing again. The run's is
+        written once, by its first confirmed attempt.
+        """
+        attempt = self.aggregates.load_attempt(attempt_id)
+        for subject_kind, subject_id, dimension in (
+            (BudgetSubjectKind.TRAINING_ATTEMPT, attempt_id, BudgetDimension.PARALLEL_RUNS),
+            (BudgetSubjectKind.RUN, str(attempt.run_id), BudgetDimension.RUNS),
+        ):
+            reserved = self.budget.entry(
+                subject_kind, subject_id, dimension, LedgerEntryKind.RESERVE
+            )
+            if reserved is not None:
+                self._ledger(
+                    experiment_id,
+                    dimension,
+                    LedgerEntryKind.COMMIT,
+                    reserved.amount,
+                    subject_kind,
+                    subject_id,
+                    actor,
+                    destinations,
+                )
+
+    def _settle_budget(
+        self, aggregate: object, actor: Actor, destinations: tuple[str, ...]
+    ) -> None:
+        """Write what a run or an attempt reaching a terminal state costs. Idempotent.
+
+        ```text
+        training or evaluation attempt ends   FAILED → failures +1   (not PREEMPTED, CANCELLED)
+        training attempt ends                 its parallel-run slot is released
+        run ends                              committed → runs consumed; never submitted → released
+        ```
+
+        Called inside the transaction that made it terminal, so a record can
+        never hold a terminal attempt whose cost is missing.
+        """
+        if isinstance(aggregate, RunAttempt):
+            if not aggregate.is_terminal:
+                return
+            experiment_id = self._experiment_of_run(str(aggregate.run_id))
+            self._settle_attempt(
+                experiment_id,
+                BudgetSubjectKind.TRAINING_ATTEMPT,
+                aggregate,
+                aggregate.status is RunAttemptStatus.FAILED,
+                actor,
+                destinations,
+            )
+            self._release(
+                experiment_id,
+                BudgetDimension.PARALLEL_RUNS,
+                BudgetSubjectKind.TRAINING_ATTEMPT,
+                str(aggregate.id),
+                actor,
+                destinations,
+            )
+        elif isinstance(aggregate, EvaluationAttempt):
+            if not aggregate.is_terminal:
+                return
+            experiment_id = self._experiment_of_evaluation_run(str(aggregate.evaluation_run_id))
+            self._settle_attempt(
+                experiment_id,
+                BudgetSubjectKind.EVALUATION_ATTEMPT,
+                aggregate,
+                aggregate.status is EvaluationAttemptStatus.FAILED,
+                actor,
+                destinations,
+            )
+        elif isinstance(aggregate, Run):
+            if not aggregate.is_terminal:
+                return
+            run_id = str(aggregate.id)
+            reserved = self.budget.entry(
+                BudgetSubjectKind.RUN, run_id, BudgetDimension.RUNS, LedgerEntryKind.RESERVE
+            )
+            if reserved is None:
+                return
+            committed = self.budget.entry(
+                BudgetSubjectKind.RUN, run_id, BudgetDimension.RUNS, LedgerEntryKind.COMMIT
+            )
+            if committed is None:
+                self._release(
+                    str(aggregate.experiment_id),
+                    BudgetDimension.RUNS,
+                    BudgetSubjectKind.RUN,
+                    run_id,
+                    actor,
+                    destinations,
+                )
+            else:
+                self._ledger(
+                    str(aggregate.experiment_id),
+                    BudgetDimension.RUNS,
+                    LedgerEntryKind.CONSUME,
+                    reserved.amount,
+                    BudgetSubjectKind.RUN,
+                    run_id,
+                    actor,
+                    destinations,
+                )
+
+    def _settle_attempt(
+        self,
+        experiment_id: str,
+        subject_kind: BudgetSubjectKind,
+        attempt: RunAttempt | EvaluationAttempt,
+        failed: bool,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> None:
+        if failed:
+            self._ledger(
+                experiment_id,
+                BudgetDimension.FAILURES,
+                LedgerEntryKind.CONSUME,
+                Decimal(1),
+                subject_kind,
+                str(attempt.id),
+                actor,
+                destinations,
+            )
+
+    def _release(
+        self,
+        experiment_id: str,
+        dimension: BudgetDimension,
+        subject_kind: BudgetSubjectKind,
+        subject_id: str,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> None:
+        """Give back a subject's reservation on *dimension*, if it holds one."""
+        reserved = self.budget.entry(subject_kind, subject_id, dimension, LedgerEntryKind.RESERVE)
+        if reserved is not None:
+            self._ledger(
+                experiment_id,
+                dimension,
+                LedgerEntryKind.RELEASE,
+                reserved.amount,
+                subject_kind,
+                subject_id,
+                actor,
+                destinations,
+            )
+
+    def _ledger(
+        self,
+        experiment_id: str,
+        dimension: BudgetDimension,
+        kind: LedgerEntryKind,
+        amount: Decimal,
+        subject_kind: BudgetSubjectKind,
+        subject_id: str,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> None:
+        """Append one entry, if the dimension is limited and the amount is not nothing.
+
+        A consumption that takes a quota past its limit -- not merely to it
+        -- is recorded as a ``BudgetOverrun`` event, once, when it crosses.
+        Nothing is stopped by it: what to do about an overrun is policy's.
+        """
+        experiment = self.aggregates.load_experiment(experiment_id)
+        bounded = limits(experiment.budget)
+        if dimension not in bounded or amount <= 0:
+            return
+        before = budget_status(experiment.budget, self.budget.entries(experiment_id))
+        entry = self.budget._append(
+            BudgetLedgerEntry(
+                id=f"ledger_{uuid.uuid4().hex}",
+                experiment_id=experiment_id,
+                dimension=dimension,
+                kind=kind,
+                amount=amount,
+                subject_kind=subject_kind,
+                subject_id=subject_id,
+            )
+        )
+        if kind is not LedgerEntryKind.CONSUME:
+            return
+        after = budget_status(experiment.budget, self.budget.entries(experiment_id))
+        was, now = before.of(dimension), after.of(dimension)
+        assert was is not None and now is not None
+        if now.overrun and not was.overrun:
+            self._emit(
+                experiment,
+                "BudgetOverrun",
+                experiment_id,
+                actor,
+                destinations,
+                extra={
+                    "dimension": dimension.value,
+                    "limit": str(now.limit),
+                    "consumed": str(now.consumed),
+                    "subject": f"{subject_kind.value} {subject_id}",
+                    "entry": entry.id,
+                },
+            )
+
     def create_attempt_with_submit_intent(
         self,
         attempt: RunAttempt,
@@ -1310,11 +1686,19 @@ class ControlPlaneRepository:
             The attempt and the operation, so the caller has the id to pass to
             ``submit_or_get``.
 
+        With a ``max_parallel_runs`` budget, the attempt holds a slot from
+        this commit until it ends. A retry that finds the attempt already
+        recorded takes no new slot and passes no budget check: it is the same
+        effect, already authorized.
+
         Raises:
             IdempotencyConflictError: If either half exists against a different
                 request -- the operation's target, type or digest, or the
                 attempt's run or number.
             ValueError: If *attempt* is not a freshly created aggregate.
+            BudgetExhaustedError: If a quota is used up.
+            CapacityUnavailableError: If every parallel-run slot is held;
+                nothing is written, and the caller waits for one.
         """
         return self._create_with_submit_intent(
             "training-attempt",
@@ -1379,6 +1763,8 @@ class ControlPlaneRepository:
 
             if kind == "training-attempt":
                 experiment_id = self._experiment_of_run(str(attempt.run_id))
+                self._require_budget(experiment_id, new_run=False)
+                self._require_capacity(experiment_id)
                 self.aggregates._insert_attempt(attempt)
             else:
                 run = self.aggregates.load_evaluation_run(str(attempt.evaluation_run_id))
@@ -1388,9 +1774,21 @@ class ControlPlaneRepository:
                         f"a finished run would execute an evaluation nothing will record"
                     )
                 experiment_id = str(run.experiment_id)
+                self._require_budget(experiment_id, new_run=False)
                 self.aggregates._insert_evaluation_attempt(attempt)
             stored = self.operations._insert(operation)
             self._emit(attempt, created_event, experiment_id, actor, destinations)
+            if kind == "training-attempt":
+                self._ledger(
+                    experiment_id,
+                    BudgetDimension.PARALLEL_RUNS,
+                    LedgerEntryKind.RESERVE,
+                    Decimal(1),
+                    BudgetSubjectKind.TRAINING_ATTEMPT,
+                    str(attempt.id),
+                    actor,
+                    destinations,
+                )
             self._emit_operation(
                 stored, "RuntimeOperationIntended", experiment_id, actor, destinations
             )
@@ -1769,6 +2167,7 @@ class ControlPlaneRepository:
                     if not run.is_terminal:
                         cancelled_run = run.with_status(RunStatus.CANCELLED)
                         self.aggregates._update_run(cancelled_run)
+                        self._settle_budget(cancelled_run, actor, destinations)
                         self._emit(
                             cancelled_run, "RunStatusChanged", experiment_id, actor, destinations
                         )
@@ -2001,6 +2400,7 @@ class ControlPlaneRepository:
             writer(moved)
             if after_write is not None:
                 after_write(moved)
+            self._settle_budget(moved, actor, destinations)
             self._emit(
                 moved,
                 event_type or f"{kind}StatusChanged",
@@ -2044,6 +2444,12 @@ class ControlPlaneRepository:
             moved = current.with_state(state, runtime_ref=runtime_ref)
             experiment_id = self._experiment_of_operation(moved)
             self.operations._update(moved)
+            if (
+                state == "confirmed"
+                and moved.type == "submit"
+                and moved.target.kind == "training-attempt"
+            ):
+                self._commit_budget(experiment_id, moved.target.id, actor, destinations)
             self._emit_operation(
                 moved,
                 f"RuntimeOperation{state.capitalize()}",

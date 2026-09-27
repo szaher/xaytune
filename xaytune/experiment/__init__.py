@@ -11,7 +11,13 @@ A handle is a way of asking the durable record about one experiment; see
 decides what an evaluated candidate becomes.
 """
 
+from xaytune.core.domain.budget import (
+    BudgetExhaustedError,
+    BudgetStatus,
+    UnsupportedBudgetError,
+)
 from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec
+from xaytune.core.domain.objective import BudgetSpec
 from xaytune.experiment.handle import (
     EvaluationOutcome,
     ExperimentHandle,
@@ -29,6 +35,9 @@ from xaytune.experiment.host import (
 from xaytune.experiment.spec import CompilerSpec, ExperimentSpec, RuntimeSpec
 
 __all__ = [
+    "BudgetExhaustedError",
+    "BudgetSpec",
+    "BudgetStatus",
     "CompilerSpec",
     "ControllerNotRunningError",
     "EmbeddedControllerHost",
@@ -44,4 +53,5 @@ __all__ = [
     "RunOutcome",
     "RuntimeSpec",
     "UnknownImplementationError",
+    "UnsupportedBudgetError",
 ]

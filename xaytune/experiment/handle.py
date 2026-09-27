@@ -24,6 +24,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Literal
 
+from xaytune.core.domain.budget import BudgetStatus
 from xaytune.core.domain.evaluation import EvaluationResult
 from xaytune.core.domain.event import DomainEvent
 from xaytune.core.ids import EvaluationRunId, ExperimentId, ExperimentNodeId, RunId
@@ -124,6 +125,10 @@ class ExperimentResult(FrozenDomainModel):
             whose runs or evaluations failed or were cancelled (retry, recover
             or give up: none exists yet). ``None`` once the experiment is
             terminal.
+        budget: Each limited dimension's balance, derived from the budget
+            ledger -- limit, reserved, committed, consumed and remaining --
+            or ``None`` if the experiment limits nothing. ``BUDGET_EXHAUSTED``
+            as the status says a used-up quota stopped the next effect.
     """
 
     experiment_id: ExperimentId
@@ -131,6 +136,7 @@ class ExperimentResult(FrozenDomainModel):
     quiescent: bool
     next_stage: NextStage | None
     nodes: tuple[NodeOutcome, ...] = ()
+    budget: BudgetStatus | None = None
 
 
 class ExperimentHandle:

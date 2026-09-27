@@ -338,12 +338,63 @@ but not their weights. `stop-experiment` is not typed either: stopping gracefull
 needs a draining state the experiment does not have, and cancelling is not the
 same thing.
 
+## Proposing an action
+
+`handle.propose(spec, reason=..., proposed_by=actor)` puts a typed action through
+three separate steps and records the result. **It carries nothing out.**
+
+```text
+validation      does it apply, here and now?     always; built in
+authorization   does policy permit it?           the host's PolicyEngine
+approval        does a human have to say yes?    when policy says so
+```
+
+| Result | State | Recorded |
+|---|---|---|
+| does not apply | `REJECTED` | the problems; no policy is consulted |
+| `DENY` | `REJECTED` | the policy decision |
+| `ALLOW` | `VALIDATED` | the policy decision: authorized, waiting for an executor |
+| `REQUIRE_APPROVAL` | `APPROVAL_PENDING` | the policy decision; then `host.approve_action(...)` or `host.reject_action(...)` |
+
+- **Validation.**
+  - Every action needs an `ACTIVE` experiment and a target that exists in it.
+  - An operational change needs a run that has not ended.
+  - A learning-rate, schedule or warmup change needs a run that is training.
+    A change before training starts is a different candidate.
+  - `reject-candidate` needs a node that has not ended, and `promote-candidate`
+    needs a completed one.
+  - `change-worker-count` needs the runtime to declare that its worker count can
+    change (`elasticity.supported`), and a count inside every range it declares.
+    If the runtime is silent, the proposal is refused. The local runtime is
+    silent, so it refuses.
+- **Policy.** A `PolicyEngine` is pure, like a `DecisionEngine`: it reads only
+  the spec and a snapshot of the record. The snapshot covers the experiment,
+  the target, the budget and the runtime's capabilities.
+  - `RulePolicyEngine` applies the first rule that matches the action's type or
+    mutation class, and otherwise its default.
+  - **With no policy configured, every proposal is denied**, and the decision
+    saying so is recorded. For permissive behaviour, configure
+    `RulePolicyEngine(default=PolicyVerdict.ALLOW)`.
+- **A decision authorizes a snapshot.** The whole snapshot is recorded with the
+  decision, since nothing else keeps the runtime's capabilities. A decision is
+  never recorded against a state that changed while the policy was judging.
+- **Approval** is by a human (`Actor(type="human")`) and approves the recorded
+  proposal; policy does not judge again. Giving the same answer twice changes
+  nothing. A different answer is refused, never rewritten.
+- **Cancellation is not proposed.** It stays controller-owned and always
+  possible, through `handle.cancel()`.
+- **Nothing is executed yet.** A proposed action waiting for approval or for an
+  executor does not keep `wait()` from returning. When execution arrives, it may
+  carry out an action that is `VALIDATED` with an `ALLOW` decision, or
+  `APPROVED` with a `REQUIRE_APPROVAL` decision. It must check again, at that
+  moment, that the action still applies.
+
 ## Not yet
 
 These are designed in the specification and planned, but **not
 implemented**: decisions that compare candidates (promotion, noise-aware
 comparison across replicates), lm-eval generation tasks, reusing earlier
-evaluation results, policy, carrying out a typed action (other than
-cancelling), budgets on GPU-hours, tokens and cost, custom budget meters,
+evaluation results, carrying out a proposed action (other than
+cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
 checkpoints and semantic recovery,
 planners and branching, daemon hosting, and runtimes other than local.

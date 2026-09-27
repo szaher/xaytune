@@ -24,12 +24,14 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Literal
 
+from xaytune.core.domain.actions import ActionSpec
 from xaytune.core.domain.budget import BudgetStatus
 from xaytune.core.domain.evaluation import EvaluationResult
 from xaytune.core.domain.event import DomainEvent
+from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.ids import EvaluationRunId, ExperimentId, ExperimentNodeId, RunId
 from xaytune.core.immutable import FrozenDomainModel
-from xaytune.core.refs import ArtifactRef
+from xaytune.core.refs import Actor, ArtifactRef
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
     EvaluationRunStatus,
@@ -178,6 +180,30 @@ class ExperimentHandle:
         recording a second one.
         """
         await self._host._cancel(self.experiment_id, reason=reason)
+
+    async def propose(self, spec: ActionSpec, *, reason: str, proposed_by: Actor) -> GovernedAction:
+        """Propose a typed action: validated, judged by the host's policy, recorded.
+
+        Nothing is carried out. The result says where governance left it:
+        ``REJECTED`` with the problems validation found, or with policy's
+        decision; ``VALIDATED`` with an ``ALLOW`` decision; or
+        ``APPROVAL_PENDING``, for a human to approve or reject through the
+        host. With no policy configured, every proposal is denied.
+
+        Cancellation is not proposed: use :meth:`cancel`.
+
+        Raises:
+            CancellationNotGovernedError: For a ``cancel-*`` spec.
+            UnsupportedActionError: If the action's plugin refuses the spec.
+        """
+        return self._host._propose(self.experiment_id, spec, reason=reason, proposed_by=proposed_by)
+
+    async def actions(self) -> tuple[GovernedAction, ...]:
+        """Every action recorded for the experiment, oldest first, as governance left it.
+
+        Includes cancellations, which carry no policy decision.
+        """
+        return self._host._actions(self.experiment_id)
 
     async def events(self, *, after: int = 0) -> AsyncIterator[DomainEvent]:
         """The experiment's durable history, then everything committed after.

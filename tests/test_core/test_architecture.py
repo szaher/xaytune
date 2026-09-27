@@ -54,6 +54,7 @@ FORBIDDEN_XAYTUNE_MODULES = frozenset(
         "xaytune.models",
         "xaytune.pipeline",
         "xaytune.plugins",
+        "xaytune.policy",
         "xaytune.recipes",
         "xaytune.runtimes",
         "xaytune.studio",

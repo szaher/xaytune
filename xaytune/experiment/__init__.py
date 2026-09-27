@@ -18,6 +18,7 @@ from xaytune.core.domain.budget import (
 )
 from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec
 from xaytune.core.domain.objective import BudgetSpec
+from xaytune.core.domain.policy import GovernedAction, PolicyVerdict
 from xaytune.experiment.handle import (
     EvaluationOutcome,
     ExperimentHandle,
@@ -47,8 +48,10 @@ __all__ = [
     "ExperimentHandle",
     "ExperimentResult",
     "ExperimentSpec",
+    "GovernedAction",
     "ImplementationMismatchError",
     "NodeOutcome",
+    "PolicyVerdict",
     "ReconciliationEscalatedError",
     "RunOutcome",
     "RuntimeSpec",

@@ -118,8 +118,8 @@ run next, if any. See
 In the order the [implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
 builds them:
 
-1. **Policy** over the Action substrate, and budgets on what nothing measures
-   yet (GPU-hours, tokens, cost).
+1. **Carrying out governed actions**, and budgets on what nothing measures yet
+   (GPU-hours, tokens, cost).
 2. **Checkpoints, semantic recovery and interventions.**
 3. **A rule-based planner and experiment branching**, and with it decisions
    that compare candidates -- promotion, and noise-aware comparison across
@@ -174,7 +174,7 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
 | D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval evaluator on `main` |
-| E — policy and budget over the Action substrate | In progress: budget ledger and typed actions on `main`; PolicyEngine planned |
+| E — policy and budget over the Action substrate | Complete on `main`: budget ledger, typed actions, policy and approval; carrying actions out is band F |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |
 | H — daemon hosting and whole-controller restart | Planned |

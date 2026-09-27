@@ -30,6 +30,7 @@ __all__ = [
     "ArtifactId",
     "CheckpointId",
     "DecisionId",
+    "PolicyDecisionId",
     "EvaluationAttemptId",
     "EvaluationId",
     "EvaluationResultId",
@@ -241,6 +242,13 @@ class DecisionId(TypedId):
 
     __slots__ = ()
     prefix = "decision_"
+
+
+class PolicyDecisionId(TypedId):
+    """Identifies a policy decision about one proposed action (PR-023)."""
+
+    __slots__ = ()
+    prefix = "policy_"
 
 
 class EventId(TypedId):

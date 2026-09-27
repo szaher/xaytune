@@ -276,20 +276,27 @@ def test_cancellation_intent_survives_a_restart(
         reopened.close()
 
 
-def test_an_unknown_action_type_is_refused() -> None:
-    """The vocabulary lives in the registry, not in a schema CHECK."""
-    from xaytune.core.domain.action import UnknownActionTypeError
-    from xaytune.core.ids import ActionId, ExperimentId
+def test_an_unknown_action_type_is_refused(repo: ControlPlaneRepository, live_attempt: Any) -> None:
+    """The vocabulary lives in the registry, not in a schema CHECK.
 
-    with pytest.raises(UnknownActionTypeError, match="change-learning-rate"):
-        Action(
-            id=ActionId.generate(),
-            experiment_id=ExperimentId.generate(),
-            type="change-learning-rate",
-            target=ActionTarget(kind="run", id="run_x"),
-            proposed_by=ACTOR,
-            reason="phase 4 type, not registered in band B",
-        )
+    Refused where intent becomes durable (PR-022); an Action of an unknown
+    type still *constructs*, so history an uninstalled plugin wrote loads.
+    """
+    from xaytune.core.domain.action import UnknownActionTypeError
+    from xaytune.core.ids import ActionId
+
+    action = Action(
+        id=ActionId.generate(),
+        experiment_id=repo.aggregates.load_run(str(live_attempt.run_id)).experiment_id,
+        type="change-dataset",
+        target=ActionTarget(kind="run", id=str(live_attempt.run_id)),
+        proposed_by=ACTOR,
+        reason="deferred type, never registered",
+    )
+    with pytest.raises(UnknownActionTypeError, match="change-dataset"):
+        with write_transaction(repo._connection):
+            repo.actions._insert(action)
+    assert repo.actions.get(str(action.id)) is None
 
 
 def test_run_and_experiment_cancellation_are_refused_as_sagas(

@@ -19,7 +19,9 @@ from xaytune.core.capabilities import (
 from xaytune.core.clock import utc_now
 from xaytune.core.domain import (
     Action,
+    ActionDescriptor,
     ActionOutcome,
+    ActionSpec,
     ActionTarget,
     AdapterSpec,
     AlgorithmSpec,
@@ -52,6 +54,7 @@ from xaytune.core.domain import (
     MetricEvidence,
     MetricResult,
     ModelSpec,
+    MutationClass,
     Objective,
     ObjectiveMetric,
     OptimizationSpec,
@@ -71,6 +74,7 @@ from xaytune.core.domain import (
     artifact_lineage_fingerprint,
     candidate_identity_v1,
     candidate_identity_v2,
+    register_action,
     run_history_fingerprint,
 )
 from xaytune.core.errors import (
@@ -182,7 +186,9 @@ __all__ = [
     "Action",
     "ACTION_MACHINE",
     "ActionId",
+    "ActionDescriptor",
     "ActionOutcome",
+    "ActionSpec",
     "ActionStatus",
     "ActionTarget",
     "Actor",
@@ -195,6 +201,8 @@ __all__ = [
     "ArtifactRef",
     "ATTEMPT_MACHINE",
     "BudgetSpec",
+    "MutationClass",
+    "register_action",
     "BudgetDimension",
     "BudgetExhaustedError",
     "BudgetLedgerEntry",

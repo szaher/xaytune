@@ -100,7 +100,7 @@ the order the remaining work lands in.
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
 | D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval evaluator on `main` |
-| E — policy and budget over the Action substrate | Planned |
+| E — policy and budget over the Action substrate | In progress: budget ledger and typed actions on `main`; PolicyEngine planned |
 | F — checkpoints, semantic recovery, interventions | Planned |
 | G — rule-based planner and experiment branching | Planned |
 | H — daemon hosting and whole-controller restart | Planned |

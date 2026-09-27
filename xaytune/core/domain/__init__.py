@@ -12,6 +12,17 @@ from xaytune.core.domain.action import (
     register_action_type,
     registered_action_types,
 )
+from xaytune.core.domain.actions import (
+    ActionDescriptor,
+    ActionPayloadError,
+    ActionRegistrationError,
+    ActionSpec,
+    BuiltinActionSpec,
+    MutationClass,
+    action_from_spec,
+    register_action,
+    spec_of,
+)
 from xaytune.core.domain.budget import (
     BudgetDimension,
     BudgetExhaustedError,
@@ -141,6 +152,7 @@ __all__ = [
     "OutboxRecord",
     "OutboxState",
     "PrecisionSpec",
+    "register_action",
     "register_action_type",
     "registered_action_types",
     "RewardSpec",
@@ -154,4 +166,12 @@ __all__ = [
     "TrainingSchedule",
     "TrainingSpec",
     "UnknownActionTypeError",
+    "ActionDescriptor",
+    "ActionPayloadError",
+    "ActionRegistrationError",
+    "ActionSpec",
+    "BuiltinActionSpec",
+    "MutationClass",
+    "action_from_spec",
+    "spec_of",
 ]

@@ -295,11 +295,53 @@ remaining   = limit - consumed - outstanding
 `ExperimentResult.budget` gives each limited dimension's limit, reserved,
 committed, consumed and remaining.
 
+## Typed actions
+
+Every Action has a registered, versioned **schema**. A payload is never a
+dictionary nobody can check. Each type also declares its **mutation class**:
+policy reads it, and nothing infers it from the type's name or parameters.
+
+| Class | Built-in types | Means |
+|---|---|---|
+| `OPERATIONAL` | `resize-microbatch`, `change-gradient-accumulation`, `change-worker-count`, `change-checkpoint-interval`, `cancel-attempt`, `cancel-run` | changes execution or control, not scientific identity |
+| `SCIENTIFIC_INTERVENTION` | `change-learning-rate`, `change-scheduler`, `change-warmup` | changes the trajectory of a run that is still going |
+| `EXPERIMENT` | `cancel-experiment`, `reject-candidate`, `promote-candidate` | changes the experiment, or a candidate's standing |
+
+- **Intent, not execution.** A typed action says what someone proposes.
+  Whether it is allowed is policy's decision, which is planned. Carrying it out,
+  as an execution override or a training intervention, comes after that. Only
+  the cancellation types do anything today, through the existing cancellation
+  path.
+- **The durable form** is `{"schema_version": "1", "parameters": {...}}`,
+  with keys sorted at every depth. `type` and `target` are the Action's own
+  fields and are not repeated. The cancellation types keep the `{}` payload they
+  have always had, read as version 1, so records written by `1.0.0a1` are
+  unchanged.
+- **Custom actions.** A plugin defines an `ActionSpec` subclass and calls
+  `register_action(ActionDescriptor.for_spec(Spec, provider=...))`, optionally
+  with a static `validator`. Its actions also record the plugin's name, API
+  version and plugin version. Registration is explicit, and nothing is
+  discovered from entry points yet. `register_action_type("name")`, which
+  registered a type without a schema, now raises.
+- **History outlives plugins.** An Action always loads. Only `spec_of(action)`,
+  which reads its typed spec, needs the type registered at the recorded version
+  by the recorded provider. It fails closed otherwise.
+- **Workers are logical.** `change-worker-count` sets the count of logical
+  training workers for the run's next attempt, as `ResourceRequirements.workers`
+  does: never pods, nodes, actors, replicas or GPUs. A runtime maps workers
+  onto a topology.
+
+Not yet typed: `change-reward-coefficient`, because a reward declares graders
+but not their weights. `stop-experiment` is not typed either: stopping gracefully
+needs a draining state the experiment does not have, and cancelling is not the
+same thing.
+
 ## Not yet
 
 These are designed in the specification and planned, but **not
 implemented**: decisions that compare candidates (promotion, noise-aware
 comparison across replicates), lm-eval generation tasks, reusing earlier
-evaluation results, policy, budgets on GPU-hours, tokens and cost,
+evaluation results, policy, carrying out a typed action (other than
+cancelling), budgets on GPU-hours, tokens and cost, custom budget meters,
 checkpoints and semantic recovery,
 planners and branching, daemon hosting, and runtimes other than local.

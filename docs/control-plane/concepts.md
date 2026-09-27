@@ -372,7 +372,9 @@ approval        does a human have to say yes?    when policy says so
   the target, the budget and the runtime's capabilities, and who proposed the
   action by type and id only: an actor's metadata is provenance, kept on the
   Action, and never policy input. Everything policy can read is part of the
-  snapshot's fingerprint.
+  snapshot's fingerprint: a runtime declaring newer capability fields shows
+  policy only the fields this version identifies, plus the entries of
+  `extensions`.
   - A decision is recorded under the name and version of the engine that was
     asked. A proposal signed by any other engine is refused, and nothing is
     written.

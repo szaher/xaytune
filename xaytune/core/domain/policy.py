@@ -38,9 +38,18 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
-from xaytune.core.capabilities import CapabilityDocument
+from xaytune.core.capabilities import (
+    AgentRolloutCapabilities,
+    AlgorithmCapabilities,
+    CapabilityDocument,
+    CheckpointCapabilities,
+    DistributedCapabilities,
+    ElasticityCapabilities,
+    PrecisionCapabilities,
+    ResilienceCapabilities,
+)
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.action import Action, ActionStatus, ActionTarget
 from xaytune.core.domain.actions import ActionSpec, ChangeWorkerCount, MutationClass
@@ -54,7 +63,7 @@ from xaytune.core.domain.actions.builtin import (
     RejectCandidate,
     ResizeMicrobatch,
 )
-from xaytune.core.domain.budget import BudgetStatus
+from xaytune.core.domain.budget import BudgetStatus, DimensionStatus
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import ActionId, ExperimentId, PolicyDecisionId
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
@@ -112,6 +121,16 @@ class PolicyContext(FrozenDomainModel):
     Explicit and serializable, like ``DecisionContext``: an engine that read
     anything else could decide differently on inputs nobody changed.
 
+    **What policy reads is exactly what v1 identifies.** Every nested model is
+    rebuilt as its exact v1 type from the fields
+    :func:`policy_input_identity_v1` projects, and every mapping
+    (``parameters``, ``provider``, ``extensions``) as a base ``FrozenDict`` of
+    base values, so a subclass carrying anything added later -- a newer
+    ``CapabilityDocument``, ``DimensionStatus``, ``ActionTarget`` or mapping
+    -- reaches no engine. A runtime-specific input that
+    policy must see goes in ``CapabilityDocument.extensions``, which v1
+    identifies, or in a v2.
+
     Attributes:
         target_status: The target's status, or ``None`` if it does not exist
             in this experiment -- which validation refuses before any policy
@@ -139,6 +158,61 @@ class PolicyContext(FrozenDomainModel):
     budget: BudgetStatus | None = None
     capabilities: CapabilityDocument | None = None
 
+    @field_validator("parameters", mode="after")
+    @classmethod
+    def _parameters_v1(cls, parameters: FrozenDict) -> FrozenDict:
+        return _exact_mapping(parameters)
+
+    @field_validator("provider", mode="after")
+    @classmethod
+    def _provider_v1(cls, provider: FrozenDict | None) -> FrozenDict | None:
+        return None if provider is None else _exact_mapping(provider)
+
+    @field_validator("target", mode="after")
+    @classmethod
+    def _target_v1(cls, target: ActionTarget) -> ActionTarget:
+        return ActionTarget(kind=target.kind, id=target.id)
+
+    @field_validator("proposed_by", mode="after")
+    @classmethod
+    def _proposer_v1(cls, proposer: PolicyProposer) -> PolicyProposer:
+        return PolicyProposer(type=proposer.type, id=proposer.id)
+
+    @field_validator("budget", mode="after")
+    @classmethod
+    def _budget_view_v1(cls, budget: BudgetStatus | None) -> BudgetStatus | None:
+        if budget is None:
+            return None
+        return BudgetStatus(
+            dimensions=tuple(
+                DimensionStatus(**{name: getattr(d, name) for name in _DIMENSION_FIELDS_V1})
+                for d in budget.dimensions
+            )
+        )
+
+    @field_validator("capabilities", mode="after")
+    @classmethod
+    def _capabilities_view_v1(
+        cls, document: CapabilityDocument | None
+    ) -> CapabilityDocument | None:
+        if document is None:
+            return None
+        sections: dict[str, Any] = {}
+        for section, fields in _CAPABILITY_FIELDS_V1.items():
+            value = getattr(document, section)
+            sections[section] = (
+                None
+                if value is None
+                else _CAPABILITY_SECTIONS_V1[section](
+                    **{name: getattr(value, name) for name in fields}
+                )
+            )
+        return CapabilityDocument(
+            schema_version=document.schema_version,
+            extensions=_exact_mapping(document.extensions),
+            **sections,
+        )
+
     def input_fingerprint(self) -> str:
         """The identity of these inputs: :func:`policy_input_identity_v1`, hashed."""
         return fingerprint(policy_input_identity_v1(self))
@@ -164,8 +238,9 @@ def policy_input_identity_v1(context: PolicyContext) -> Mapping[str, Any]:
     - the capability document's schema version and extensions, and each
       section's fields as listed below.
 
-    No time: when the question was asked does not change what was asked. The
-    recorded snapshot may hold more than this; the identity does not.
+    No time: when the question was asked does not change what was asked.
+    :class:`PolicyContext` holds exactly these fields, so the recorded snapshot
+    is what policy saw, and nothing policy saw is outside the identity.
     """
     return {
         "kind": "policy-input",
@@ -225,6 +300,56 @@ def _budget_v1(budget: BudgetStatus | None) -> list[dict[str, Any]] | None:
         for d in sorted(budget.dimensions, key=lambda d: d.dimension.value)
     ]
 
+
+def _exact_mapping(mapping: Mapping[str, Any]) -> FrozenDict:
+    """*mapping* rebuilt from its entries alone, as base types all the way down.
+
+    ``FrozenDict`` keeps a subclass instance it is given, and so does
+    ``deep_freeze`` for a nested one, a ``str`` or an ``int``: attributes a
+    subclass adds would reach policy without being identified. The base
+    types' own methods copy each value, so no subclass override is called.
+    """
+    return FrozenDict({str.__str__(key): _exact_value(value) for key, value in mapping.items()})
+
+
+def _exact_value(value: Any) -> Any:
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int.__int__(value)
+    if isinstance(value, float):
+        return float.__float__(value)
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, Mapping):
+        return _exact_mapping(value)
+    if isinstance(value, tuple):
+        return tuple(_exact_value(item) for item in value)
+    raise TypeError(f"{type(value).__name__} is not a frozen domain value")
+
+
+_DIMENSION_FIELDS_V1 = (
+    "dimension",
+    "kind",
+    "limit",
+    "reserved",
+    "committed",
+    "consumed",
+    "released",
+    "outstanding",
+    "remaining",
+)
+"""The ``DimensionStatus`` fields policy sees; ``_budget_v1`` identifies each."""
+
+_CAPABILITY_SECTIONS_V1: dict[str, type[Any]] = {
+    "precision": PrecisionCapabilities,
+    "distributed": DistributedCapabilities,
+    "checkpoint": CheckpointCapabilities,
+    "elasticity": ElasticityCapabilities,
+    "resilience": ResilienceCapabilities,
+    "agent_rollout": AgentRolloutCapabilities,
+    "algorithms": AlgorithmCapabilities,
+}
 
 _CAPABILITY_FIELDS_V1: dict[str, tuple[str, ...]] = {
     "precision": ("supported",),

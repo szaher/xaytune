@@ -9,11 +9,12 @@ context.input_fingerprint()             the snapshot's identity; no time in it
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import ValidationError, create_model
 
 from xaytune.core.capabilities import (
     AgentRolloutCapabilities,
@@ -496,7 +497,183 @@ def test_a_field_added_later_is_not_part_of_v1() -> None:
     assert policy_input_identity_v1(later)["identity_version"] == 1
 
 
+class _LaterTarget(ActionTarget):
+    shard: str | None = None
+
+
+class _LaterProposer(PolicyProposer):
+    role: str | None = None
+
+
+class _ReadsWhatItShouldNot:
+    """Would allow on any later field it found; denies otherwise."""
+
+    name = "reads-later-fields"
+    version = "1"
+
+    def __init__(self) -> None:
+        self.seen: PolicyContext | None = None
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> Any:
+        self.seen = context
+        leaked = (
+            getattr(context.capabilities, "topology", None),
+            getattr(getattr(context.capabilities, "elasticity", None), "rebalance_seconds", None),
+            *(getattr(d, "burn_rate", None) for d in context.budget.dimensions),  # type: ignore[union-attr]
+            getattr(context.target, "shard", None),
+            getattr(context.proposed_by, "role", None),
+        )
+        verdict = PolicyVerdict.ALLOW if any(v is not None for v in leaked) else PolicyVerdict.DENY
+        return DenyAllPolicy().evaluate(spec, context).model_copy(update={"verdict": verdict})
+
+
+def test_policy_never_sees_a_field_v1_does_not_identify() -> None:
+    spec = ChangeWorkerCount(target=RUN, workers=4)
+    now = _context(spec, capabilities=ELASTIC, budget=BudgetStatus(dimensions=(_RUNS,)))
+    later = _context(
+        spec,
+        target=_LaterTarget(kind="run", id="run_1", shard="a"),
+        proposed_by=_LaterProposer(type="llm_agent", id="planner", role="admin"),
+        capabilities=_LaterCapabilities(
+            distributed=ELASTIC.distributed,
+            elasticity=_LaterElasticity(
+                **ELASTIC.elasticity.model_dump(),  # type: ignore[union-attr]
+                rebalance_seconds=30,
+            ),
+            topology="ring",
+        ),
+        budget=BudgetStatus(
+            dimensions=(_LaterDimension(**_RUNS.model_dump(), burn_rate=Decimal("0.5")),)
+        ),
+    )
+    engine = _ReadsWhatItShouldNot()
+
+    assert engine.evaluate(spec, later).verdict is PolicyVerdict.DENY
+    seen = engine.seen
+    assert seen is not None and seen.capabilities is not None and seen.budget is not None
+    assert type(seen.capabilities) is CapabilityDocument
+    assert type(seen.capabilities.elasticity) is ElasticityCapabilities
+    assert type(seen.budget.dimensions[0]) is DimensionStatus
+    assert type(seen.target) is ActionTarget
+    assert type(seen.proposed_by) is PolicyProposer
+    assert not hasattr(seen.capabilities, "topology")
+    assert not hasattr(seen.capabilities.elasticity, "rebalance_seconds")
+    assert seen == now, "what policy reads is exactly the v1 view"
+    assert later.input_fingerprint() == now.input_fingerprint()
+
+
 # ---- the executor's rule -----------------------------------------------------------------
+
+
+_SECTIONS = {
+    "precision": PrecisionCapabilities,
+    "distributed": DistributedCapabilities,
+    "checkpoint": CheckpointCapabilities,
+    "elasticity": ElasticityCapabilities,
+    "resilience": ResilienceCapabilities,
+    "agent_rollout": AgentRolloutCapabilities,
+    "algorithms": AlgorithmCapabilities,
+}
+
+
+@pytest.mark.parametrize("section", list(_SECTIONS))
+def test_every_capability_section_reaches_policy_as_its_v1_type(section: str) -> None:
+    base = _SECTIONS[section]
+    later = create_model(f"_Later{base.__name__}", __base__=base, secret=(str, "admin"))
+    spec = ChangeLearningRate(target=RUN, learning_rate=1e-4)
+
+    context = _context(spec, capabilities=CapabilityDocument(**{section: later()}))
+
+    seen = getattr(context.capabilities, section)
+    assert type(seen) is base
+    assert not hasattr(seen, "secret")
+    assert context.input_fingerprint() == (
+        _context(spec, capabilities=CapabilityDocument(**{section: base()})).input_fingerprint()
+    )
+
+
+class _LaterMapping(FrozenDict):
+    """A mapping with a property no entry declares."""
+
+    @property
+    def secret(self) -> str:
+        return "admin"
+
+
+class _LaterString(str):
+    secret = "admin"
+
+
+class _LaterInt(int):
+    secret = "admin"
+
+
+def _mapping_leaks(value: Any) -> bool:
+    """Whether *value*, at any depth, is anything but base mappings, tuples and scalars."""
+    if isinstance(value, Mapping):
+        return type(value) is not FrozenDict or any(
+            type(k) is not str or _mapping_leaks(v) for k, v in value.items()
+        )
+    if isinstance(value, tuple):
+        return type(value) is not tuple or any(_mapping_leaks(v) for v in value)
+    return value is not None and type(value) not in (bool, int, float, str)
+
+
+def _hostile(entries: dict[str, Any]) -> _LaterMapping:
+    return _LaterMapping(
+        {
+            **entries,
+            "nested": _LaterMapping({"tag": _LaterString("x")}),
+            "count": _LaterInt(3),
+            "items": (_LaterString("a"), _LaterMapping({"k": 1})),
+        }
+    )
+
+
+def _plainly(entries: dict[str, Any]) -> FrozenDict:
+    return FrozenDict({**entries, "nested": {"tag": "x"}, "count": 3, "items": ("a", {"k": 1})})
+
+
+_MAPPING_SURFACES = {
+    "parameters": lambda m: {"parameters": m},
+    "provider": lambda m: {"provider": m},
+    "extensions": lambda m: {"capabilities": CapabilityDocument(extensions=m)},
+}
+
+
+def _surface(context: PolicyContext, name: str) -> Any:
+    if name == "extensions":
+        return context.capabilities.extensions  # type: ignore[union-attr]
+    return getattr(context, name)
+
+
+class _ReadsSecrets:
+    name = "reads-secrets"
+    version = "1"
+
+    def __init__(self, surface: str) -> None:
+        self.surface = surface
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> Any:
+        mapping = _surface(context, self.surface)
+        leaked = hasattr(mapping, "secret") or _mapping_leaks(mapping)
+        verdict = PolicyVerdict.ALLOW if leaked else PolicyVerdict.DENY
+        return DenyAllPolicy().evaluate(spec, context).model_copy(update={"verdict": verdict})
+
+
+@pytest.mark.parametrize("surface", list(_MAPPING_SURFACES))
+def test_a_mapping_subclass_shows_policy_only_its_entries(surface: str) -> None:
+    spec = ChangeLearningRate(target=RUN, learning_rate=1e-4)
+    hostile = _context(spec, **_MAPPING_SURFACES[surface](_hostile({"rack": "b"})))
+    plain = _context(spec, **_MAPPING_SURFACES[surface](_plainly({"rack": "b"})))
+
+    seen = _surface(hostile, surface)
+    assert type(seen) is FrozenDict and not hasattr(seen, "secret")
+    assert not _mapping_leaks(seen), "base types at every depth"
+    assert seen == _surface(plain, surface)
+    assert _ReadsSecrets(surface).evaluate(spec, hostile).verdict is PolicyVerdict.DENY
+    assert hostile.input_fingerprint() == plain.input_fingerprint()
+    assert hostile.model_dump(mode="json") == plain.model_dump(mode="json")
 
 
 def test_only_an_authorized_action_awaits_execution() -> None:

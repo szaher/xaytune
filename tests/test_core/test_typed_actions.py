@@ -372,7 +372,7 @@ def test_a_plugin_action_is_first_class(isolated_registry: None) -> None:
         "provider": {
             "api_version": "xaytune.plugins/v1alpha1",
             "name": "acme-actions",
-            "plugin_version": "0.1.0",
+            "provider": "acme",
         },
     }
     loaded = Action.model_validate_json(json.dumps(action.model_dump(mode="json")))
@@ -402,26 +402,76 @@ def test_history_outlives_an_uninstalled_plugin_but_its_spec_does_not(
         spec_of(loaded)
 
 
-def test_a_plugin_upgrade_reads_what_the_older_version_wrote(isolated_registry: None) -> None:
-    register_action(ActionDescriptor.for_spec(ReduceSequenceLength, provider=ACME))
-    written = _action(ReduceSequenceLength(target=RUN, max_length=512))
-    upgraded = ACME.model_copy(update={"plugin_version": "0.2.0"})
-    contract._DESCRIPTORS[("acme/reduce-sequence-length", "1")] = ActionDescriptor.for_spec(
-        ReduceSequenceLength, provider=upgraded
-    )
-
-    assert spec_of(written).max_length == 512  # type: ignore[attr-defined]
+def _under(plugin: PluginDescriptor) -> None:
+    """Install *plugin* as the one defining the test action, as a fresh process would."""
+    contract._DESCRIPTORS.pop(("acme/reduce-sequence-length", "1"), None)
+    register_action(ActionDescriptor.for_spec(ReduceSequenceLength, provider=plugin))
 
 
-def test_an_action_another_plugin_defined_is_not_read_as_this_ones(
+def test_a_compatible_upgrade_is_the_same_contract_and_the_same_request(
     isolated_registry: None,
 ) -> None:
-    register_action(ActionDescriptor.for_spec(ReduceSequenceLength, provider=ACME))
-    action = _action(ReduceSequenceLength(target=RUN, max_length=512))
-    impostor = {**action.payload, "provider": {**action.payload["provider"], "name": "other"}}
+    """plugin_version is not identity: same spec, same id, 0.1 then 0.2 -- one request."""
+    from xaytune.storage.actions import ActionStore
 
-    with pytest.raises(ActionPayloadError, match="registered by 'acme-actions'"):
+    spec = ReduceSequenceLength(target=RUN, max_length=512)
+    _under(ACME)
+    written = _action(spec)
+
+    _under(ACME.model_copy(update={"plugin_version": "0.2.0"}))
+    retried = action_from_spec(
+        spec,
+        experiment_id=EXPERIMENT,
+        proposed_by=ACTOR,
+        reason="because",
+        action_id=written.id,
+    )
+
+    def stored(action: Action) -> str:
+        return json.dumps(action.model_dump(mode="json")["payload"], sort_keys=True)
+
+    assert stored(retried) == stored(written), "byte-identical durable payload"
+    ActionStore._assert_same_request(written, retried)  # no IdempotencyConflictError
+    assert spec_of(written) == spec
+
+
+def test_the_same_plugin_name_from_another_provider_is_not_the_same_contract(
+    isolated_registry: None,
+) -> None:
+    _under(ACME)
+    historical = _action(ReduceSequenceLength(target=RUN, max_length=512))
+
+    _under(ACME.model_copy(update={"provider": "other-company"}))  # after a restart
+
+    with pytest.raises(ActionPayloadError, match="registered by other-company/acme-actions"):
+        spec_of(historical)
+
+
+@pytest.mark.parametrize("field", ["provider", "name", "api_version"])
+def test_every_part_of_a_plugin_contract_is_checked_on_reading(
+    isolated_registry: None, field: str
+) -> None:
+    _under(ACME)
+    action = _action(ReduceSequenceLength(target=RUN, max_length=512))
+    impostor = {**action.payload, "provider": {**action.payload["provider"], field: "other"}}
+
+    with pytest.raises(ActionPayloadError, match="registered by acme/acme-actions"):
         spec_of(_with_payload(action, impostor))
+
+
+def test_a_recorded_plugin_contract_carries_nothing_else(isolated_registry: None) -> None:
+    _under(ACME)
+    action = _action(ReduceSequenceLength(target=RUN, max_length=512))
+    padded = {
+        **action.payload,
+        "provider": {**action.payload["provider"], "plugin_version": "0.1.0"},
+    }
+    with pytest.raises(ActionPayloadError, match="recorded as defined by"):
+        spec_of(_with_payload(action, padded))
+
+
+class _Rival(ReduceSequenceLength):
+    version: Literal["2"] = "2"  # type: ignore[assignment]
 
 
 class _OtherSchema(ReduceSequenceLength):
@@ -449,6 +499,12 @@ def test_a_registration_that_would_make_a_type_ambiguous_is_refused(
         register_action(ActionDescriptor.for_spec(_OtherSchema, provider=ACME))
     with pytest.raises(ActionRegistrationError, match="belongs to xaytune"):
         register_action(ActionDescriptor.for_spec(_ClaimsABuiltIn, provider=ACME))
+    with pytest.raises(ActionRegistrationError, match="belongs to plugin acme/acme-actions"):
+        register_action(
+            ActionDescriptor.for_spec(
+                _Rival, provider=ACME.model_copy(update={"provider": "other-company"})
+            )
+        )
     with pytest.raises(ActionRegistrationError, match="does not declare mutation_class"):
         ActionDescriptor.for_spec(_Unclassified, provider=ACME)
     with pytest.raises(IncompatiblePluginError):

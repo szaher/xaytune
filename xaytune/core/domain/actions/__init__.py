@@ -19,7 +19,10 @@ the Action's own fields and are not repeated::
 
     {"schema_version": "1", "parameters": {...}}
     {"schema_version": "1", "parameters": {...},
-     "provider": {"name": ..., "api_version": ..., "plugin_version": ...}}   # a plugin's
+     "provider": {"provider": ..., "name": ..., "api_version": ...}}   # a plugin's
+
+A plugin's ``plugin_version`` is deliberately absent: a compatible upgrade is
+the same contract, and must not make a retried action look like a new one.
 
 The cancellation types predate the envelope. Their payload is ``{}``, read as
 schema version 1, and new cancellations keep writing ``{}``, so every row

@@ -814,8 +814,10 @@ migration, and nothing is executed.
     `stop-experiment` (no draining lifecycle), and changes to the dataset,
     base model, algorithm, optimizer, LoRA rank or adapter.
 - **Durable envelope.** The payload is `{"schema_version", "parameters"}`,
-  canonical at every depth, plus `provider` (name, API version, plugin
-  version) for a plugin's type. `type` and `target` are not repeated.
+  canonical at every depth, plus `provider` (provider, plugin name, API
+  version) for a plugin's type. `plugin_version` is excluded on purpose: the
+  payload is part of an action's request identity, and a compatible upgrade
+  is the same contract (ADR-008). `type` and `target` are not repeated.
   Cancellations keep `{}` as implicit version 1, so the rows `1.0.0a1` wrote
   are unchanged.
 - **Reading and writing.**

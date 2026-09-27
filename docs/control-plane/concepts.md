@@ -319,8 +319,10 @@ policy reads it, and nothing infers it from the type's name or parameters.
   unchanged.
 - **Custom actions.** A plugin defines an `ActionSpec` subclass and calls
   `register_action(ActionDescriptor.for_spec(Spec, provider=...))`, optionally
-  with a static `validator`. Its actions also record the plugin's name, API
-  version and plugin version. Registration is explicit, and nothing is
+  with a static `validator`. Its actions also record the plugin's contract:
+  provider, plugin name and API version. The plugin version is left out, so a
+  compatible upgrade still reads, and retries, what an older version wrote.
+  Registration is explicit, and nothing is
   discovered from entry points yet. `register_action_type("name")`, which
   registered a type without a schema, now raises.
 - **History outlives plugins.** An Action always loads. Only `spec_of(action)`,

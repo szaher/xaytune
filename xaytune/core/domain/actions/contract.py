@@ -174,7 +174,9 @@ class ActionDescriptor(FrozenDomainModel):
 
     Attributes:
         provider: The plugin that defines the type, or ``None`` for one built
-            into Xaytune. Its identity is persisted with each action.
+            into Xaytune. Its contract -- provider, plugin name and plugin API
+            version -- is persisted with each action; its ``plugin_version``
+            is not.
         validator: Optional static validation beyond the schema. It may not
             look at live state: whether the target exists, is running, or
             whether policy allows the action is PR-023's to decide.
@@ -270,7 +272,10 @@ def register_action(descriptor: ActionDescriptor) -> None:
 
 
 def _provider_name(descriptor: ActionDescriptor) -> str:
-    return "xaytune" if descriptor.provider is None else f"plugin {descriptor.provider.name!r}"
+    """Who owns a type: Xaytune, or one plugin of one provider."""
+    if descriptor.provider is None:
+        return "xaytune"
+    return f"plugin {descriptor.provider.provider}/{descriptor.provider.name}"
 
 
 def action_descriptor(action_type: str, version: str = "1") -> ActionDescriptor:
@@ -335,10 +340,17 @@ def encode_payload(spec: ActionSpec) -> dict[str, Any]:
 
 
 def _provider_identity(provider: PluginDescriptor) -> dict[str, str]:
+    """The plugin *contract* that defines a type: who, which plugin, which API.
+
+    Not ``plugin_version``. An implementation upgrade that keeps the API is the
+    same contract (ADR-008), and the payload is part of an action's request
+    identity: recording the version would make a retry after a compatible
+    upgrade look like a different request.
+    """
     return {
         "api_version": provider.api_version,
         "name": provider.name,
-        "plugin_version": provider.plugin_version,
+        "provider": provider.provider,
     }
 
 
@@ -431,12 +443,10 @@ def spec_of(action: Action) -> ActionSpec:
         )
     if provider is not None and expected is not None:
         recorded = _thaw(provider)
-        if not isinstance(recorded, dict) or any(
-            recorded.get(key) != expected[key] for key in ("name", "api_version")
-        ):
+        if recorded != expected:
             refuse(
                 f"recorded as defined by {recorded!r}; registered by "
-                f"{expected['name']!r} at {expected['api_version']}"
+                f"{expected['provider']}/{expected['name']} at {expected['api_version']}"
             )
     try:
         return descriptor.spec.model_validate(

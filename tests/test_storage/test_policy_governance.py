@@ -492,3 +492,6 @@ def test_a_governed_action_at_rest_is_not_work_in_flight(
         ActionStatus.APPROVAL_PENDING,
         ActionStatus.APPROVED,
     }
+    awaiting_approval, awaiting_execution = repo.resting_actions(str(run.experiment_id))
+    assert [a.id for a in awaiting_approval] == [pending.action.id]
+    assert [a.id for a in awaiting_execution] == [allowed.action.id, approved.action.id]

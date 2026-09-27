@@ -42,7 +42,7 @@ from pydantic import Field
 
 from xaytune.core.capabilities import CapabilityDocument
 from xaytune.core.clock import utc_now
-from xaytune.core.domain.action import Action, ActionTarget
+from xaytune.core.domain.action import Action, ActionStatus, ActionTarget
 from xaytune.core.domain.actions import ActionSpec, ChangeWorkerCount, MutationClass
 from xaytune.core.domain.actions.builtin import (
     ChangeCheckpointInterval,
@@ -68,6 +68,7 @@ __all__ = [
     "PolicyProposal",
     "PolicyVerdict",
     "applicability_problems",
+    "awaits_execution",
     "policy_input_identity_v1",
 ]
 
@@ -124,12 +125,27 @@ class PolicyContext(FrozenDomainModel):
 
 
 def policy_input_identity_v1(context: PolicyContext) -> Mapping[str, Any]:
-    """What makes two policy inputs the same, version 1.
+    """What makes two policy inputs the same, version 1. Frozen.
 
-    Everything the context holds, since a policy may read any of it, and no
-    time: when the question was asked does not change what was asked. Of the
-    proposer, its type and id, not its free-form metadata. The budget and the
-    capability document are included whole: they are what the engine saw.
+    An explicit projection, never a dump, for the reason
+    ``decision_input_identity_v1`` is one: a field added later to
+    ``BudgetStatus``, ``CapabilityDocument`` or ``Actor`` must not change the
+    identity of any policy input. A new field that policy should see is a new
+    version -- ``policy_input_identity_v2`` -- recorded as such; this function
+    projects exactly these fields, forever:
+
+    - the experiment: id, status, revision;
+    - the action: type, schema version, provider, mutation class, and its
+      parameters -- whose shape the action's own schema version fixes;
+    - the target: kind, id, status, revision;
+    - the proposer: type and id, not free-form metadata;
+    - each budget dimension: dimension, kind, limit, reserved, committed,
+      consumed, released, outstanding, remaining;
+    - the capability document's schema version and extensions, and each
+      section's fields as listed below.
+
+    No time: when the question was asked does not change what was asked. The
+    recorded snapshot may hold more than this; the identity does not.
     """
     return {
         "kind": "policy-input",
@@ -142,9 +158,9 @@ def policy_input_identity_v1(context: PolicyContext) -> Mapping[str, Any]:
         "action": {
             "type": context.action_type,
             "version": context.action_version,
-            "provider": dict(context.provider) if context.provider is not None else None,
+            "provider": _plain(context.provider) if context.provider is not None else None,
             "mutation_class": context.mutation_class.value,
-            "parameters": context.model_dump(mode="json")["parameters"],
+            "parameters": _plain(context.parameters),
         },
         "target": {
             "kind": context.target.kind,
@@ -153,11 +169,73 @@ def policy_input_identity_v1(context: PolicyContext) -> Mapping[str, Any]:
             "revision": context.target_revision,
         },
         "proposed_by": {"type": context.proposed_by.type, "id": context.proposed_by.id},
-        "budget": context.budget.model_dump(mode="json") if context.budget else None,
-        "capabilities": (
-            context.capabilities.model_dump(mode="json") if context.capabilities else None
-        ),
+        "budget": _budget_v1(context.budget),
+        "capabilities": _capabilities_v1(context.capabilities),
     }
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _plain(value[key]) for key in sorted(value, key=str)}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _budget_v1(budget: BudgetStatus | None) -> list[dict[str, Any]] | None:
+    if budget is None:
+        return None
+    return [
+        {
+            "dimension": d.dimension.value,
+            "kind": d.kind,
+            **{
+                name: str(getattr(d, name))
+                for name in (
+                    "limit",
+                    "reserved",
+                    "committed",
+                    "consumed",
+                    "released",
+                    "outstanding",
+                    "remaining",
+                )
+            },
+        }
+        for d in sorted(budget.dimensions, key=lambda d: d.dimension.value)
+    ]
+
+
+_CAPABILITY_FIELDS_V1: dict[str, tuple[str, ...]] = {
+    "precision": ("supported",),
+    "distributed": ("strategies", "min_workers", "max_workers"),
+    "checkpoint": ("formats", "asynchronous", "reshardable", "atomic_commit"),
+    "elasticity": ("supported", "min_workers", "max_workers", "membership_change"),
+    "resilience": (
+        "per_step",
+        "provider",
+        "provider_version",
+        "supports_event_replay",
+        "reports_completed_operations",
+    ),
+    "agent_rollout": ("stateful", "asynchronous"),
+    "algorithms": ("supported",),
+}
+
+
+def _capabilities_v1(document: CapabilityDocument | None) -> dict[str, Any] | None:
+    if document is None:
+        return None
+    projected: dict[str, Any] = {
+        "schema_version": document.schema_version,
+        "extensions": _plain(document.extensions),
+    }
+    for section, fields in _CAPABILITY_FIELDS_V1.items():
+        value = getattr(document, section)
+        projected[section] = (
+            None if value is None else {name: _plain(getattr(value, name)) for name in fields}
+        )
+    return projected
 
 
 class PolicyProposal(FrozenDomainModel):
@@ -229,6 +307,28 @@ class GovernedAction(FrozenDomainModel):
     action: Action
     decision: PolicyDecision | None = None
     problems: tuple[str, ...] = Field(default_factory=tuple)
+
+
+def awaits_execution(action: Action, decision: PolicyDecision | None) -> bool:
+    """Whether *action* is authorized and waiting for an executor. The executor's rule.
+
+    Exactly two ways, both with the decision on record::
+
+        VALIDATED  + ALLOW
+        APPROVED   + REQUIRE_APPROVAL
+
+    A ``VALIDATED`` action with no decision never qualifies, nor does a
+    decision filed against another action. Whoever carries the action out
+    must still check, then, that it applies to the state of that moment.
+    """
+    if decision is None or decision.action_id != action.id:
+        return False
+    if action.policy_decision_id != decision.id:
+        return False
+    return (action.status, decision.verdict) in {
+        (ActionStatus.VALIDATED, PolicyVerdict.ALLOW),
+        (ActionStatus.APPROVED, PolicyVerdict.REQUIRE_APPROVAL),
+    }
 
 
 # ---- validation --------------------------------------------------------------------------

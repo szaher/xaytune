@@ -896,10 +896,23 @@ recorded as a durable governed Action. Nothing is executed.
 - **Cancellation** is outside policy. `propose_action` refuses `cancel-*`
   specs (`CancellationNotGovernedError`), so there is no second cancellation
   path, and cancellations keep `policy_decision_id = NULL`.
-- **Quiescence.** Only actions in flight (`PROPOSED`, `VALIDATING`,
-  `EXECUTING`) count as unsettled work. A governed action resting in
-  `VALIDATED`, `APPROVAL_PENDING` or `APPROVED` waits for a person or an
-  executor, not a controller. Cancellations never rest in those states.
+- **Quiescence and next stage.**
+  - `unsettled_work` means control work actively in progress whose outcome
+    must still be driven or reconciled: operations `INTENDED` or `SENT`, and
+    actions `PROPOSED`, `VALIDATING` or `EXECUTING`.
+  - A governed action resting in `VALIDATED`, `APPROVAL_PENDING` or
+    `APPROVED` waits for a person or an executor, not a controller, so it
+    does not keep `wait()` from returning. Cancellations never rest in those
+    states.
+  - Instead, `ExperimentResult.next_stage` shows it, ahead of the stages
+    derived from the candidates: `"action-approval"` for `APPROVAL_PENDING`,
+    and `"action-execution"` for an action that `awaits_execution`
+    (`VALIDATED` with `ALLOW`, or `APPROVED` with `REQUIRE_APPROVAL`).
+- **Identity versions are frozen.** `policy_input_identity_v1` is an explicit
+  projection of named fields, including those of `BudgetStatus` and every
+  `CapabilityDocument` section. A field added to those models later does not
+  change v1. A field policy must see becomes `policy_input_identity_v2`,
+  recorded as such. The stored snapshot may hold more than the identity.
 - **Budget** is policy input only. None of the built-in actions has an
   authoritative charge, so nothing is reserved.
 - **For the executor (Phase 5).**

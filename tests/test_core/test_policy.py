@@ -325,3 +325,99 @@ def test_a_rule_set_that_cannot_be_read_one_way_is_refused() -> None:
         RulePolicyEngine([rule, rule])
     with pytest.raises(ValueError, match="engine's default"):
         RulePolicyEngine([rule.model_copy(update={"id": "default"})])
+
+
+# ---- v1 is frozen ------------------------------------------------------------------------
+
+_RUNS = DimensionStatus(
+    dimension=BudgetDimension.RUNS,
+    kind="quota",
+    limit=Decimal(2),
+    reserved=Decimal(1),
+    committed=Decimal(1),
+    consumed=Decimal(1),
+    released=Decimal(0),
+    outstanding=Decimal(0),
+    remaining=Decimal(1),
+)
+
+
+def test_policy_input_identity_v1_is_pinned() -> None:
+    """Changing what v1 projects changes this value: that is a v2, not an edit of v1."""
+    spec = ChangeWorkerCount(target=RUN, workers=4)
+    context = _context(spec, capabilities=ELASTIC, budget=BudgetStatus(dimensions=(_RUNS,)))
+    assert context.input_fingerprint() == (
+        "sha256:3505b09610f40e9af4fda27e21dcb2b932e827148c9c7eee168ea77a64dbf56e"
+    )
+
+
+class _LaterElasticity(ElasticityCapabilities):
+    """A field a later release might add, that v1 does not know."""
+
+    rebalance_seconds: int | None = None
+
+
+class _LaterCapabilities(CapabilityDocument):
+    topology: str | None = None
+
+
+class _LaterDimension(DimensionStatus):
+    burn_rate: Decimal | None = None
+
+
+def test_a_field_added_later_is_not_part_of_v1() -> None:
+    spec = ChangeWorkerCount(target=RUN, workers=4)
+    now = _context(spec, capabilities=ELASTIC, budget=BudgetStatus(dimensions=(_RUNS,)))
+    later = _context(
+        spec,
+        capabilities=_LaterCapabilities(
+            distributed=ELASTIC.distributed,
+            elasticity=_LaterElasticity(
+                **ELASTIC.elasticity.model_dump(),  # type: ignore[union-attr]
+                rebalance_seconds=30,
+            ),
+            topology="ring",
+        ),
+        budget=BudgetStatus(
+            dimensions=(_LaterDimension(**_RUNS.model_dump(), burn_rate=Decimal("0.5")),)
+        ),
+    )
+    assert later.input_fingerprint() == now.input_fingerprint()
+    assert policy_input_identity_v1(later)["identity_version"] == 1
+
+
+# ---- the executor's rule -----------------------------------------------------------------
+
+
+def test_only_an_authorized_action_awaits_execution() -> None:
+    from xaytune.core.domain.action import ActionStatus
+    from xaytune.core.domain.actions import action_from_spec
+    from xaytune.core.domain.policy import PolicyDecision, PolicyProposal, awaits_execution
+
+    spec = ChangeLearningRate(target=RUN, learning_rate=1e-4)
+    context = _context(spec)
+    proposed = action_from_spec(spec, experiment_id=EXPERIMENT, proposed_by=AGENT, reason="r")
+    validated = proposed.with_status(ActionStatus.VALIDATING).with_status(ActionStatus.VALIDATED)
+
+    def decided(verdict: PolicyVerdict, action: Any = proposed) -> PolicyDecision:
+        proposal = PolicyProposal(
+            verdict=verdict,
+            reasons=("r",),
+            engine_name="e",
+            engine_version="1",
+            input_fingerprint=context.input_fingerprint(),
+        )
+        return PolicyDecision.record(proposal, action_id=action.id, context=context, actor=AGENT)
+
+    allow, approval = decided(PolicyVerdict.ALLOW), decided(PolicyVerdict.REQUIRE_APPROVAL)
+    authorized = validated.governed_by(str(allow.id), ActionStatus.VALIDATED)
+    pending = validated.governed_by(str(approval.id), ActionStatus.APPROVAL_PENDING)
+    approved = pending.with_status(ActionStatus.APPROVED)
+
+    assert awaits_execution(authorized, allow)
+    assert awaits_execution(approved, approval)
+    assert not awaits_execution(validated, None), "validated with no decision: never"
+    assert not awaits_execution(pending, approval), "not until a human approves"
+    assert not awaits_execution(authorized, approval), "a decision that is not its own"
+    other = decided(PolicyVerdict.ALLOW, action=validated.model_copy(update={}))
+    assert not awaits_execution(authorized, other)

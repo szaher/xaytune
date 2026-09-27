@@ -77,13 +77,14 @@ def test_with_no_policy_configured_a_proposal_is_denied_and_recorded(tmp_path: P
         governed = await handle.propose(
             RejectCandidate(target=target), reason="off target", proposed_by=AGENT
         )
-        return governed, await handle.actions()
+        return governed, await handle.actions(), await handle.wait()
 
-    governed, actions = _deciding(tmp_path, scenario)
+    governed, actions, result = _deciding(tmp_path, scenario)
 
     assert governed.action.status is ActionStatus.REJECTED
     assert governed.decision.engine_name == "deny-all"
     assert actions == (governed,)
+    assert result.next_stage == "decision", "a rejected action leaves nothing to wait on"
 
 
 def test_a_human_approves_and_nothing_is_carried_out(tmp_path: Path) -> None:
@@ -93,14 +94,18 @@ def test_a_human_approves_and_nothing_is_carried_out(tmp_path: Path) -> None:
             RejectCandidate(target=target), reason="off target", proposed_by=AGENT
         )
         assert governed.action.status is ActionStatus.APPROVAL_PENDING
+        awaiting = await handle.wait()
         approved = await host.approve_action(
             governed.action.id, approver=ANA, reason="agreed, it is off target"
         )
         result = await handle.wait()
-        return approved, result, await handle.status()
+        return awaiting, approved, result, await handle.status()
 
-    approved, result, status = _deciding(tmp_path, scenario, policy=REVIEWED)
+    awaiting, approved, result, status = _deciding(tmp_path, scenario, policy=REVIEWED)
 
+    assert awaiting.quiescent, "waiting for a human is not a controller working"
+    assert awaiting.next_stage == "action-approval", "the approval, not another decision"
+    assert result.quiescent and result.next_stage == "action-execution"
     assert approved.action.status is ActionStatus.APPROVED
     assert approved.decision.verdict is PolicyVerdict.REQUIRE_APPROVAL
     (node,) = result.nodes

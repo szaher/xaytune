@@ -95,6 +95,7 @@ from xaytune.core.domain.policy import (
     PolicyDecision,
     PolicyVerdict,
     applicability_problems,
+    awaits_execution,
 )
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
@@ -2627,21 +2628,22 @@ class ControlPlaneRepository:
     def unsettled_work(
         self, experiment_id: str
     ) -> tuple[tuple[RuntimeOperation, ...], tuple[Action, ...]]:
-        """The experiment's control work that has not reached an outcome.
+        """Control work actively in progress, whose outcome must still be driven or reconciled.
 
         Operations still ``INTENDED`` or ``SENT`` -- an effect requested with
         no known result -- and actions in flight: ``PROPOSED``,
         ``VALIDATING`` or ``EXECUTING``. A run can be terminal while either
         remains: a cancellation that raced natural completion leaves its
         operation unresolved after the attempt has already succeeded. Whoever
-        asks "is there anything left to do" has to ask about these too, not
+        asks "is a controller still working" has to ask about these too, not
         only about runs.
 
-        A governed action at rest is not in flight (PR-023): ``VALIDATED``
-        with its decision, ``APPROVAL_PENDING`` or ``APPROVED`` waits for a
-        person or for an executor that does not exist yet, and no controller
-        is working on it. A cancellation never rests in those states -- it is
-        recorded through to ``EXECUTING`` in one transaction.
+        Not every non-terminal action. A governed action at rest (PR-023) --
+        ``VALIDATED`` with its decision, ``APPROVAL_PENDING``, ``APPROVED`` --
+        waits for a person or an executor; no controller is driving it, and
+        :meth:`resting_actions` reports it instead. A cancellation never rests
+        in those states: it is recorded through to ``EXECUTING`` in one
+        transaction.
         """
         operations = tuple(
             operation
@@ -2655,6 +2657,22 @@ class ControlPlaneRepository:
             if action.status in _IN_FLIGHT
         )
         return operations, actions
+
+    def resting_actions(self, experiment_id: str) -> tuple[tuple[Action, ...], tuple[Action, ...]]:
+        """Governed actions at rest: awaiting a human, and awaiting an executor.
+
+        ``APPROVAL_PENDING`` awaits approval. Awaiting execution is exactly
+        :func:`~xaytune.core.domain.policy.awaits_execution`: ``VALIDATED``
+        with an ``ALLOW`` decision, or ``APPROVED`` with a
+        ``REQUIRE_APPROVAL`` one.
+        """
+        approval, execution = [], []
+        for action in self.actions.for_experiment(experiment_id):
+            if action.status is ActionStatus.APPROVAL_PENDING:
+                approval.append(action)
+            elif awaits_execution(action, self.policy.for_action(str(action.id))):
+                execution.append(action)
+        return tuple(approval), tuple(execution)
 
     def _saga_children(self, parent: Action) -> tuple[tuple[Action, RuntimeOperation | None], ...]:
         """Each child of *parent*, with the operation it caused if any."""

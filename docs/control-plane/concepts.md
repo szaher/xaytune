@@ -384,7 +384,10 @@ approval        does a human have to say yes?    when policy says so
 - **Cancellation is not proposed.** It stays controller-owned and always
   possible, through `handle.cancel()`.
 - **Nothing is executed yet.** A proposed action waiting for approval or for an
-  executor does not keep `wait()` from returning. When execution arrives, it may
+  executor does not keep `wait()` from returning. Instead, `next_stage` says
+  what it waits for, ahead of anything the candidates suggest:
+  `"action-approval"` while an action awaits a human, then
+  `"action-execution"` while an authorized one awaits an executor. When execution arrives, it may
   carry out an action that is `VALIDATED` with an `ALLOW` decision, or
   `APPROVED` with a `REQUIRE_APPROVAL` decision. It must check again, at that
   moment, that the action still applies.

@@ -52,11 +52,21 @@ __all__ = [
     "RunOutcome",
 ]
 
-NextStage = Literal["evaluation", "decision", "planning", "failure-handling"]
-"""Advisory: the controller work that would move the experiment on.
+NextStage = Literal[
+    "action-approval",
+    "action-execution",
+    "evaluation",
+    "decision",
+    "planning",
+    "failure-handling",
+]
+"""Advisory: the work that would move the experiment on.
 
 ```text
 None                 the experiment is terminal
+"action-approval"    a proposed action awaits a human's approval
+"action-execution"   an authorized action awaits an executor: VALIDATED with an
+                     ALLOW decision, or APPROVED with a REQUIRE_APPROVAL one
 "decision"           a candidate is DECIDING: its decision was deferred
 "evaluation"         a trained candidate is unevaluated, or evaluating
 "planning"           the experiment is ACTIVE and every candidate was rejected
@@ -74,7 +84,13 @@ node in ``DECIDING`` that the decision engine could not decide -- its
 ``REJECTED`` -- never from candidates merely having ended: a failed or
 cancelled candidate is ``"failure-handling"``, even beside a rejected one.
 A ``REJECT`` judges the candidate, not the experiment, and what comes next is
-another candidate: a planner's work, which does not exist yet."""
+another candidate: a planner's work, which does not exist yet.
+
+The two action stages come first: an action someone proposed and is waiting
+on is what comes next, before anything the candidates' states suggest -- a
+candidate ``DECIDING`` with a rejection awaiting approval needs the approval,
+not another decision. Nothing executes actions yet, so ``"action-execution"``
+is a resting boundary for now (PR-023)."""
 
 _FOLLOW_INTERVAL_SECONDS = 0.05
 

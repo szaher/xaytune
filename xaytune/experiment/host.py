@@ -574,9 +574,14 @@ class EmbeddedControllerHost:
         operations, actions = self.repository.unsettled_work(str(experiment_id))
         settled = settled and not operations and not actions
 
+        awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
         next_stage: NextStage | None
         if experiment.is_terminal:
             next_stage = None
+        elif awaiting_approval:
+            next_stage = "action-approval"
+        elif awaiting_execution:
+            next_stage = "action-execution"
         elif deciding:
             next_stage = "decision"
         elif trained or evaluating:

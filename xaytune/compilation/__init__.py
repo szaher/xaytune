@@ -25,6 +25,7 @@ from xaytune.core.capabilities import CapabilityDocument, PluginDescriptor
 from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.execution import TrainingExecutionSpec
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.support import SupportResult  # moved to core in PR-022; re-exported
 
 __all__ = ["CompilationContext", "SupportResult", "TrainerCompiler", "UnsupportedCandidateError"]
 
@@ -41,21 +42,6 @@ class UnsupportedCandidateError(ValueError):
         self.compiler = compiler
         self.reasons = reasons
         super().__init__(f"{compiler} cannot compile this candidate: " + "; ".join(reasons))
-
-
-class SupportResult(FrozenDomainModel):
-    """Whether a compiler can handle a candidate, and if not, why.
-
-    A bare ``False`` is not actionable: a planner that learns only "no" cannot
-    tell a missing algorithm from an unsupported adapter, and cannot propose
-    anything better. So refusal carries reasons.
-    """
-
-    supported: bool
-    reasons: tuple[str, ...] = Field(default_factory=tuple)
-
-    def __bool__(self) -> bool:
-        return self.supported
 
 
 class CompilationContext(FrozenDomainModel):

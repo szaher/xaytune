@@ -6,18 +6,23 @@ happened outside the process*. ADR-005 §5 requires them to commit together, so
 a crash can never leave an intent that nothing will act on, or an external
 effect whose cause is unrecorded.
 
-This module is the **substrate only**. `PolicyEngine`, approvals, budget
-authorization and every mutating action type arrive in Phase 4; PR-006a ships
-the aggregate, its state machine and the three cancellation types, because
-ADR-013 cancellation needs a durable owner for its intent two phases before
-policy exists.
+This module is the **substrate**: the aggregate and its state machine,
+shipped by PR-006a because ADR-013 cancellation needs a durable owner for its
+intent two phases before policy exists. What each type *means* -- its schema,
+its mutation class, the targets it acts on -- is
+:mod:`xaytune.core.domain.actions` (PR-022); `PolicyEngine` and
+approvals are PR-023.
+
+An ``Action`` loads from its own fields whatever its type: a record whose
+type is no longer registered (an uninstalled plugin's) is still history. Only
+recording a new one, or reading its typed spec, needs the type registered.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Literal, NoReturn
 
 from pydantic import Field
 
@@ -97,43 +102,58 @@ CANCELLATION_TYPES: tuple[str, ...] = (
     "cancel-run",
     "cancel-experiment",
 )
-"""The only action types band B creates.
+"""The cancellation types, which predate the typed payload envelope.
 
 ``cancel-attempt`` is workload-neutral: it targets a training or an evaluation
 attempt. Splitting it per workload would duplicate one operation on one kind of
-subject, differing only in which table the target lives in.
+subject, differing only in which table the target lives in. Their payload is
+``{}``, read as schema version 1 (PR-022).
 """
-
-_REGISTRY: set[str] = set(CANCELLATION_TYPES)
 
 
 class UnknownActionTypeError(DomainError):
-    """An action names a type no one registered.
+    """An action names a type, at a schema version, that no one registered.
 
-    The vocabulary lives here rather than in a database ``CHECK`` because
-    SQLite cannot alter a ``CHECK`` in place: freezing the list in the schema
-    would schedule a table rebuild for Phase 4, which adds many types, and for
-    the plugin-defined types intended after it. Structural invariants belong to
-    the database; an extensible vocabulary belongs to the layer that can
-    actually change.
+    The vocabulary lives in the registry
+    (:func:`~xaytune.core.domain.actions.register_action`) rather than
+    in a database ``CHECK`` because SQLite cannot alter a ``CHECK`` in place,
+    and plugins add types. Structural invariants belong to the database; an
+    extensible vocabulary belongs to the layer that can actually change.
     """
 
-    def __init__(self, action_type: str) -> None:
+    def __init__(self, action_type: str, *, version: str = "1") -> None:
+        from xaytune.core.domain.actions import action_descriptors
+
         self.action_type = action_type
+        self.version = version
+        known = sorted({f"{d.type} v{d.version}" for d in action_descriptors()})
         super().__init__(
-            f"unknown action type {action_type!r}; registered types are "
-            f"{', '.join(sorted(_REGISTRY))}"
+            f"unknown action type {action_type!r} at schema version {version}; "
+            f"registered: {', '.join(known)}"
         )
 
 
-def register_action_type(action_type: str) -> None:
-    """Register an action type so actions of it may be created."""
-    _REGISTRY.add(action_type)
+def register_action_type(action_type: str) -> NoReturn:
+    """Removed in PR-022: an action type must come with a schema.
+
+    Kept importable so code written against ``1.0.0a1`` fails with directions
+    rather than an ``ImportError``.
+
+    Raises:
+        DomainError: Always.
+    """
+    raise DomainError(
+        f"register_action_type({action_type!r}) no longer permits schema-less actions; "
+        f"define an ActionSpec subclass and call "
+        f"register_action(ActionDescriptor.for_spec(YourSpec, provider=...))"
+    )
 
 
 def registered_action_types() -> frozenset[str]:
-    """Return every currently registered action type."""
-    return frozenset(_REGISTRY)
+    """Every action type registered at any schema version."""
+    from xaytune.core.domain.actions import action_descriptors
+
+    return frozenset(d.type for d in action_descriptors())
 
 
 class Action(AggregateModel):
@@ -171,8 +191,6 @@ class Action(AggregateModel):
     updated_at: datetime = Field(default_factory=utc_now)
 
     def model_post_init(self, _context: object) -> None:
-        if self.type not in _REGISTRY:
-            raise UnknownActionTypeError(self.type)
         if (self.status is ActionStatus.SUCCEEDED) != (self.outcome is not None):
             raise DomainError(
                 f"an outcome is present exactly when an action has SUCCEEDED; "

@@ -790,6 +790,56 @@ The substrate exists from PR-006a; this adds the types that change training:
 `ChangeLearningRate`, `ResizeMicrobatch`, `ChangeRewardCoefficient` and the rest,
 each with its validation rules.
 
+**As built** (`xaytune/core/domain/actions/`): typed, versioned *intent*
+compiled into the existing `Action.type + target + payload`. There is no
+migration, and nothing is executed.
+
+- **Contract.**
+  - `ActionSpec` carries `type`, `version`, a typed `target` and typed
+    parameters. It refuses unknown fields, NaN and infinity, and holds data
+    only.
+  - `ActionDescriptor` records the type, version, `MutationClass`, target
+    kinds, spec class, provider (`None` means built in, otherwise a
+    `PluginDescriptor`) and an optional static `validator`.
+  - `MutationClass` (`OPERATIONAL`, `SCIENTIFIC_INTERVENTION`, `EXPERIMENT`)
+    is declared by each type, never inferred. `OPERATIONAL` means it does not
+    alter scientific identity, not that it must produce an `ExecutionOverride`.
+- **Vocabulary.**
+  - Operational: `resize-microbatch`, `change-gradient-accumulation`,
+    `change-worker-count`, `change-checkpoint-interval`, `cancel-attempt`,
+    `cancel-run`.
+  - Scientific: `change-learning-rate`, `change-scheduler`, `change-warmup`.
+  - Experiment: `cancel-experiment`, `reject-candidate`, `promote-candidate`.
+  - Deferred: `change-reward-coefficient` (`RewardSpec` has no weights),
+    `stop-experiment` (no draining lifecycle), and changes to the dataset,
+    base model, algorithm, optimizer, LoRA rank or adapter.
+- **Durable envelope.** The payload is `{"schema_version", "parameters"}`,
+  canonical at every depth, plus `provider` (provider, plugin name, API
+  version) for a plugin's type. `plugin_version` is excluded on purpose: the
+  payload is part of an action's request identity, and a compatible upgrade
+  is the same contract (ADR-008). `type` and `target` are not repeated.
+  Cancellations keep `{}` as implicit version 1, so the rows `1.0.0a1` wrote
+  are unchanged.
+- **Reading and writing.**
+  - `ActionStore._insert` runs `validate_intent` (schema, then the plugin
+    validator), so a malformed action is never written.
+  - Reads never need the schema, so history outlives a plugin. `spec_of`
+    fails closed on an unknown type, version or provider.
+- **Registration.** Only explicit `register_action`, with no entry-point
+  discovery; one shared discovery for every plugin kind is planned instead.
+  `register_action_type(str)` stays importable but raises.
+- **Runtime-neutral.** `workers` counts logical training workers, as
+  `ResourceRequirements.workers` does. Mapping them onto pods, actors or GPUs
+  is the runtime's job (PR-033).
+- **Context goes to PR-023.** Whether the target exists and is live, runtime
+  support, elastic ranges, budget, approval and policy are PR-023's to check.
+- **Later extension points.**
+  - Custom budget dimensions need a meter that stays authoritative across a
+    controller restart before they can be hard-enforced; otherwise they are
+    refused or observe-only (the lesson of PR-016's wall time).
+  - Custom objectives extend through `DecisionEngine`, not by subclassing
+    `Objective`.
+
 ### PR-023 — PolicyEngine
 
 Budget authorization pieces land here too: recovery in Phase 5 proposes Actions,

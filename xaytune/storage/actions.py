@@ -15,6 +15,7 @@ import json
 import sqlite3
 
 from xaytune.core.domain.action import Action
+from xaytune.core.domain.actions import validate_intent
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.storage.journal import IdempotencyConflictError, _require_transaction
 
@@ -115,7 +116,20 @@ class ActionStore:
             raise IdempotencyConflictError(str(existing.id), differing, kind="action")
 
     def _insert(self, action: Action) -> None:
+        """Record a new intent. Only one its type's registered schema accepts.
+
+        Reading never needs the schema -- history outlives an uninstalled
+        plugin -- but writing always does: a payload nobody can check never
+        becomes durable intent (PR-022).
+
+        Raises:
+            UnknownActionTypeError: If the type at its schema version is not
+                registered.
+            ActionPayloadError: If the payload does not validate against it.
+            UnsupportedActionError: If its plugin's static validation refuses it.
+        """
         _require_transaction(self._connection, "actions")
+        validate_intent(action)
         self._connection.execute(
             "INSERT INTO actions (id, experiment_id, type, status, outcome, "
             "target_kind, target_id, proposed_by_json, reason, payload_json, "

@@ -5,7 +5,6 @@ run recorded                     runs          reserve 1
 training attempt recorded        parallel_runs reserve 1   (full → CapacityUnavailableError)
 training submission confirmed    both          commit     (subtracts nothing again)
 attempt ends                     failures      consume 1 if FAILED (not PREEMPTED, CANCELLED)
-                                 wall time     consume ended_at - started_at
 training attempt ends            parallel_runs release
 run ends                         runs          consume if committed, else release
 ```
@@ -51,7 +50,6 @@ ACTOR = Actor(type="system", id="controller")
 RUNS = BudgetDimension.RUNS
 PARALLEL = BudgetDimension.PARALLEL_RUNS
 FAILURES = BudgetDimension.FAILURES
-WALL = BudgetDimension.WALL_TIME_SECONDS
 
 
 @pytest.fixture
@@ -130,11 +128,6 @@ def _entries(repo: ControlPlaneRepository, node: Any) -> list[tuple[str, str, st
         (e.dimension.value, e.kind.value, e.subject_kind.value)
         for e in repo.budget.entries(str(node.experiment_id))
     ]
-
-
-def _seconds(attempt: Any) -> Decimal:
-    elapsed = attempt.ended_at - attempt.started_at
-    return Decimal(elapsed // elapsed.resolution) / 1_000_000
 
 
 # ---- nothing limited, nothing written ---------------------------------------------------
@@ -243,7 +236,7 @@ def test_retrying_a_recorded_attempt_takes_no_new_slot(repo: ControlPlaneReposit
     assert _status(repo, node, PARALLEL).reserved == 1
 
 
-# ---- failures and wall time: metered as attempts end -----------------------------------
+# ---- failures: counted as attempts end ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -259,23 +252,20 @@ def test_retrying_a_recorded_attempt_takes_no_new_slot(repo: ControlPlaneReposit
 def test_only_a_failure_is_a_failure(
     repo: ControlPlaneRepository, status: RunAttemptStatus, failures: int
 ) -> None:
-    node = _node(repo, max_failures=5, max_wall_time_seconds=3600)
+    node = _node(repo, max_failures=5)
     run = repo.create_run(make_run(node), actor=ACTOR)
-    ended = _end(repo, _submitted(repo, run), status)
+    _end(repo, _submitted(repo, run), status)
 
     assert _status(repo, node, FAILURES).consumed == failures
-    assert _status(repo, node, WALL).consumed == _seconds(ended), "wall time, whatever the end"
 
 
-def test_an_evaluation_failure_counts_and_its_time_is_metered(
-    repo: ControlPlaneRepository,
-) -> None:
-    node = _node(repo, max_failures=5, max_wall_time_seconds=3600)
+def test_an_evaluation_failure_counts(repo: ControlPlaneRepository) -> None:
+    node = _node(repo, max_failures=5)
     evaluation = _evaluation_run(node)
     _begin(repo, node, evaluation)
     attempt, _ = _evaluation_attempt(repo, evaluation)
     attempt = _evaluation_running(repo, attempt)
-    failed = repo.transition_evaluation_attempt(
+    repo.transition_evaluation_attempt(
         attempt.id,
         expected_revision=attempt.revision,
         new_status=EvaluationAttemptStatus.FAILED,
@@ -283,10 +273,6 @@ def test_an_evaluation_failure_counts_and_its_time_is_metered(
     )
 
     assert _status(repo, node, FAILURES).consumed == 1
-    assert _status(repo, node, WALL).consumed == _seconds(failed)
-    assert _status(repo, node, BudgetDimension.WALL_TIME_SECONDS).reserved == 0, (
-        "nothing is reserved for time nothing bounds"
-    )
 
 
 def test_used_up_failures_refuse_the_next_run_and_the_next_evaluation(
@@ -349,7 +335,7 @@ def test_the_experiment_is_exhausted_only_once_nothing_is_running(
 def test_an_attempt_ends_with_its_costs_or_not_at_all(
     repo: ControlPlaneRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    node = _node(repo, max_failures=2, max_wall_time_seconds=3600, max_parallel_runs=1)
+    node = _node(repo, max_failures=2, max_parallel_runs=1)
     run = repo.create_run(make_run(node), actor=ACTOR)
     attempt = _submitted(repo, run)
     for step in (RunAttemptStatus.QUEUED, RunAttemptStatus.STARTING, RunAttemptStatus.RUNNING):
@@ -375,11 +361,11 @@ def test_an_attempt_ends_with_its_costs_or_not_at_all(
         )
 
     assert repo.aggregates.load_attempt(str(attempt.id)).status is RunAttemptStatus.RUNNING
-    assert _entries(repo, node) == before, "no failure, no time, no release without the rest"
+    assert _entries(repo, node) == before, "no failure without the slot's release"
 
 
 def test_settling_again_writes_nothing(repo: ControlPlaneRepository) -> None:
-    node = _node(repo, max_runs=2, max_failures=2, max_wall_time_seconds=3600)
+    node = _node(repo, max_runs=2, max_failures=2)
     run = repo.create_run(make_run(node), actor=ACTOR)
     _end(repo, _submitted(repo, run), RunAttemptStatus.FAILED)
     _finish(repo, run, RunStatus.FAILED)
@@ -427,13 +413,14 @@ def test_the_database_keeps_the_ledger_append_only(
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):
             with write_transaction(connection):
                 connection.execute(statement)
-    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
-        with write_transaction(connection):
-            connection.execute(
-                "INSERT INTO budget_ledger VALUES "
-                "('x', ?, 'runs', 'reserve', '0', 'run', 'run_x', '2026-01-01')",
-                (str(node.experiment_id),),
-            )
+    for dimension, amount in (("runs", "0"), ("wall_time_seconds", "1")):
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+            with write_transaction(connection):
+                connection.execute(
+                    "INSERT INTO budget_ledger VALUES "
+                    "('x', ?, ?, 'consume', ?, 'run', 'run_x', '2026-01-01')",
+                    (str(node.experiment_id), dimension, amount),
+                )
 
 
 def test_the_same_entry_with_another_amount_is_a_conflict(repo: ControlPlaneRepository) -> None:

@@ -17,19 +17,18 @@ remaining   = limit - consumed - outstanding
 **Two kinds of limit.**
 
 - A **quota** is spent: once it is used up, the next effect is not taken.
-  ``runs`` is hard, reserved before a run is recorded; ``failures`` is hard,
-  consumed as attempts fail; ``wall_time_seconds`` is soft, metered after an
-  attempt ends, so it can stop the next effect but cannot bound one already
-  running. Consuming past a limit is an **overrun**; reaching it exactly is
-  only exhaustion.
+  ``runs`` is reserved before a run is recorded; ``failures`` is consumed as
+  attempts fail. Consuming past a limit is an **overrun**; reaching it
+  exactly is only exhaustion.
 - A **capacity** is held, never spent: ``parallel_runs`` is a semaphore on
   live training attempts. When it is full, the next attempt waits for a slot;
   it never exhausts the experiment.
 
 **What is not enforced** is refused rather than pretended:
-``max_gpu_hours``, ``max_tokens`` and ``max_cost`` have no reliable measure
-yet -- GPUs requested times wall time is not GPU usage -- so a budget that
-sets one is refused at submission.
+``max_wall_time_seconds``, ``max_gpu_hours``, ``max_tokens`` and ``max_cost``
+have no authoritative measure yet -- attempt timestamps are stamped by the
+controller when it observes a change, so a restart can shrink a workload's
+duration to seconds -- so a budget that sets one is refused at submission.
 """
 
 from __future__ import annotations
@@ -68,7 +67,6 @@ class BudgetDimension(str, Enum):
     RUNS = "runs"
     PARALLEL_RUNS = "parallel_runs"
     FAILURES = "failures"
-    WALL_TIME_SECONDS = "wall_time_seconds"
 
     @property
     def is_capacity(self) -> bool:
@@ -95,10 +93,14 @@ _LIMIT_FIELDS: dict[BudgetDimension, str] = {
     BudgetDimension.RUNS: "max_runs",
     BudgetDimension.PARALLEL_RUNS: "max_parallel_runs",
     BudgetDimension.FAILURES: "max_failures",
-    BudgetDimension.WALL_TIME_SECONDS: "max_wall_time_seconds",
 }
 
 _UNMEASURED: dict[str, str] = {
+    "max_wall_time_seconds": (
+        "workload duration is not yet reported authoritatively across runtime and "
+        "controller restarts: an attempt's timestamps are when the controller "
+        "observed it, not when it ran"
+    ),
     "max_gpu_hours": (
         "GPU usage is not measured: GPUs requested times wall time is not what a "
         "workload used, and a worker may choose its device itself"

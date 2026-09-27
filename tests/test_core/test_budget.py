@@ -72,6 +72,20 @@ def test_a_limit_is_finite_and_non_negative_and_capacity_is_at_least_one(
         BudgetSpec(**fields)
 
 
+def test_only_runs_failures_and_parallel_runs_are_enforced() -> None:
+    every = BudgetSpec(
+        max_runs=1,
+        max_parallel_runs=1,
+        max_failures=1,
+        max_wall_time_seconds=1,
+        max_gpu_hours=1.0,
+        max_tokens=1,
+        max_cost=Decimal(1),
+    )
+    assert set(limits(every)) == {RUNS, BudgetDimension.PARALLEL_RUNS, BudgetDimension.FAILURES}
+    assert {d.value for d in BudgetDimension} == {"runs", "parallel_runs", "failures"}
+
+
 def test_zero_is_a_limit_not_the_absence_of_one() -> None:
     assert limits(BudgetSpec(max_runs=0)) == {RUNS: Decimal(0)}
     assert limits(BudgetSpec()) == {}
@@ -79,14 +93,18 @@ def test_zero_is_a_limit_not_the_absence_of_one() -> None:
 
 
 def test_what_nothing_measures_is_refused_with_why() -> None:
-    reasons = budget_refusals(BudgetSpec(max_gpu_hours=1.0, max_tokens=10, max_cost=Decimal(1)))
+    reasons = budget_refusals(
+        BudgetSpec(max_wall_time_seconds=60, max_gpu_hours=1.0, max_tokens=10, max_cost=Decimal(1))
+    )
     assert [reason.split(" ")[0] for reason in reasons] == [
+        "max_wall_time_seconds",
         "max_gpu_hours",
         "max_tokens",
         "max_cost",
     ]
-    assert "GPUs requested times wall time is not what a workload used" in reasons[0]
-    assert budget_refusals(BudgetSpec(max_runs=1, max_wall_time_seconds=60)) == ()
+    assert "not when it ran" in reasons[0], "controller-observed timestamps are not duration"
+    assert "GPUs requested times wall time is not what a workload used" in reasons[1]
+    assert budget_refusals(BudgetSpec(max_runs=1, max_failures=1, max_parallel_runs=1)) == ()
 
 
 # ---- derived, not counted ----------------------------------------------------------------

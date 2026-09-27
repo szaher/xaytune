@@ -3,6 +3,7 @@
 ```text
 submit      a limit nothing measures (GPU-hours, tokens, cost)   refused, nothing recorded
             no run left for the first run                         recorded, BUDGET_EXHAUSTED
+            wall time, which nothing reports authoritatively yet  refused, nothing recorded
 train       runs reserved → committed → consumed; slot held and released
 evaluate    a used-up quota refuses the evaluation                BUDGET_EXHAUSTED, node trained
 restart     every entry was written with its change               nothing to settle, nothing twice
@@ -46,7 +47,6 @@ from xaytune.storage import write_transaction
 RUNS = BudgetDimension.RUNS
 PARALLEL = BudgetDimension.PARALLEL_RUNS
 FAILURES = BudgetDimension.FAILURES
-WALL = BudgetDimension.WALL_TIME_SECONDS
 
 
 @pytest.fixture(autouse=True)
@@ -68,12 +68,21 @@ def _dimension(result: Any, dimension: BudgetDimension) -> Any:
     return found
 
 
-def test_a_limit_nothing_measures_is_refused_before_anything_is_recorded(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "limit",
+    [{"max_wall_time_seconds": 3600}, {"max_gpu_hours": 2.0}],
+    ids=["wall-time", "gpu-hours"],
+)
+def test_a_limit_nothing_measures_is_refused_before_anything_is_recorded(
+    tmp_path: Path, limit: dict
+) -> None:
+    (field,) = limit
+
     async def scenario() -> tuple:
         host = EmbeddedControllerHost(tmp_path / "state.db", evaluators=EVALUATORS)
         try:
-            with pytest.raises(UnsupportedBudgetError, match="max_gpu_hours") as refused:
-                await host.submit(_budgeted(tmp_path, max_runs=1, max_gpu_hours=2.0))
+            with pytest.raises(UnsupportedBudgetError, match=field) as refused:
+                await host.submit(_budgeted(tmp_path, max_runs=1, **limit))
             return refused.value, host._connection.execute("SELECT id FROM experiments").fetchall()
         finally:
             await host.close()
@@ -100,9 +109,7 @@ def test_no_run_left_for_the_first_run_exhausts_the_experiment_before_any_effect
 
 def test_a_budgeted_experiment_trains_evaluates_and_accounts_for_both(tmp_path: Path) -> None:
     """Reaching max_runs does not stop the evaluation: it is not a run."""
-    spec = _budgeted(
-        tmp_path, max_runs=1, max_parallel_runs=1, max_failures=1, max_wall_time_seconds=3600
-    )
+    spec = _budgeted(tmp_path, max_runs=1, max_parallel_runs=1, max_failures=1)
     result, experiment, events = _drive(tmp_path, spec)
 
     assert experiment.status is ExperimentStatus.ACTIVE
@@ -112,23 +119,22 @@ def test_a_budgeted_experiment_trains_evaluates_and_accounts_for_both(tmp_path: 
     slots = _dimension(result, PARALLEL)
     assert (slots.reserved, slots.released, slots.outstanding) == (1, 1, 0)
     assert _dimension(result, FAILURES).consumed == 0
-    wall = _dimension(result, WALL)
-    assert wall.consumed > 0 and wall.reserved == 0
+    assert result.budget is not None and len(result.budget.dimensions) == 3
     assert not any(e.event_type in ("BudgetExhausted", "BudgetOverrun") for e in events)
 
 
-class _TimeRunsOut(EmbeddedControllerHost):
-    """Training used more than the wall-time budget, as a slow run would."""
+class _FailuresRunOut(EmbeddedControllerHost):
+    """An earlier attempt failed before training succeeded, using the last failure allowed."""
 
     async def _continue_to_evaluation(self, experiment_id: Any, node_id: Any) -> None:
         with write_transaction(self.repository._connection):
             self.repository._ledger(
                 str(experiment_id),
-                WALL,
+                FAILURES,
                 LedgerEntryKind.CONSUME,
-                Decimal(7200),
+                Decimal(1),
                 BudgetSubjectKind.TRAINING_ATTEMPT,
-                "a-slow-training-attempt",
+                "an-earlier-failed-attempt",
                 _ACTOR,
                 (),
             )
@@ -137,7 +143,7 @@ class _TimeRunsOut(EmbeddedControllerHost):
 
 def test_a_used_up_quota_refuses_the_evaluation_and_ends_the_experiment(tmp_path: Path) -> None:
     result, experiment, events = _drive(
-        tmp_path, _budgeted(tmp_path, max_wall_time_seconds=3600), host_class=_TimeRunsOut
+        tmp_path, _budgeted(tmp_path, max_failures=1), host_class=_FailuresRunOut
     )
 
     assert experiment.status is ExperimentStatus.BUDGET_EXHAUSTED
@@ -147,20 +153,18 @@ def test_a_used_up_quota_refuses_the_evaluation_and_ends_the_experiment(tmp_path
     assert node.evaluations == ()
     assert [run.status for run in node.runs] == [RunStatus.SUCCEEDED]
     assert _evaluator_workloads(tmp_path) == []
-    kinds = [e.event_type for e in events]
-    assert kinds.index("BudgetOverrun") < kinds.index("BudgetExhausted")
-    assert _dimension(result, WALL).overrun
+    (exhausted,) = [e for e in events if e.event_type == "BudgetExhausted"]
+    assert "failures" in exhausted.payload["reasons"][0]
+    failures = _dimension(result, FAILURES)
+    assert failures.exhausted and not failures.overrun, "reaching the limit is enough"
+    assert not any(e.event_type == "BudgetOverrun" for e in events)
 
 
 def test_a_restart_finds_every_cost_already_written_and_writes_none_twice(
     tmp_path: Path,
 ) -> None:
     spec = _evaluated(tmp_path, hold=True).model_copy(
-        update={
-            "budget": BudgetSpec(
-                max_runs=1, max_parallel_runs=1, max_failures=3, max_wall_time_seconds=3600
-            )
-        }
+        update={"budget": BudgetSpec(max_runs=1, max_parallel_runs=1, max_failures=3)}
     )
     experiment_id = _crash(tmp_path, "evaluating", spec)
 
@@ -176,11 +180,10 @@ def test_a_restart_finds_every_cost_already_written_and_writes_none_twice(
         entries = repo.budget.entries(experiment_id)
         keys = Counter((e.subject_kind, e.subject_id, e.dimension, e.kind) for e in entries)
         assert max(keys.values()) == 1, "no entry was written twice"
-        wall = [e for e in entries if e.dimension is WALL]
-        assert {e.subject_kind for e in wall} == {
+        assert {e.subject_kind for e in entries} == {
+            BudgetSubjectKind.RUN,
             BudgetSubjectKind.TRAINING_ATTEMPT,
-            BudgetSubjectKind.EVALUATION_ATTEMPT,
-        }, "training and the adopted evaluation both metered"
+        }, "the run and its slot; the evaluation spent nothing it did not fail"
         assert repo.settle_budget(experiment_id, actor=_ACTOR) == 0
     finally:
         connection.close()

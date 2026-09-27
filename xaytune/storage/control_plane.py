@@ -1407,8 +1407,8 @@ class ControlPlaneRepository:
     def _require_budget(self, experiment_id: str, *, new_run: bool) -> None:
         """Refuse a new effect a used-up quota cannot cover. Capacity is not judged here.
 
-        A new run needs one run left; any effect needs failures and wall time
-        not yet used up. Reaching a limit exactly is enough to stop the next
+        A new run needs one run left; any effect needs failures not yet used
+        up. Reaching a limit exactly is enough to stop the next
         effect.
 
         Raises:
@@ -1488,7 +1488,6 @@ class ControlPlaneRepository:
 
         ```text
         training or evaluation attempt ends   FAILED → failures +1   (not PREEMPTED, CANCELLED)
-                                              ran    → wall time + ended_at - started_at
         training attempt ends                 its parallel-run slot is released
         run ends                              committed → runs consumed; never submitted → released
         ```
@@ -1576,19 +1575,6 @@ class ControlPlaneRepository:
                 BudgetDimension.FAILURES,
                 LedgerEntryKind.CONSUME,
                 Decimal(1),
-                subject_kind,
-                str(attempt.id),
-                actor,
-                destinations,
-            )
-        if attempt.started_at is not None and attempt.ended_at is not None:
-            elapsed = attempt.ended_at - attempt.started_at
-            seconds = Decimal(elapsed // elapsed.resolution) / 1_000_000
-            self._ledger(
-                experiment_id,
-                BudgetDimension.WALL_TIME_SECONDS,
-                LedgerEntryKind.CONSUME,
-                seconds,
                 subject_kind,
                 str(attempt.id),
                 actor,

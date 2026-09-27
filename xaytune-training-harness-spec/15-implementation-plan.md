@@ -735,8 +735,8 @@ Implement reserve/commit/consume/release. As built:
     `remaining = limit − consumed − outstanding`. A commit is provenance and
     subtracts nothing again.
   - **Atomic settlement is the invariant.** Every entry commits with the
-    transition that causes it: an attempt's failure, its wall time and its
-    slot's release commit with it reaching `FAILED`. `settle_budget()` on
+    transition that causes it: an attempt's failure and its slot's
+    release commit with it reaching `FAILED`. `settle_budget()` on
     attach is only a safety net, and normally writes nothing.
 - **Dimensions.**
   - `max_runs` is a hard quota per `Run`, not per attempt. It is reserved when
@@ -744,11 +744,16 @@ Implement reserve/commit/consume/release. As built:
     when the run ends, and released if it ends unsubmitted.
   - `max_failures` is a hard quota: one per `FAILED` training or evaluation
     attempt.
-  - `max_wall_time_seconds` is a soft quota, metered from attempt timestamps.
   - `max_parallel_runs` is a capacity (a semaphore on live training
     attempts). When it is full, the next attempt waits.
-  - Refused at submission: `max_gpu_hours`, `max_tokens`, `max_cost`.
-  - Evaluations spend wall time and failures, not runs or parallel runs.
+  - Refused at submission: `max_wall_time_seconds`, `max_gpu_hours`,
+    `max_tokens`, `max_cost`. Wall time was built and withdrawn in review:
+    attempt timestamps are stamped when the controller observes a change, so
+    a restart that replays a worker's start after it finished records
+    seconds for an hour's run. It returns once the runtime contract reports
+    duration authoritatively (a runtime `started_at`/`finished_at`, or
+    resource usage).
+  - Evaluations spend failures, not runs or parallel runs.
 - **Exhaustion.** A used-up quota refuses the next budgeted effect before any
   write. In-flight work drains, and the experiment becomes `BUDGET_EXHAUSTED`
   once nothing is live. Consuming past a limit emits `BudgetOverrun`;

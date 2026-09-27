@@ -50,11 +50,11 @@ class ExperimentSpec(FrozenDomainModel):
         budget: What the experiment may spend, if anything is limited. Recorded
             with it, and enforced through the budget ledger
             (:mod:`xaytune.core.domain.budget`): ``max_runs`` and
-            ``max_failures`` are hard quotas, ``max_wall_time_seconds`` is
-            metered after each workload ends, and ``max_parallel_runs`` is a
+            ``max_failures`` are hard quotas, and ``max_parallel_runs`` is a
             capacity -- when it is full the next run waits. A budget that sets
-            ``max_gpu_hours``, ``max_tokens`` or ``max_cost``, which nothing
-            measures yet, is refused at submission.
+            ``max_wall_time_seconds``, ``max_gpu_hours``, ``max_tokens`` or
+            ``max_cost``, which nothing measures authoritatively yet, is
+            refused at submission.
     """
 
     name: str = Field(min_length=1)

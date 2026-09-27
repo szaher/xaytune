@@ -36,7 +36,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Evaluation orchestration | Available: the built-in native evaluator, and lm-eval benchmark tasks pinned at submission (on `main`, unreleased) |
 | Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
-| Policy gates, budgets and agent-driven control | Budgets available: runs, failures, wall time and parallel runs, on a durable ledger (on `main`, unreleased); policy gates and agent control planned |
+| Policy gates, budgets and agent-driven control | Budgets available: runs, failures and parallel runs, on a durable ledger (on `main`, unreleased); policy gates and agent control planned |
 
 | Xaytune delegates |
 |---|

@@ -271,7 +271,6 @@ remaining   = limit - consumed - outstanding
 |---|---|---|
 | `max_runs` | hard quota | a **run** is reserved when recorded, committed when the runtime accepts it, consumed when it ends; released if it never reached the runtime. Retrying a run spends nothing more. |
 | `max_failures` | hard quota | 1 per `FAILED` attempt, training or evaluation (not preempted or cancelled) |
-| `max_wall_time_seconds` | soft quota | each attempt's `ended_at - started_at`, when it ends; training and evaluation |
 | `max_parallel_runs` | capacity | a slot per live training attempt, released when it ends; never spent |
 
 - **Used up stops the next effect.** A quota with nothing left refuses the
@@ -283,9 +282,12 @@ remaining   = limit - consumed - outstanding
   is policy's, which is planned.
 - **A full capacity waits.** When every parallel-run slot is held, the next
   attempt waits for one; it never exhausts the experiment.
-- **Only what is measured is enforced.** `max_gpu_hours`, `max_tokens` and
-  `max_cost` are refused at submission: GPUs requested times wall time is
-  not GPU usage, and nothing meters tokens or prices yet.
+- **Only what is measured is enforced.** `max_wall_time_seconds`,
+  `max_gpu_hours`, `max_tokens` and `max_cost` are refused at submission.
+  An attempt's timestamps are when the controller observed it, so a restart
+  can shrink an hour's run to seconds; GPUs requested times wall time is not
+  GPU usage; and nothing meters tokens or prices yet. Wall time waits for
+  runtimes to report a workload's duration themselves.
 - **Across restarts.** Each entry commits with its transition, so a crash
   cannot leave an ended attempt without its cost. An attach settles anything
   the ledger lacks, idempotently; normally that is nothing.

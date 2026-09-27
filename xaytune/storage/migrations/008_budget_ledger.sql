@@ -10,7 +10,7 @@ CREATE TABLE budget_ledger (
   id TEXT PRIMARY KEY,
   experiment_id TEXT NOT NULL REFERENCES experiments(id),
   dimension TEXT NOT NULL
-    CHECK (dimension IN ('runs', 'parallel_runs', 'failures', 'wall_time_seconds')),
+    CHECK (dimension IN ('runs', 'parallel_runs', 'failures')),
   kind TEXT NOT NULL CHECK (kind IN ('reserve', 'commit', 'consume', 'release')),
   -- A positive decimal, as text so no binary float rounds it. Nothing is
   -- recorded for nothing: an entry of zero would claim a consequence that

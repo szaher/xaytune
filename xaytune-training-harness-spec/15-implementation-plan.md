@@ -921,8 +921,9 @@ recorded as a durable governed Action. Nothing is executed.
   `CapabilityDocument` section. A field added to those models later does not
   change v1. A field policy must see becomes `policy_input_identity_v2`,
   recorded as such. `PolicyContext` rebuilds every nested model as its exact
-  v1 type from the projected fields, so a subclass carrying a later field
-  reaches no engine, and the stored snapshot is exactly what policy saw. A
+  v1 type from the projected fields, and `parameters`, `provider` and
+  capability `extensions` as base `FrozenDict`s of base values at every
+  depth, so a subclass carrying a later field or attribute reaches no engine, and the stored snapshot is exactly what policy saw. A
   runtime input policy must see goes in `CapabilityDocument.extensions`
   (identified by v1) or in a v2.
 - **Budget** is policy input only. None of the built-in actions has an

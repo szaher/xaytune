@@ -123,9 +123,11 @@ class PolicyContext(FrozenDomainModel):
 
     **What policy reads is exactly what v1 identifies.** Every nested model is
     rebuilt as its exact v1 type from the fields
-    :func:`policy_input_identity_v1` projects, so a subclass carrying a field
-    added later -- a newer ``CapabilityDocument``, ``DimensionStatus`` or
-    ``ActionTarget`` -- reaches no engine. A runtime-specific input that
+    :func:`policy_input_identity_v1` projects, and every mapping
+    (``parameters``, ``provider``, ``extensions``) as a base ``FrozenDict`` of
+    base values, so a subclass carrying anything added later -- a newer
+    ``CapabilityDocument``, ``DimensionStatus``, ``ActionTarget`` or mapping
+    -- reaches no engine. A runtime-specific input that
     policy must see goes in ``CapabilityDocument.extensions``, which v1
     identifies, or in a v2.
 
@@ -155,6 +157,16 @@ class PolicyContext(FrozenDomainModel):
     proposed_by: PolicyProposer
     budget: BudgetStatus | None = None
     capabilities: CapabilityDocument | None = None
+
+    @field_validator("parameters", mode="after")
+    @classmethod
+    def _parameters_v1(cls, parameters: FrozenDict) -> FrozenDict:
+        return _exact_mapping(parameters)
+
+    @field_validator("provider", mode="after")
+    @classmethod
+    def _provider_v1(cls, provider: FrozenDict | None) -> FrozenDict | None:
+        return None if provider is None else _exact_mapping(provider)
 
     @field_validator("target", mode="after")
     @classmethod
@@ -196,7 +208,9 @@ class PolicyContext(FrozenDomainModel):
                 )
             )
         return CapabilityDocument(
-            schema_version=document.schema_version, extensions=document.extensions, **sections
+            schema_version=document.schema_version,
+            extensions=_exact_mapping(document.extensions),
+            **sections,
         )
 
     def input_fingerprint(self) -> str:
@@ -285,6 +299,33 @@ def _budget_v1(budget: BudgetStatus | None) -> list[dict[str, Any]] | None:
         }
         for d in sorted(budget.dimensions, key=lambda d: d.dimension.value)
     ]
+
+
+def _exact_mapping(mapping: Mapping[str, Any]) -> FrozenDict:
+    """*mapping* rebuilt from its entries alone, as base types all the way down.
+
+    ``FrozenDict`` keeps a subclass instance it is given, and so does
+    ``deep_freeze`` for a nested one, a ``str`` or an ``int``: attributes a
+    subclass adds would reach policy without being identified. The base
+    types' own methods copy each value, so no subclass override is called.
+    """
+    return FrozenDict({str.__str__(key): _exact_value(value) for key, value in mapping.items()})
+
+
+def _exact_value(value: Any) -> Any:
+    if value is None or type(value) is bool:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int.__int__(value)
+    if isinstance(value, float):
+        return float.__float__(value)
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, Mapping):
+        return _exact_mapping(value)
+    if isinstance(value, tuple):
+        return tuple(_exact_value(item) for item in value)
+    raise TypeError(f"{type(value).__name__} is not a frozen domain value")
 
 
 _DIMENSION_FIELDS_V1 = (

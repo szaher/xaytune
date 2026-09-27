@@ -43,6 +43,7 @@ from xaytune.core.domain.policy import (
     PolicyVerdict,
 )
 from xaytune.core.ids import ActionId
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor
 from xaytune.core.state.status import RunStatus
 from xaytune.policy import DenyAllPolicy, PolicyRule, RulePolicyEngine
@@ -426,6 +427,60 @@ def test_a_runtime_declaring_more_than_v1_shows_policy_only_v1(
     )["context"]["capabilities"]
     assert "topology" not in stored and "rebalance_seconds" not in stored["elasticity"]
     assert stored["extensions"] == {"rack": "b"}, "extensions are how a runtime tells policy more"
+
+
+class _SecretMapping(FrozenDict):
+    @property
+    def secret(self) -> str:
+        return "admin"
+
+
+class _SecretString(str):
+    secret = "admin"
+
+
+class _ProbesExtensions:
+    name, version = POLICY.name, POLICY.version
+
+    def __init__(self) -> None:
+        self.seen: Any = None
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> PolicyProposal:
+        extensions = context.capabilities.extensions  # type: ignore[union-attr]
+        self.seen = extensions
+        leaked = (
+            hasattr(extensions, "secret")
+            or hasattr(extensions["rack"], "secret")
+            or hasattr(extensions["rack"]["row"], "secret")
+        )
+        verdict = PolicyVerdict.ALLOW if leaked else PolicyVerdict.DENY
+        return POLICY.evaluate(spec, context).model_copy(update={"verdict": verdict})
+
+
+def test_capability_extensions_reach_policy_as_their_entries_alone(
+    repo: ControlPlaneRepository, run: Any
+) -> None:
+    hostile = CapabilityDocument(
+        elasticity=ElasticityCapabilities(supported=True, max_workers=4),
+        extensions=_SecretMapping({"rack": _SecretMapping({"row": _SecretString("3")})}),
+    )
+    probe = _ProbesExtensions()
+    governed = _propose(
+        repo,
+        run,
+        ChangeWorkerCount(target=_target(run), workers=2),
+        policy=probe,
+        capabilities=hostile,
+    )
+
+    assert type(probe.seen) is FrozenDict and type(probe.seen["rack"]) is FrozenDict
+    assert type(probe.seen["rack"]["row"]) is str
+    decision = governed.decision
+    assert decision is not None and decision.verdict is PolicyVerdict.DENY
+    stored = json.loads(
+        repo._connection.execute("SELECT payload_json FROM policy_decisions").fetchone()[0]
+    )["context"]["capabilities"]["extensions"]
+    assert stored == {"rack": {"row": "3"}}, "the record holds the entries, and only them"
 
 
 class _Impersonates:

@@ -496,6 +496,71 @@ def test_a_field_added_later_is_not_part_of_v1() -> None:
     assert policy_input_identity_v1(later)["identity_version"] == 1
 
 
+class _LaterTarget(ActionTarget):
+    shard: str | None = None
+
+
+class _LaterProposer(PolicyProposer):
+    role: str | None = None
+
+
+class _ReadsWhatItShouldNot:
+    """Would allow on any later field it found; denies otherwise."""
+
+    name = "reads-later-fields"
+    version = "1"
+
+    def __init__(self) -> None:
+        self.seen: PolicyContext | None = None
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> Any:
+        self.seen = context
+        leaked = (
+            getattr(context.capabilities, "topology", None),
+            getattr(getattr(context.capabilities, "elasticity", None), "rebalance_seconds", None),
+            *(getattr(d, "burn_rate", None) for d in context.budget.dimensions),  # type: ignore[union-attr]
+            getattr(context.target, "shard", None),
+            getattr(context.proposed_by, "role", None),
+        )
+        verdict = PolicyVerdict.ALLOW if any(v is not None for v in leaked) else PolicyVerdict.DENY
+        return DenyAllPolicy().evaluate(spec, context).model_copy(update={"verdict": verdict})
+
+
+def test_policy_never_sees_a_field_v1_does_not_identify() -> None:
+    spec = ChangeWorkerCount(target=RUN, workers=4)
+    now = _context(spec, capabilities=ELASTIC, budget=BudgetStatus(dimensions=(_RUNS,)))
+    later = _context(
+        spec,
+        target=_LaterTarget(kind="run", id="run_1", shard="a"),
+        proposed_by=_LaterProposer(type="llm_agent", id="planner", role="admin"),
+        capabilities=_LaterCapabilities(
+            distributed=ELASTIC.distributed,
+            elasticity=_LaterElasticity(
+                **ELASTIC.elasticity.model_dump(),  # type: ignore[union-attr]
+                rebalance_seconds=30,
+            ),
+            topology="ring",
+        ),
+        budget=BudgetStatus(
+            dimensions=(_LaterDimension(**_RUNS.model_dump(), burn_rate=Decimal("0.5")),)
+        ),
+    )
+    engine = _ReadsWhatItShouldNot()
+
+    assert engine.evaluate(spec, later).verdict is PolicyVerdict.DENY
+    seen = engine.seen
+    assert seen is not None and seen.capabilities is not None and seen.budget is not None
+    assert type(seen.capabilities) is CapabilityDocument
+    assert type(seen.capabilities.elasticity) is ElasticityCapabilities
+    assert type(seen.budget.dimensions[0]) is DimensionStatus
+    assert type(seen.target) is ActionTarget
+    assert type(seen.proposed_by) is PolicyProposer
+    assert not hasattr(seen.capabilities, "topology")
+    assert not hasattr(seen.capabilities.elasticity, "rebalance_seconds")
+    assert seen == now, "what policy reads is exactly the v1 view"
+    assert later.input_fingerprint() == now.input_fingerprint()
+
+
 # ---- the executor's rule -----------------------------------------------------------------
 
 

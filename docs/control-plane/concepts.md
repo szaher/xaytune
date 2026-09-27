@@ -252,10 +252,52 @@ and a **decision engine** decides it.
   the same inputs returns the decision already on record; a *different*
   decision for a cycle already decided is refused.
 
+## Budgets
+
+`ExperimentSpec.budget` limits what an experiment may spend. Nothing is
+counted: every consequence of a run or an attempt is an entry in an
+append-only **ledger**, written in the same commit as the change that causes
+it, and every balance is derived from the entries.
+
+```text
+reserve   set aside before an effect      commit    the effect took place (subtracts nothing)
+consume   what was actually spent         release   a reservation no longer needed
+
+outstanding = max(reserved - consumed - released, 0)
+remaining   = limit - consumed - outstanding
+```
+
+| Limit | Kind | How it is spent |
+|---|---|---|
+| `max_runs` | hard quota | a **run** is reserved when recorded, committed when the runtime accepts it, consumed when it ends; released if it never reached the runtime. Retrying a run spends nothing more. |
+| `max_failures` | hard quota | 1 per `FAILED` attempt, training or evaluation (not preempted or cancelled) |
+| `max_wall_time_seconds` | soft quota | each attempt's `ended_at - started_at`, when it ends; training and evaluation |
+| `max_parallel_runs` | capacity | a slot per live training attempt, released when it ends; never spent |
+
+- **Used up stops the next effect.** A quota with nothing left refuses the
+  next run, attempt or evaluation before anything is written. What is already
+  running is allowed to finish, and the experiment becomes `BUDGET_EXHAUSTED`
+  only once nothing it owns is still executing, so `wait()` never sees it end
+  while a worker lives. Reaching a limit exactly is exhaustion; passing it is
+  a `BudgetOverrun` event, recorded, not acted on. What to do about an overrun
+  is policy's, which is planned.
+- **A full capacity waits.** When every parallel-run slot is held, the next
+  attempt waits for one; it never exhausts the experiment.
+- **Only what is measured is enforced.** `max_gpu_hours`, `max_tokens` and
+  `max_cost` are refused at submission: GPUs requested times wall time is
+  not GPU usage, and nothing meters tokens or prices yet.
+- **Across restarts.** Each entry commits with its transition, so a crash
+  cannot leave an ended attempt without its cost. An attach settles anything
+  the ledger lacks, idempotently; normally that is nothing.
+
+`ExperimentResult.budget` gives each limited dimension's limit, reserved,
+committed, consumed and remaining.
+
 ## Not yet
 
 These are designed in the specification and planned, but **not
 implemented**: decisions that compare candidates (promotion, noise-aware
 comparison across replicates), lm-eval generation tasks, reusing earlier
-evaluation results, policy and budgets, checkpoints and semantic recovery,
+evaluation results, policy, budgets on GPU-hours, tokens and cost,
+checkpoints and semantic recovery,
 planners and branching, daemon hosting, and runtimes other than local.

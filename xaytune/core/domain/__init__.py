@@ -12,6 +12,14 @@ from xaytune.core.domain.action import (
     register_action_type,
     registered_action_types,
 )
+from xaytune.core.domain.budget import (
+    BudgetDimension,
+    BudgetExhaustedError,
+    BudgetLedgerEntry,
+    BudgetStatus,
+    DimensionStatus,
+    UnsupportedBudgetError,
+)
 from xaytune.core.domain.candidate import (
     AdapterSpec,
     AlgorithmSpec,
@@ -81,6 +89,12 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "BudgetDimension",
+    "BudgetExhaustedError",
+    "BudgetLedgerEntry",
+    "BudgetStatus",
+    "DimensionStatus",
+    "UnsupportedBudgetError",
     "EvaluationAttempt",
     "Decision",
     "DecisionContext",

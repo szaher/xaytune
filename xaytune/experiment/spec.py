@@ -20,7 +20,7 @@ from pydantic import Field, field_validator
 
 from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.domain.evaluation import EvaluationSpec
-from xaytune.core.domain.objective import Objective
+from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.immutable import FrozenDomainModel
 
@@ -47,6 +47,14 @@ class ExperimentSpec(FrozenDomainModel):
             ``DECIDING`` with the result. It is orchestration, not identity:
             it never enters the candidate or its fingerprint, so changing it
             never means retraining.
+        budget: What the experiment may spend, if anything is limited. Recorded
+            with it, and enforced through the budget ledger
+            (:mod:`xaytune.core.domain.budget`): ``max_runs`` and
+            ``max_failures`` are hard quotas, ``max_wall_time_seconds`` is
+            metered after each workload ends, and ``max_parallel_runs`` is a
+            capacity -- when it is full the next run waits. A budget that sets
+            ``max_gpu_hours``, ``max_tokens`` or ``max_cost``, which nothing
+            measures yet, is refused at submission.
     """
 
     name: str = Field(min_length=1)
@@ -58,6 +66,7 @@ class ExperimentSpec(FrozenDomainModel):
     artifact_root: str
     hypothesis: str | None = None
     evaluation: EvaluationSpec | None = None
+    budget: BudgetSpec | None = None
 
     @field_validator("compiler", "runtime")
     @classmethod

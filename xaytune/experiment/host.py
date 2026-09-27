@@ -69,6 +69,12 @@ from xaytune.compilation import (
     TrainerCompiler,
     UnsupportedCandidateError,
 )
+from xaytune.core.domain.budget import (
+    BudgetExhaustedError,
+    CapacityUnavailableError,
+    UnsupportedBudgetError,
+    budget_refusals,
+)
 from xaytune.core.domain.decision import DecisionContext
 from xaytune.core.domain.evaluation import (
     EvaluationAttempt,
@@ -169,6 +175,8 @@ _ATTEMPT_PATH = (
 
 _LIVE_STATES = frozenset({"pending", "queued", "starting", "running"})
 _OUTCOME_POLL_SECONDS = 0.5
+# How often a training attempt waiting for a parallel-run slot looks again.
+_CAPACITY_POLL_SECONDS = 0.5
 
 _RUNTIME_OUTCOME: Mapping[str, tuple[RunAttemptStatus, RunStatus]] = {
     "succeeded": (RunAttemptStatus.SUCCEEDED, RunStatus.SUCCEEDED),
@@ -327,26 +335,36 @@ class EmbeddedControllerHost:
             UnsupportedCandidateError: If the compiler cannot run the candidate
                 exactly as declared.
             UnsupportedEvaluationError: If the evaluator cannot run the
-                evaluation exactly as declared. Nothing is recorded in any of
-                these cases: a spec that cannot run is refused at submission,
-                not after.
+                evaluation exactly as declared.
+            UnsupportedBudgetError: If the budget limits something nothing
+                measures. Nothing is recorded in any of these cases: a spec
+                that cannot run is refused at submission, not after.
+
+        A budget that has nothing left for the first run is not refused: the
+        experiment is recorded, and ends ``BUDGET_EXHAUSTED`` without starting
+        anything, which the returned handle reports.
         """
         compiler = self._compiler(spec.compiler.name)
         support = compiler.supports(spec.candidate)
         if not support:
             raise UnsupportedCandidateError(compiler.descriptor.name, support.reasons)
+        if spec.budget is not None:
+            refused = budget_refusals(spec.budget)
+            if refused:
+                raise UnsupportedBudgetError(refused)
         runtime = self._runtime(spec.runtime)
         evaluation = None if spec.evaluation is None else self._bind_evaluation(spec.evaluation)
 
         experiment = self._record_experiment(spec, compiler, runtime, evaluation)
         node = self._record_node(experiment, spec)
-        run = self._record_run(node, spec.seed)
-
-        attempt = RunAttempt(id=RunAttemptId.generate(), run_id=run.id, attempt_number=1)
-        plan = self._plan(experiment, run, attempt.id, compiler)
-        attempt, operation = self.repository.create_attempt_with_submit_intent(
-            attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
-        )
+        try:
+            run = self._record_run(node, spec.seed)
+            attempt = RunAttempt(id=RunAttemptId.generate(), run_id=run.id, attempt_number=1)
+            plan = self._plan(experiment, run, attempt.id, compiler)
+            attempt, operation = await self._create_attempt(attempt, plan.request_digest("submit"))
+        except BudgetExhaustedError as exhausted:
+            self.repository.exhaust_budget(experiment.id, reasons=exhausted.reasons, actor=_ACTOR)
+            return ExperimentHandle(experiment.id, self)
 
         await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
         return ExperimentHandle(experiment.id, self)
@@ -510,6 +528,7 @@ class EmbeddedControllerHost:
             quiescent=settled,
             next_stage=next_stage,
             nodes=tuple(nodes),
+            budget=self.repository.budget_status(experiment.id),
         )
 
     # ---- the controller loop --------------------------------------------
@@ -739,6 +758,8 @@ class EmbeddedControllerHost:
             # Recorded before a host drove experiments: nothing to adopt with.
             return
 
+        # Normally a no-op: every settlement commits with its transition.
+        self.repository.settle_budget(experiment.id, actor=_ACTOR)
         aggregates = self.repository.aggregates
         for node in aggregates.nodes_for_experiment(str(experiment.id)):
             for run in aggregates.runs_for_node(str(node.id)):
@@ -958,9 +979,16 @@ class EmbeddedControllerHost:
                     replicate=1,
                 ),
             )
-        node, _ = self.repository.begin_evaluation_cycle(
-            node.id, expected_revision=node.revision, runs=evaluation_runs, actor=_ACTOR
-        )
+        try:
+            node, _ = self.repository.begin_evaluation_cycle(
+                node.id, expected_revision=node.revision, runs=evaluation_runs, actor=_ACTOR
+            )
+        except BudgetExhaustedError as exhausted:
+            # The evaluation is the next effect, and the budget has nothing
+            # left for it: nothing starts, the node stays trained, and the
+            # experiment ends once nothing else is running.
+            self.repository.exhaust_budget(experiment.id, reasons=exhausted.reasons, actor=_ACTOR)
+            return
         for evaluation_run in evaluation_runs:
             await self._start_evaluation_run(experiment, evaluation_run)
         if not evaluation_runs:
@@ -1005,9 +1033,23 @@ class EmbeddedControllerHost:
             )
             self._reconcile_node(run.node_id)
             return
-        attempt, operation = self.repository.create_evaluation_attempt_with_submit_intent(
-            attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
-        )
+        try:
+            attempt, operation = self.repository.create_evaluation_attempt_with_submit_intent(
+                attempt, request_digest=plan.request_digest("submit"), actor=_ACTOR
+            )
+        except BudgetExhaustedError as exhausted:
+            # Before any effect, as a refusal is: the run fails with the
+            # reason, the cycle is reconciled, and the experiment ends.
+            self.repository.transition_evaluation_run(
+                run.id,
+                expected_revision=run.revision,
+                new_status=EvaluationRunStatus.FAILED,
+                actor=_ACTOR,
+                reason="budget exhausted: " + "; ".join(exhausted.reasons),
+            )
+            self._reconcile_node(run.node_id)
+            self.repository.exhaust_budget(experiment.id, reasons=exhausted.reasons, actor=_ACTOR)
+            return
         runtime = self._recorded_runtime(experiment)
         await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
 
@@ -1397,6 +1439,26 @@ class EmbeddedControllerHost:
 
     # ---- durable writes --------------------------------------------------
 
+    async def _create_attempt(
+        self, attempt: RunAttempt, request_digest: str
+    ) -> tuple[RunAttempt, RuntimeOperation]:
+        """Record a training attempt and its intent, waiting for a parallel-run slot if needed.
+
+        A full capacity is not exhaustion: the attempt waits for a running
+        one to end and release its slot, then is recorded. Nothing is written
+        while it waits.
+
+        Raises:
+            BudgetExhaustedError: If a quota is used up.
+        """
+        while True:
+            try:
+                return self.repository.create_attempt_with_submit_intent(
+                    attempt, request_digest=request_digest, actor=_ACTOR
+                )
+            except CapacityUnavailableError:
+                await asyncio.sleep(_CAPACITY_POLL_SECONDS)
+
     def _bind_evaluation(self, spec: EvaluationSpec) -> EvaluationSpec:
         """Resolve the evaluator and the spec, and record which implementation it is (ADR-016).
 
@@ -1472,6 +1534,7 @@ class EmbeddedControllerHost:
                 update={"version": runtime.descriptor.plugin_version}  # type: ignore[attr-defined]
             ),
             artifact_root=spec.artifact_root,
+            budget=spec.budget,
             evaluation=evaluation,
         )
         self.repository.create_experiment(experiment, actor=_ACTOR)

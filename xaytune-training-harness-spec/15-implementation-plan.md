@@ -724,7 +724,36 @@ Implement deterministic objective/constraint decisions. As built:
 
 ### PR-016 — BudgetLedger
 
-Implement reserve/commit/consume/release.
+Implement reserve/commit/consume/release. As built:
+
+- **The ledger** (migration 008) is append-only; the database refuses updates
+  and deletes. Each entry is idempotent under (subject kind, subject id,
+  dimension, kind), and its amount is a positive decimal (no zero
+  reservations).
+  - Balances are derived, never stored:
+    `outstanding = max(reserved − consumed − released, 0)` and
+    `remaining = limit − consumed − outstanding`. A commit is provenance and
+    subtracts nothing again.
+  - **Atomic settlement is the invariant.** Every entry commits with the
+    transition that causes it: an attempt's failure, its wall time and its
+    slot's release commit with it reaching `FAILED`. `settle_budget()` on
+    attach is only a safety net, and normally writes nothing.
+- **Dimensions.**
+  - `max_runs` is a hard quota per `Run`, not per attempt. It is reserved when
+    the run is recorded, committed on the first confirmed submission, consumed
+    when the run ends, and released if it ends unsubmitted.
+  - `max_failures` is a hard quota: one per `FAILED` training or evaluation
+    attempt.
+  - `max_wall_time_seconds` is a soft quota, metered from attempt timestamps.
+  - `max_parallel_runs` is a capacity (a semaphore on live training
+    attempts). When it is full, the next attempt waits.
+  - Refused at submission: `max_gpu_hours`, `max_tokens`, `max_cost`.
+  - Evaluations spend wall time and failures, not runs or parallel runs.
+- **Exhaustion.** A used-up quota refuses the next budgeted effect before any
+  write. In-flight work drains, and the experiment becomes `BUDGET_EXHAUSTED`
+  once nothing is live. Consuming past a limit emits `BudgetOverrun`;
+  reaching it exactly does not. What an overrun should cause is left to
+  PR-023.
 
 Phase exit:
 

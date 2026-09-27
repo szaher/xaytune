@@ -39,7 +39,7 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 | Evaluation orchestration | Available: the built-in native evaluator, and lm-eval benchmark tasks pinned at submission (on `main`, unreleased) |
 | Decisions and branching | Decisions available: deterministic thresholds on the objective; branching planned |
 | Resilience policy and semantic recovery | Planned |
-| Policy gates, budgets and agent-driven control | Planned |
+| Policy gates, budgets and agent-driven control | Budgets available: runs, failures, wall time and parallel runs, on a durable ledger (on `main`, unreleased); policy gates and agent control planned |
 
 Xaytune delegates tensor execution, distributed training, worker management
 and second-scale worker recovery, scheduling, and infrastructure admission to
@@ -76,7 +76,7 @@ Status as of **2026-09-25**, after PR-015:
 
 ## Planned
 
-Policy and budgets, checkpoints and semantic recovery, a rule-based planner
+Policy, budgets on GPU-hours, tokens and cost, checkpoints and semantic recovery, a rule-based planner
 and branching (with decisions that compare candidates), daemon hosting, an LLM
 planner, and Ray / TorchFT / Training Hub integrations. None of these exist yet.
 

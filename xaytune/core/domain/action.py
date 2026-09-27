@@ -203,6 +203,35 @@ class Action(AggregateModel):
         """Whether this action has reached a final state."""
         return ACTION_MACHINE.is_terminal(self.status)
 
+    def governed_by(self, policy_decision_id: str, new_status: ActionStatus) -> Action:
+        """Record the policy decision on a ``VALIDATED`` action, moving it to *new_status*.
+
+        ``ALLOW`` leaves it ``VALIDATED``: authorization is the decision, not
+        a state (PR-023). ``DENY`` rejects it; ``REQUIRE_APPROVAL`` sends it to
+        ``APPROVAL_PENDING``. An action is governed once.
+
+        Raises:
+            DomainError: If it is not ``VALIDATED``, or already governed.
+            InvalidTransitionError: If *new_status* does not follow ``VALIDATED``.
+        """
+        if self.status is not ActionStatus.VALIDATED:
+            raise DomainError(
+                f"only a validated action is judged by policy; action {self.id} is "
+                f"{self.status.value}"
+            )
+        if self.policy_decision_id is not None:
+            raise DomainError(f"action {self.id} is already governed by {self.policy_decision_id}")
+        if new_status is not ActionStatus.VALIDATED:
+            ACTION_MACHINE.validate(self.status, new_status)
+        return self._validated_copy(
+            {
+                "status": new_status,
+                "policy_decision_id": policy_decision_id,
+                "revision": self.revision + 1,
+                "updated_at": utc_now(),
+            }
+        )
+
     def with_status(
         self,
         new_status: ActionStatus,

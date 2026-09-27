@@ -553,14 +553,22 @@ def test_typed_actions_reach_nothing_that_could_carry_them_out() -> None:
 
 
 def test_nothing_that_executes_reads_a_typed_action_yet() -> None:
+    """Recording intent is not carrying it out, which is a later PR.
+
+    The experiment host proposes actions (PR-023), so it may name ``ActionSpec``
+    -- the type of what it is handed -- and nothing else from the vocabulary.
+    """
     root = Path(__file__).resolve().parents[2] / "xaytune"
-    readers = sorted(
-        str(path.relative_to(root))
+    readers = {
+        str(path.relative_to(root)): path.read_text()
         for executor in _EXECUTORS
         for path in (root / executor).rglob("*.py")
         if "domain.actions" in path.read_text()
-    )
-    assert readers == [], "PR-022 records intent; carrying it out is a later PR"
+    }
+    assert set(readers) <= {"experiment/host.py", "experiment/handle.py"}
+    for source in readers.values():
+        imports = [line for line in source.splitlines() if "domain.actions import" in line]
+        assert imports == ["from xaytune.core.domain.actions import ActionSpec"]
 
 
 def test_a_spec_holds_data_only() -> None:

@@ -90,6 +90,14 @@ from xaytune.core.domain.operation import (
     RuntimeOperation,
     RuntimeOperationTarget,
 )
+from xaytune.core.domain.policy import (
+    GovernedAction,
+    PolicyContext,
+    PolicyDecision,
+    PolicyProposal,
+    PolicyProposer,
+    PolicyVerdict,
+)
 from xaytune.core.domain.run import (
     ExecutionOverride,
     ExecutionOverrideKind,
@@ -108,6 +116,12 @@ __all__ = [
     "UnsupportedBudgetError",
     "EvaluationAttempt",
     "Decision",
+    "GovernedAction",
+    "PolicyContext",
+    "PolicyDecision",
+    "PolicyProposal",
+    "PolicyProposer",
+    "PolicyVerdict",
     "DecisionContext",
     "DecisionOutcome",
     "MetricEvidence",

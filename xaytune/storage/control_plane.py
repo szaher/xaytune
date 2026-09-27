@@ -45,12 +45,20 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar
 
+from xaytune.core.capabilities import CapabilityDocument
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.action import (
+    CANCELLATION_TYPES,
     Action,
     ActionOutcome,
     ActionStatus,
     ActionTarget,
+)
+from xaytune.core.domain.actions import (
+    ActionSpec,
+    action_descriptor,
+    action_from_spec,
+    encode_payload,
 )
 from xaytune.core.domain.budget import (
     BudgetDimension,
@@ -80,6 +88,15 @@ from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.operation import (
     RuntimeOperation,
     RuntimeOperationTarget,
+)
+from xaytune.core.domain.policy import (
+    GovernedAction,
+    PolicyContext,
+    PolicyDecision,
+    PolicyProposer,
+    PolicyVerdict,
+    applicability_problems,
+    awaits_execution,
 )
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
@@ -116,15 +133,59 @@ from xaytune.storage.journal import (
     IdempotencyConflictError,
     OperationJournal,
 )
+from xaytune.storage.policy import PolicyDecisionStore
 from xaytune.storage.repository import AggregateStore
 
 __all__ = [
+    "ApprovalConflictError",
+    "ApprovalError",
+    "CancellationNotGovernedError",
     "ControlPlaneRepository",
     "DecisionConflictError",
     "EvaluationReconciliation",
     "ProvenanceError",
+    "StalePolicyContextError",
     "UnknownOperationTargetError",
 ]
+
+
+_IN_FLIGHT = frozenset({ActionStatus.PROPOSED, ActionStatus.VALIDATING, ActionStatus.EXECUTING})
+"""Action states a controller is working through, as opposed to resting in."""
+
+_GOVERNANCE = Actor(type="system", id="governance")
+"""Who validates a proposed action: the control plane itself, by its built-in rules."""
+
+_VERDICT_STATUS: dict[PolicyVerdict, ActionStatus] = {
+    PolicyVerdict.ALLOW: ActionStatus.VALIDATED,
+    PolicyVerdict.DENY: ActionStatus.REJECTED,
+    PolicyVerdict.REQUIRE_APPROVAL: ActionStatus.APPROVAL_PENDING,
+}
+"""Where each verdict leaves a validated action. ``ALLOW`` moves nothing: it is the decision."""
+
+_VERDICT_EVENT: dict[PolicyVerdict, str] = {
+    PolicyVerdict.ALLOW: "ActionAuthorized",
+    PolicyVerdict.DENY: "ActionRejected",
+    PolicyVerdict.REQUIRE_APPROVAL: "ActionApprovalPending",
+}
+
+
+def _approval_identity(event_type: str, answer: dict[str, Any]) -> tuple[str, str, str, str]:
+    """What makes two human answers the same: the answer, who (type and id), and why.
+
+    The approver's metadata is provenance, kept on the event; it is not who
+    answered, so a replay differing only in metadata is the same answer.
+    """
+    approver = answer["approver"]
+    return event_type, approver["type"], approver["id"], answer["reason"]
+
+
+def _plain(value: Any) -> Any:
+    """A frozen event payload as plain dicts and lists, for comparison."""
+    if isinstance(value, (dict, FrozenDict)):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
 
 
 class _Transitionable(Protocol):
@@ -257,6 +318,45 @@ class UnknownOperationTargetError(StorageError):
         super().__init__(f"no {kind} exists with id {target_id}")
 
 
+class CancellationNotGovernedError(StorageError):
+    """A cancellation was proposed through the governed path.
+
+    Cancellation is controller-owned and always possible (ADR-013). It
+    records its intent together with the cancel operation, through the
+    cancellation API; a ``cancel-*`` Action recorded here would be intent
+    that nothing carries out.
+    """
+
+    def __init__(self, action_type: str) -> None:
+        self.action_type = action_type
+        super().__init__(
+            f"{action_type} is not proposed to policy: cancel through the cancellation API "
+            f"(ExperimentHandle.cancel(), request_cancellation(), "
+            f"request_experiment_cancellation())"
+        )
+
+
+class StalePolicyContextError(StorageError):
+    """The state changed between the policy's evaluation and its recording.
+
+    A decision authorizes the snapshot it judged, so it is not recorded
+    against a different one. Nothing was written; evaluate again.
+    """
+
+
+class ApprovalError(StorageError):
+    """An approval that cannot be given: by a non-human, or of an action not awaiting one."""
+
+
+class ApprovalConflictError(StorageError):
+    """An action already approved or rejected is being resolved differently.
+
+    The same human giving the same answer with the same reason is recognised
+    and returns the action as it stands. Anything else would rewrite who
+    decided, and is refused.
+    """
+
+
 def _require_consistent_candidate(node: ExperimentNode) -> None:
     """Refuse a node whose stored fingerprint does not describe its candidate.
 
@@ -369,6 +469,7 @@ class ControlPlaneRepository:
         self.operations = OperationJournal(connection)
         self.actions = ActionStore(connection)
         self.budget = BudgetLedgerStore(connection)
+        self.policy = PolicyDecisionStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
@@ -1404,6 +1505,349 @@ class ControlPlaneRepository:
                         self._settle_budget(measured, actor, destinations)
             return len(self.budget.entries(str(experiment_id))) - before
 
+    # ---- governed actions (PR-023) -----------------------------------------------------
+
+    def policy_context(
+        self,
+        spec: ActionSpec,
+        *,
+        experiment_id: ExperimentId | str,
+        proposed_by: Actor,
+        capabilities: CapabilityDocument | None,
+    ) -> PolicyContext:
+        """The snapshot validation and policy judge *spec* against, from the record.
+
+        *capabilities* is what the experiment's runtime declares, supplied by
+        the host; it becomes part of the snapshot.
+
+        Raises:
+            AggregateNotFoundError: If the experiment does not exist.
+            UnknownActionTypeError: If the spec's type is not registered.
+        """
+        experiment = self.aggregates.load_experiment(str(experiment_id))
+        descriptor = action_descriptor(spec.type, spec.version)  # type: ignore[attr-defined]
+        provider = encode_payload(spec).get("provider")
+        status, revision = self._governed_target_state(spec.target, str(experiment.id))
+        return PolicyContext(
+            experiment_id=experiment.id,
+            experiment_status=experiment.status,
+            experiment_revision=experiment.revision,
+            action_type=descriptor.type,
+            action_version=descriptor.version,
+            provider=FrozenDict(provider) if provider is not None else None,
+            mutation_class=descriptor.mutation_class,
+            target=spec.target,
+            parameters=FrozenDict(spec.parameters()),
+            target_status=status,
+            target_revision=revision,
+            proposed_by=PolicyProposer.of(proposed_by),
+            budget=self.budget_status(experiment.id),
+            capabilities=capabilities,
+        )
+
+    def propose_action(
+        self,
+        spec: ActionSpec,
+        *,
+        experiment_id: ExperimentId | str,
+        proposed_by: Actor,
+        reason: str,
+        policy: Any,
+        capabilities: CapabilityDocument | None,
+        action_id: ActionId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> GovernedAction:
+        """Validate, authorize and record one proposed action, in one commit. Applies nothing.
+
+        ```text
+        PROPOSED → VALIDATING ─ not applicable ─────────▶ REJECTED          (no policy decision)
+                              └ VALIDATED → policy
+                                  ALLOW ─────────────────▶ VALIDATED         (+ decision)
+                                  DENY ──────────────────▶ REJECTED          (+ decision)
+                                  REQUIRE_APPROVAL ──────▶ APPROVAL_PENDING  (+ decision)
+        ```
+
+        *policy* is a :class:`~xaytune.policy.PolicyEngine`. It is evaluated
+        on a snapshot read before the transaction; the transaction reads the
+        snapshot again and records the decision only if it is unchanged, so a
+        decision is never about a state other than the one it is filed
+        against. The Action, the decision and every transition's event
+        commit together, or none does.
+
+        Proposing an action id already recorded, with the same request,
+        returns it as governance left it and evaluates nothing.
+
+        Raises:
+            CancellationNotGovernedError: For a ``cancel-*`` spec.
+            UnknownActionTypeError: If the spec's type is not registered.
+            UnsupportedActionError: If the type's plugin refuses the spec.
+            AggregateNotFoundError: If the experiment does not exist.
+            IdempotencyConflictError: If *action_id* was recorded for a
+                different request.
+            ProvenanceError: If the engine's proposal names inputs other than
+                the snapshot it was given, or an engine other than itself.
+            StalePolicyContextError: If the state changed meanwhile.
+        """
+        if spec.type in CANCELLATION_TYPES:  # type: ignore[attr-defined]
+            raise CancellationNotGovernedError(spec.type)  # type: ignore[attr-defined]
+        action = action_from_spec(
+            spec,
+            experiment_id=ExperimentId(str(experiment_id)),
+            proposed_by=proposed_by,
+            reason=reason,
+            action_id=action_id,
+        )
+        replayed = self._replay_governed(action)
+        if replayed is not None:
+            return replayed
+
+        context = self.policy_context(
+            spec, experiment_id=experiment_id, proposed_by=proposed_by, capabilities=capabilities
+        )
+        problems = applicability_problems(spec, context)
+        proposal = None if problems else policy.evaluate(spec, context)
+        if proposal is not None and (proposal.engine_name, proposal.engine_version) != (
+            policy.name,
+            policy.version,
+        ):
+            raise ProvenanceError(
+                f"policy {policy.name} {policy.version} returned a proposal signed "
+                f"{proposal.engine_name} {proposal.engine_version}; a decision is recorded "
+                f"under the name of the engine that made it, and nothing was written"
+            )
+        if proposal is not None and proposal.input_fingerprint != context.input_fingerprint():
+            raise ProvenanceError(
+                f"{proposal.engine_name} {proposal.engine_version} claims input "
+                f"{proposal.input_fingerprint}, but it was given {context.input_fingerprint()}"
+            )
+
+        with write_transaction(self._connection):
+            replayed = self._replay_governed(action)
+            if replayed is not None:
+                return replayed
+            current = self.policy_context(
+                spec,
+                experiment_id=experiment_id,
+                proposed_by=proposed_by,
+                capabilities=capabilities,
+            )
+            if current.input_fingerprint() != context.input_fingerprint():
+                raise StalePolicyContextError(
+                    f"the state {action.type} was judged against changed before it could be "
+                    f"recorded ({context.input_fingerprint()} → {current.input_fingerprint()}); "
+                    f"nothing was written"
+                )
+
+            self.actions._insert(action)
+            self._emit_action(
+                action, "ActionProposed", proposed_by, destinations, extra={"reason": reason}
+            )
+            validating = self._advance(
+                action, ActionStatus.VALIDATING, "ActionValidating", proposed_by, destinations
+            )
+            if problems:
+                rejected = validating.with_status(ActionStatus.REJECTED)
+                self.actions._update(rejected)
+                self._emit_action(
+                    rejected,
+                    "ActionRejected",
+                    _GOVERNANCE,
+                    destinations,
+                    extra={"stage": "validation", "problems": list(problems)},
+                )
+                return GovernedAction(action=rejected, problems=problems)
+
+            assert proposal is not None
+            validated = self._advance(
+                validating, ActionStatus.VALIDATED, "ActionValidated", _GOVERNANCE, destinations
+            )
+            engine = Actor(
+                type="rule",
+                id=f"policy:{proposal.engine_name}",
+                metadata=FrozenDict({"engine_version": proposal.engine_version}),
+            )
+            decision = PolicyDecision.record(
+                proposal, action_id=action.id, context=context, actor=engine
+            )
+            self.policy._insert(decision)
+            governed = validated.governed_by(str(decision.id), _VERDICT_STATUS[proposal.verdict])
+            self.actions._update(governed)
+            self._emit_action(
+                governed,
+                _VERDICT_EVENT[proposal.verdict],
+                engine,
+                destinations,
+                extra={
+                    "policy_decision_id": str(decision.id),
+                    "verdict": proposal.verdict.value,
+                    "reasons": list(proposal.reasons),
+                    "rule_ids": list(proposal.rule_ids),
+                    "engine": f"{proposal.engine_name} {proposal.engine_version}",
+                },
+            )
+            return GovernedAction(action=governed, decision=decision)
+
+    def governed_action(self, action_id: ActionId | str) -> GovernedAction:
+        """An action as governance left it: its decision, or why validation refused it.
+
+        Raises:
+            AggregateNotFoundError: If it does not exist.
+        """
+        action = self.actions.get(str(action_id))
+        if action is None:
+            raise AggregateNotFoundError("Action", str(action_id))
+        return self._governed(action)
+
+    def approve_action(
+        self,
+        action_id: ActionId | str,
+        *,
+        approver: Actor,
+        reason: str,
+        destinations: tuple[str, ...] = (),
+    ) -> Action:
+        """A human approves the recorded proposal: ``APPROVAL_PENDING → APPROVED``.
+
+        Approves what policy judged; it does not judge again. Whether the
+        action still applies is for execution to check, when it happens.
+
+        Raises:
+            ApprovalError: If *approver* is not a human, or the action is not
+                awaiting approval and was never resolved by a human.
+            ApprovalConflictError: If a human already resolved it otherwise.
+        """
+        return self._resolve_approval(
+            action_id, approver, reason, ActionStatus.APPROVED, "ActionApproved", destinations
+        )
+
+    def reject_action(
+        self,
+        action_id: ActionId | str,
+        *,
+        approver: Actor,
+        reason: str,
+        destinations: tuple[str, ...] = (),
+    ) -> Action:
+        """A human refuses the recorded proposal: ``APPROVAL_PENDING → REJECTED``.
+
+        Raises:
+            ApprovalError: As :meth:`approve_action`.
+            ApprovalConflictError: As :meth:`approve_action`.
+        """
+        return self._resolve_approval(
+            action_id,
+            approver,
+            reason,
+            ActionStatus.REJECTED,
+            "ActionApprovalDenied",
+            destinations,
+        )
+
+    def _resolve_approval(
+        self,
+        action_id: ActionId | str,
+        approver: Actor,
+        reason: str,
+        new_status: ActionStatus,
+        event_type: str,
+        destinations: tuple[str, ...],
+    ) -> Action:
+        if approver.type != "human":
+            raise ApprovalError(
+                f"only a human approves or rejects an action awaiting approval; "
+                f"{approver.type} {approver.id} cannot"
+            )
+        if not reason.strip():
+            raise ApprovalError("an approval or rejection says why")
+        answer = {"approver": approver.model_dump(mode="json"), "reason": reason}
+        identity = _approval_identity(event_type, answer)
+        with write_transaction(self._connection):
+            action = self.actions.get(str(action_id))
+            if action is None:
+                raise AggregateNotFoundError("Action", str(action_id))
+            if action.status is ActionStatus.APPROVAL_PENDING:
+                resolved = action.with_status(new_status)
+                self.actions._update(resolved)
+                self._emit_action(
+                    resolved,
+                    event_type,
+                    approver,
+                    destinations,
+                    extra={**answer, "policy_decision_id": action.policy_decision_id},
+                )
+                return resolved
+            given = self._human_resolution(str(action.id))
+            if given is None:
+                raise ApprovalError(
+                    f"action {action.id} is {action.status.value}, not awaiting approval"
+                )
+            kind, recorded = given
+            if _approval_identity(kind, recorded) == identity:
+                return action
+            raise ApprovalConflictError(
+                f"action {action.id} was already {action.status.value} by "
+                f"{recorded['approver']['type']} {recorded['approver']['id']} "
+                f"({recorded['reason']!r}); it is not resolved again"
+            )
+
+    def _human_resolution(self, action_id: str) -> tuple[str, dict[str, Any]] | None:
+        for event in self.events.events_for_aggregate(action_id):
+            if event.event_type in ("ActionApproved", "ActionApprovalDenied"):
+                payload = _plain(event.payload)
+                return event.event_type, {
+                    "approver": payload["approver"],
+                    "reason": payload["reason"],
+                }
+        return None
+
+    def _replay_governed(self, action: Action) -> GovernedAction | None:
+        """The recorded action for *action*'s id, if the same request was recorded."""
+        existing = self.actions.get(str(action.id))
+        if existing is None:
+            return None
+        ActionStore._assert_same_request(existing, action)
+        return self._governed(existing)
+
+    def _governed(self, action: Action) -> GovernedAction:
+        decision = self.policy.for_action(str(action.id))
+        problems: tuple[str, ...] = ()
+        if decision is None:
+            for event in self.events.events_for_aggregate(str(action.id)):
+                if event.event_type == "ActionRejected" and "problems" in event.payload:
+                    problems = tuple(event.payload["problems"])
+        return GovernedAction(action=action, decision=decision, problems=problems)
+
+    def _governed_target_state(
+        self, target: ActionTarget, experiment_id: str
+    ) -> tuple[str | None, int | None]:
+        """The target's status and revision, if it exists in *experiment_id*."""
+        try:
+            if target.kind == "experiment":
+                if target.id != experiment_id:
+                    return None, None
+                aggregate: Any = self.aggregates.load_experiment(target.id)
+                owner = experiment_id
+            elif target.kind == "node":
+                aggregate = self.aggregates.load_node(target.id)
+                owner = str(aggregate.experiment_id)
+            elif target.kind == "run":
+                aggregate = self.aggregates.load_run(target.id)
+                owner = str(aggregate.experiment_id)
+            elif target.kind == "training-attempt":
+                aggregate = self.aggregates.load_attempt(target.id)
+                owner = self._experiment_of_run(str(aggregate.run_id))
+            elif target.kind == "evaluation-run":
+                aggregate = self.aggregates.load_evaluation_run(target.id)
+                owner = str(aggregate.experiment_id)
+            else:
+                aggregate = self.aggregates.load_evaluation_attempt(target.id)
+                owner = self._experiment_of_evaluation_run(str(aggregate.evaluation_run_id))
+        except AggregateNotFoundError:
+            return None, None
+        if owner != experiment_id:
+            return None, None
+        return aggregate.status.value, aggregate.revision
+
     def _require_budget(self, experiment_id: str, *, new_run: bool) -> None:
         """Refuse a new effect a used-up quota cannot cover. Capacity is not judged here.
 
@@ -2205,14 +2649,22 @@ class ControlPlaneRepository:
     def unsettled_work(
         self, experiment_id: str
     ) -> tuple[tuple[RuntimeOperation, ...], tuple[Action, ...]]:
-        """The experiment's control work that has not reached an outcome.
+        """Control work actively in progress, whose outcome must still be driven or reconciled.
 
         Operations still ``INTENDED`` or ``SENT`` -- an effect requested with
-        no known result -- and actions not yet terminal. A run can be terminal
-        while either remains: a cancellation that raced natural completion
-        leaves its operation unresolved after the attempt has already
-        succeeded. Whoever asks "is there anything left to do" has to ask about
-        these too, not only about runs.
+        no known result -- and actions in flight: ``PROPOSED``,
+        ``VALIDATING`` or ``EXECUTING``. A run can be terminal while either
+        remains: a cancellation that raced natural completion leaves its
+        operation unresolved after the attempt has already succeeded. Whoever
+        asks "is a controller still working" has to ask about these too, not
+        only about runs.
+
+        Not every non-terminal action. A governed action at rest (PR-023) --
+        ``VALIDATED`` with its decision, ``APPROVAL_PENDING``, ``APPROVED`` --
+        waits for a person or an executor; no controller is driving it, and
+        :meth:`resting_actions` reports it instead. A cancellation never rests
+        in those states: it is recorded through to ``EXECUTING`` in one
+        transaction.
         """
         operations = tuple(
             operation
@@ -2223,9 +2675,25 @@ class ControlPlaneRepository:
         actions = tuple(
             action
             for action in self.actions.for_experiment(experiment_id)
-            if not action.is_terminal
+            if action.status in _IN_FLIGHT
         )
         return operations, actions
+
+    def resting_actions(self, experiment_id: str) -> tuple[tuple[Action, ...], tuple[Action, ...]]:
+        """Governed actions at rest: awaiting a human, and awaiting an executor.
+
+        ``APPROVAL_PENDING`` awaits approval. Awaiting execution is exactly
+        :func:`~xaytune.core.domain.policy.awaits_execution`: ``VALIDATED``
+        with an ``ALLOW`` decision, or ``APPROVED`` with a
+        ``REQUIRE_APPROVAL`` one.
+        """
+        approval, execution = [], []
+        for action in self.actions.for_experiment(experiment_id):
+            if action.status is ActionStatus.APPROVAL_PENDING:
+                approval.append(action)
+            elif awaits_execution(action, self.policy.for_action(str(action.id))):
+                execution.append(action)
+        return tuple(approval), tuple(execution)
 
     def _saga_children(self, parent: Action) -> tuple[tuple[Action, RuntimeOperation | None], ...]:
         """Each child of *parent*, with the operation it caused if any."""
@@ -2682,6 +3150,8 @@ class ControlPlaneRepository:
         event_type: str,
         actor: Actor,
         destinations: tuple[str, ...] = (),
+        *,
+        extra: dict[str, Any] | None = None,
     ) -> DomainEvent:
         event = DomainEvent(
             id=EventId.generate(),
@@ -2698,6 +3168,7 @@ class ControlPlaneRepository:
                     "outcome": action.outcome.value if action.outcome else None,
                     "target_kind": action.target.kind,
                     "target_id": action.target.id,
+                    **(extra or {}),
                 }
             ),
         )

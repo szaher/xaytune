@@ -69,6 +69,7 @@ from xaytune.compilation import (
     TrainerCompiler,
     UnsupportedCandidateError,
 )
+from xaytune.core.domain.actions import ActionSpec
 from xaytune.core.domain.budget import (
     BudgetExhaustedError,
     CapacityUnavailableError,
@@ -91,11 +92,13 @@ from xaytune.core.domain.experiment import (
     ExperimentNode,
 )
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
+from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import XaytuneError
 from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import (
+    ActionId,
     EvaluationAttemptId,
     EvaluationId,
     EvaluationRunId,
@@ -142,8 +145,13 @@ from xaytune.experiment.handle import (
     RunOutcome,
 )
 from xaytune.experiment.spec import ExperimentSpec
+from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.runtimes import RuntimeBackend, RuntimeStatus, StreamCursor
-from xaytune.storage.control_plane import ControlPlaneRepository, EvaluationReconciliation
+from xaytune.storage.control_plane import (
+    ControlPlaneRepository,
+    EvaluationReconciliation,
+    StalePolicyContextError,
+)
 from xaytune.storage.migrations import migrate
 
 __all__ = [
@@ -286,6 +294,11 @@ class EmbeddedControllerHost:
             ``native``.
         decision_engine: What decides an evaluated candidate. Defaults to
             :class:`~xaytune.decision.ThresholdDecisionEngine`.
+        policy: What authorizes a proposed action
+            (:meth:`ExperimentHandle.propose`). ``None`` means
+            :class:`~xaytune.policy.DenyAllPolicy`: with no policy configured,
+            every proposal is denied, with a durable decision saying why.
+            Cancellation is never governed by it.
     """
 
     def __init__(
@@ -296,6 +309,7 @@ class EmbeddedControllerHost:
         runtimes: Mapping[str, Callable[[Mapping[str, Any]], RuntimeBackend]] | None = None,
         evaluators: Mapping[str, Callable[[], Evaluator]] | None = None,
         decision_engine: DecisionEngine | None = None,
+        policy: PolicyEngine | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -313,6 +327,7 @@ class EmbeddedControllerHost:
         self._decision_engine = (
             ThresholdDecisionEngine() if decision_engine is None else decision_engine
         )
+        self._policy: PolicyEngine = DenyAllPolicy() if policy is None else policy
         self._runtimes: dict[str, RuntimeBackend] = {}
         # One observer per attempt, keyed by experiment then attempt: an
         # experiment can have several live attempts, and each must stay
@@ -416,6 +431,62 @@ class EmbeddedControllerHost:
 
     # ---- what the handle asks -------------------------------------------
 
+    async def approve_action(
+        self, action_id: ActionId | str, *, approver: Actor, reason: str
+    ) -> GovernedAction:
+        """A human approves an action awaiting approval. Nothing is carried out.
+
+        Approves the proposal policy judged, without judging again. Raises what
+        :meth:`~xaytune.storage.ControlPlaneRepository.approve_action` raises.
+        """
+        self.repository.approve_action(action_id, approver=approver, reason=reason)
+        return self.repository.governed_action(action_id)
+
+    async def reject_action(
+        self, action_id: ActionId | str, *, approver: Actor, reason: str
+    ) -> GovernedAction:
+        """A human refuses an action awaiting approval."""
+        self.repository.reject_action(action_id, approver=approver, reason=reason)
+        return self.repository.governed_action(action_id)
+
+    # ---- governed actions -----------------------------------------------
+
+    _STALE_RETRIES = 3
+
+    def _propose(
+        self, experiment_id: ExperimentId, spec: ActionSpec, *, reason: str, proposed_by: Actor
+    ) -> GovernedAction:
+        """Validate, authorize and record *spec*, against the experiment's runtime.
+
+        The runtime's declared capabilities join the snapshot policy judges;
+        an experiment whose record names no runtime declares none. A snapshot
+        that changed before it could be recorded is judged again, a few times.
+        """
+        experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        capabilities = (
+            None if experiment.runtime is None else self._runtime(experiment.runtime).capabilities()
+        )
+        for attempt in range(self._STALE_RETRIES):
+            try:
+                return self.repository.propose_action(
+                    spec,
+                    experiment_id=experiment_id,
+                    proposed_by=proposed_by,
+                    reason=reason,
+                    policy=self._policy,
+                    capabilities=capabilities,
+                )
+            except StalePolicyContextError:
+                if attempt == self._STALE_RETRIES - 1:
+                    raise
+        raise AssertionError("unreachable")
+
+    def _actions(self, experiment_id: ExperimentId) -> tuple[GovernedAction, ...]:
+        return tuple(
+            self.repository.governed_action(action.id)
+            for action in self.repository.actions.for_experiment(str(experiment_id))
+        )
+
     def _experiment_status(self, experiment_id: ExperimentId) -> ExperimentStatus:
         return self.repository.aggregates.load_experiment(str(experiment_id)).status
 
@@ -503,9 +574,14 @@ class EmbeddedControllerHost:
         operations, actions = self.repository.unsettled_work(str(experiment_id))
         settled = settled and not operations and not actions
 
+        awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
         next_stage: NextStage | None
         if experiment.is_terminal:
             next_stage = None
+        elif awaiting_approval:
+            next_stage = "action-approval"
+        elif awaiting_execution:
+            next_stage = "action-execution"
         elif deciding:
             next_stage = "decision"
         elif trained or evaluating:

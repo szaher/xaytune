@@ -24,12 +24,14 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Literal
 
+from xaytune.core.domain.actions import ActionSpec
 from xaytune.core.domain.budget import BudgetStatus
 from xaytune.core.domain.evaluation import EvaluationResult
 from xaytune.core.domain.event import DomainEvent
+from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.ids import EvaluationRunId, ExperimentId, ExperimentNodeId, RunId
 from xaytune.core.immutable import FrozenDomainModel
-from xaytune.core.refs import ArtifactRef
+from xaytune.core.refs import Actor, ArtifactRef
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
     EvaluationRunStatus,
@@ -50,11 +52,21 @@ __all__ = [
     "RunOutcome",
 ]
 
-NextStage = Literal["evaluation", "decision", "planning", "failure-handling"]
-"""Advisory: the controller work that would move the experiment on.
+NextStage = Literal[
+    "action-approval",
+    "action-execution",
+    "evaluation",
+    "decision",
+    "planning",
+    "failure-handling",
+]
+"""Advisory: the work that would move the experiment on.
 
 ```text
 None                 the experiment is terminal
+"action-approval"    a proposed action awaits a human's approval
+"action-execution"   an authorized action awaits an executor: VALIDATED with an
+                     ALLOW decision, or APPROVED with a REQUIRE_APPROVAL one
 "decision"           a candidate is DECIDING: its decision was deferred
 "evaluation"         a trained candidate is unevaluated, or evaluating
 "planning"           the experiment is ACTIVE and every candidate was rejected
@@ -72,7 +84,13 @@ node in ``DECIDING`` that the decision engine could not decide -- its
 ``REJECTED`` -- never from candidates merely having ended: a failed or
 cancelled candidate is ``"failure-handling"``, even beside a rejected one.
 A ``REJECT`` judges the candidate, not the experiment, and what comes next is
-another candidate: a planner's work, which does not exist yet."""
+another candidate: a planner's work, which does not exist yet.
+
+The two action stages come first: an action someone proposed and is waiting
+on is what comes next, before anything the candidates' states suggest -- a
+candidate ``DECIDING`` with a rejection awaiting approval needs the approval,
+not another decision. Nothing executes actions yet, so ``"action-execution"``
+is a resting boundary for now (PR-023)."""
 
 _FOLLOW_INTERVAL_SECONDS = 0.05
 
@@ -178,6 +196,30 @@ class ExperimentHandle:
         recording a second one.
         """
         await self._host._cancel(self.experiment_id, reason=reason)
+
+    async def propose(self, spec: ActionSpec, *, reason: str, proposed_by: Actor) -> GovernedAction:
+        """Propose a typed action: validated, judged by the host's policy, recorded.
+
+        Nothing is carried out. The result says where governance left it:
+        ``REJECTED`` with the problems validation found, or with policy's
+        decision; ``VALIDATED`` with an ``ALLOW`` decision; or
+        ``APPROVAL_PENDING``, for a human to approve or reject through the
+        host. With no policy configured, every proposal is denied.
+
+        Cancellation is not proposed: use :meth:`cancel`.
+
+        Raises:
+            CancellationNotGovernedError: For a ``cancel-*`` spec.
+            UnsupportedActionError: If the action's plugin refuses the spec.
+        """
+        return self._host._propose(self.experiment_id, spec, reason=reason, proposed_by=proposed_by)
+
+    async def actions(self) -> tuple[GovernedAction, ...]:
+        """Every action recorded for the experiment, oldest first, as governance left it.
+
+        Includes cancellations, which carry no policy decision.
+        """
+        return self._host._actions(self.experiment_id)
 
     async def events(self, *, after: int = 0) -> AsyncIterator[DomainEvent]:
         """The experiment's durable history, then everything committed after.

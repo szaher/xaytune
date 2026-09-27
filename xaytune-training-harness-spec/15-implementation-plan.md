@@ -845,6 +845,94 @@ migration, and nothing is executed.
 Budget authorization pieces land here too: recovery in Phase 5 proposes Actions,
 and an Action that cannot be authorized cannot be applied.
 
+**As built.** Validation, then authorization, then optional human approval,
+recorded as a durable governed Action. Nothing is executed.
+
+- **Flow.** `ControlPlaneRepository.propose_action` (host:
+  `ExperimentHandle.propose`):
+  - `PROPOSED → VALIDATING`, then `REJECTED` if the action does not apply,
+    with its problems recorded and no policy consulted;
+  - otherwise `VALIDATED`, and then policy decides:
+    - `ALLOW` leaves it `VALIDATED`; the decision is the authorization, and
+      there is no `AUTHORIZED` state;
+    - `DENY` moves it to `REJECTED`;
+    - `REQUIRE_APPROVAL` moves it to `APPROVAL_PENDING`.
+  - The Action, its decision and every step's event commit together.
+- **Validation** (`applicability_problems`) is built in and pure.
+  - For every action: the experiment is `ACTIVE`, and the target exists in it.
+  - Operational run changes need a run that has not ended; interventions need
+    an `ACTIVE` run; `reject-candidate` needs a node in no terminal state of
+    `NODE_MACHINE` (`FAILED` included), and `promote-candidate` a `COMPLETED`
+    one.
+  - `change-worker-count` needs `elasticity.supported is True` and a count
+    within the elastic range and, when declared, the distributed range. If
+    either section is missing or says unsupported, the proposal is refused.
+- **Authorization.**
+  - `PolicyEngine.evaluate(spec, context)` is pure, like `DecisionEngine`.
+  - `PolicyContext` is the snapshot, and `policy_input_identity_v1` gives the
+    fingerprint: experiment status and revision, the action's type, version,
+    provider, mutation class and parameters, the target's status and
+    revision, the proposer's type and id, `BudgetStatus` and the runtime's
+    `CapabilityDocument`. No time.
+  - Everything policy can read is identified. The proposer is a
+    `PolicyProposer` (type, id), not an `Actor`: metadata is provenance, kept
+    on the Action. A test pins the field set of every model in the snapshot,
+    so a new field is a deliberate v1-or-v2 choice.
+  - The repository reads the snapshot again inside the transaction, refuses a
+    changed one (`StalePolicyContextError`), and refuses a proposal whose
+    fingerprint is not the snapshot's or whose engine name and version are
+    not those of the engine asked (`ProvenanceError`), before writing
+    anything.
+  - `DenyAllPolicy` is the host's default, so with no policy configured every
+    proposal is denied, with a durable decision. `RulePolicyEngine` is first
+    match wins, and its version names the rule set.
+- **Record.** Migration 009, `policy_decisions`:
+  - columns: id, `action_id` (unique), experiment, engine name and version,
+    verdict, `input_fingerprint`, `payload_json` holding the decision and its
+    whole snapshot, and `created_at`;
+  - append-only triggers, and a trigger checking that a decision belongs to
+    its action's experiment.
+  - `Action.policy_decision_id` is set in the same transaction.
+- **Approval.**
+  - Only an actor of type `human` may approve or reject, and only from
+    `APPROVAL_PENDING`. It approves the recorded proposal, never re-running
+    policy.
+  - The same human (type and id) giving the same answer and reason again is
+    recognised and writes nothing, whatever the actor's metadata, which stays
+    provenance on the original event. Any other answer is refused (`ApprovalConflictError`).
+  - There is no role or group model yet.
+- **Cancellation** is outside policy. `propose_action` refuses `cancel-*`
+  specs (`CancellationNotGovernedError`), so there is no second cancellation
+  path, and cancellations keep `policy_decision_id = NULL`.
+- **Quiescence and next stage.**
+  - `unsettled_work` means control work actively in progress whose outcome
+    must still be driven or reconciled: operations `INTENDED` or `SENT`, and
+    actions `PROPOSED`, `VALIDATING` or `EXECUTING`.
+  - A governed action resting in `VALIDATED`, `APPROVAL_PENDING` or
+    `APPROVED` waits for a person or an executor, not a controller, so it
+    does not keep `wait()` from returning. Cancellations never rest in those
+    states.
+  - Instead, `ExperimentResult.next_stage` shows it, ahead of the stages
+    derived from the candidates: `"action-approval"` for `APPROVAL_PENDING`,
+    and `"action-execution"` for an action that `awaits_execution`
+    (`VALIDATED` with `ALLOW`, or `APPROVED` with `REQUIRE_APPROVAL`).
+- **Identity versions are frozen.** `policy_input_identity_v1` is an explicit
+  projection of named fields, including those of `BudgetStatus` and every
+  `CapabilityDocument` section. A field added to those models later does not
+  change v1. A field policy must see becomes `policy_input_identity_v2`,
+  recorded as such. The stored snapshot may hold more than the identity.
+- **Budget** is policy input only. None of the built-in actions has an
+  authoritative charge, so nothing is reserved.
+- **For the executor (Phase 5).**
+  - It may carry out a non-cancellation action only if it is either
+    `VALIDATED` with an `ALLOW` decision, or `APPROVED` with a
+    `REQUIRE_APPROVAL` decision. A `VALIDATED` action with no decision is
+    never executable.
+  - It must check again, immediately before any effect, that the action still
+    applies, and refuse or supersede a stale one.
+  - A policy decision authorizes the snapshot it recorded, and approval
+    approves that proposal; neither speaks for later state.
+
 ## Phase 5 — Resilience, recovery and interventions
 
 ### PR-017 — incident model and detectors

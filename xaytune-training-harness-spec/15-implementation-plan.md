@@ -861,8 +861,9 @@ recorded as a durable governed Action. Nothing is executed.
 - **Validation** (`applicability_problems`) is built in and pure.
   - For every action: the experiment is `ACTIVE`, and the target exists in it.
   - Operational run changes need a run that has not ended; interventions need
-    an `ACTIVE` run; `reject-candidate` needs a node that has not ended, and
-    `promote-candidate` a `COMPLETED` one.
+    an `ACTIVE` run; `reject-candidate` needs a node in no terminal state of
+    `NODE_MACHINE` (`FAILED` included), and `promote-candidate` a `COMPLETED`
+    one.
   - `change-worker-count` needs `elasticity.supported is True` and a count
     within the elastic range and, when declared, the distributed range. If
     either section is missing or says unsupported, the proposal is refused.
@@ -873,9 +874,15 @@ recorded as a durable governed Action. Nothing is executed.
     provider, mutation class and parameters, the target's status and
     revision, the proposer's type and id, `BudgetStatus` and the runtime's
     `CapabilityDocument`. No time.
+  - Everything policy can read is identified. The proposer is a
+    `PolicyProposer` (type, id), not an `Actor`: metadata is provenance, kept
+    on the Action. A test pins the field set of every model in the snapshot,
+    so a new field is a deliberate v1-or-v2 choice.
   - The repository reads the snapshot again inside the transaction, refuses a
-    changed one (`StalePolicyContextError`) and refuses a proposal whose
-    fingerprint is not the snapshot's (`ProvenanceError`).
+    changed one (`StalePolicyContextError`), and refuses a proposal whose
+    fingerprint is not the snapshot's or whose engine name and version are
+    not those of the engine asked (`ProvenanceError`), before writing
+    anything.
   - `DenyAllPolicy` is the host's default, so with no policy configured every
     proposal is denied, with a durable decision. `RulePolicyEngine` is first
     match wins, and its version names the rule set.
@@ -890,8 +897,9 @@ recorded as a durable governed Action. Nothing is executed.
   - Only an actor of type `human` may approve or reject, and only from
     `APPROVAL_PENDING`. It approves the recorded proposal, never re-running
     policy.
-  - The same human giving the same answer and reason again is recognised and
-    writes nothing. Any other answer is refused (`ApprovalConflictError`).
+  - The same human (type and id) giving the same answer and reason again is
+    recognised and writes nothing, whatever the actor's metadata, which stays
+    provenance on the original event. Any other answer is refused (`ApprovalConflictError`).
   - There is no role or group model yet.
 - **Cancellation** is outside policy. `propose_action` refuses `cancel-*`
   specs (`CancellationNotGovernedError`), so there is no second cancellation

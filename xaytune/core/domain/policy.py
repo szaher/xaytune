@@ -58,7 +58,8 @@ from xaytune.core.domain.budget import BudgetStatus
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import ActionId, ExperimentId, PolicyDecisionId
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
-from xaytune.core.refs import Actor
+from xaytune.core.refs import Actor, ActorType
+from xaytune.core.state.machines import NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus, RunStatus
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "PolicyContext",
     "PolicyDecision",
     "PolicyProposal",
+    "PolicyProposer",
     "PolicyVerdict",
     "applicability_problems",
     "awaits_execution",
@@ -84,6 +86,24 @@ class PolicyVerdict(str, Enum):
 
     REQUIRE_APPROVAL = "require_approval"
     """A human has to say yes. The action waits in ``APPROVAL_PENDING``."""
+
+
+class PolicyProposer(FrozenDomainModel):
+    """Who proposed the action, as policy sees it: type and id, nothing else.
+
+    Not an :class:`~xaytune.core.refs.Actor`, whose free-form ``metadata`` is
+    provenance, not identity. Policy may read only what
+    :func:`policy_input_identity_v1` identifies, so metadata a policy could
+    branch on would give one fingerprint two verdicts. The full actor stays on
+    the Action it proposed.
+    """
+
+    type: ActorType
+    id: str = Field(min_length=1)
+
+    @classmethod
+    def of(cls, actor: Actor) -> PolicyProposer:
+        return cls(type=actor.type, id=actor.id)
 
 
 class PolicyContext(FrozenDomainModel):
@@ -115,7 +135,7 @@ class PolicyContext(FrozenDomainModel):
     target_status: str | None = None
     target_revision: int | None = None
 
-    proposed_by: Actor
+    proposed_by: PolicyProposer
     budget: BudgetStatus | None = None
     capabilities: CapabilityDocument | None = None
 
@@ -334,13 +354,7 @@ def awaits_execution(action: Action, decision: PolicyDecision | None) -> bool:
 # ---- validation --------------------------------------------------------------------------
 
 _RUN_NOT_ENDED = frozenset({RunStatus.CREATED.value, RunStatus.ACTIVE.value})
-_NODE_ENDED = frozenset(
-    {
-        ExperimentNodeStatus.COMPLETED.value,
-        ExperimentNodeStatus.REJECTED.value,
-        ExperimentNodeStatus.CANCELLED.value,
-    }
-)
+_NODE_ENDED = frozenset(status.value for status in NODE_MACHINE.terminal_states)
 _OPERATIONAL_ON_A_RUN = (
     ResizeMicrobatch,
     ChangeGradientAccumulation,

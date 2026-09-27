@@ -95,6 +95,7 @@ from xaytune.core.domain.policy import (
     PolicyContext,
     PolicyDecision,
     PolicyProposal,
+    PolicyProposer,
     PolicyVerdict,
 )
 from xaytune.core.domain.run import (
@@ -119,6 +120,7 @@ __all__ = [
     "PolicyContext",
     "PolicyDecision",
     "PolicyProposal",
+    "PolicyProposer",
     "PolicyVerdict",
     "DecisionContext",
     "DecisionOutcome",

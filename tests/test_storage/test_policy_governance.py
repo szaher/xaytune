@@ -36,7 +36,12 @@ from xaytune.core.domain.actions import (
     RejectCandidate,
     ResizeMicrobatch,
 )
-from xaytune.core.domain.policy import PolicyContext, PolicyProposal, PolicyVerdict
+from xaytune.core.domain.policy import (
+    PolicyContext,
+    PolicyProposal,
+    PolicyProposer,
+    PolicyVerdict,
+)
 from xaytune.core.ids import ActionId
 from xaytune.core.refs import Actor
 from xaytune.core.state.status import RunStatus
@@ -192,6 +197,43 @@ def test_the_decision_records_the_snapshot_it_judged(
     assert json.loads(row["payload_json"])["context"]["capabilities"]["elasticity"]["supported"]
 
 
+class _TrustsAdmins:
+    """A policy that would branch on the proposer's metadata, if it could see it."""
+
+    name = "trusts-admins"
+    version = "1"
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> PolicyProposal:
+        metadata = getattr(context.proposed_by, "metadata", {})
+        verdict = PolicyVerdict.ALLOW if metadata.get("role") == "admin" else PolicyVerdict.DENY
+        return POLICY.evaluate(spec, context).model_copy(
+            update={"verdict": verdict, "engine_name": self.name, "engine_version": self.version}
+        )
+
+
+def test_policy_sees_who_proposed_not_their_metadata(
+    repo: ControlPlaneRepository, run: Any
+) -> None:
+    admin = Actor(type="llm_agent", id="planner", metadata={"role": "admin"})
+    governed = _propose(
+        repo,
+        run,
+        ResizeMicrobatch(target=_target(run), micro_batch_size=2),
+        policy=_TrustsAdmins(),
+        proposed_by=admin,
+    )
+    decision = governed.decision
+    assert decision is not None
+    assert decision.verdict is PolicyVerdict.DENY, "metadata is not policy input"
+    assert decision.context.proposed_by == PolicyProposer(type="llm_agent", id="planner")
+    row = repo._connection.execute("SELECT payload_json FROM policy_decisions").fetchone()
+    assert json.loads(row["payload_json"])["context"]["proposed_by"] == {
+        "type": "llm_agent",
+        "id": "planner",
+    }
+    assert governed.action.proposed_by == admin, "the Action keeps the full actor, for audit"
+
+
 # ---- validation comes first --------------------------------------------------------------
 
 
@@ -277,8 +319,7 @@ def test_an_action_and_its_decision_are_written_together_or_not_at_all(
 class _WhileItThinks:
     """A policy slow enough that the run ends while it deliberates."""
 
-    name = "slow"
-    version = "1"
+    name, version = POLICY.name, POLICY.version
 
     def __init__(self, repo: ControlPlaneRepository, run: Any) -> None:
         self.repo, self.run = repo, run
@@ -308,8 +349,7 @@ def test_a_decision_about_a_state_that_has_since_changed_is_not_recorded(
 
 
 class _Misremembers:
-    name = "misremembers"
-    version = "1"
+    name, version = POLICY.name, POLICY.version
 
     def evaluate(self, spec: ActionSpec, context: PolicyContext) -> PolicyProposal:
         honest = POLICY.evaluate(spec, context)
@@ -329,9 +369,39 @@ def test_an_engine_that_claims_other_inputs_is_refused(
     assert _rows(repo, "actions") == 0
 
 
-class _Counting:
-    name = "counting"
+class _Impersonates:
+    """Honest inputs, forged signature: claims to be the trusted rule engine."""
+
+    name = "impersonates"
     version = "1"
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> PolicyProposal:
+        return POLICY.evaluate(spec, context)
+
+
+class _BumpsItsVersion:
+    name = POLICY.name
+    version = "2"
+
+    def evaluate(self, spec: ActionSpec, context: PolicyContext) -> PolicyProposal:
+        return POLICY.evaluate(spec, context)
+
+
+@pytest.mark.parametrize("policy", [_Impersonates(), _BumpsItsVersion()], ids=["name", "version"])
+def test_an_engine_that_signs_as_another_is_refused_and_nothing_is_written(
+    repo: ControlPlaneRepository, run: Any, policy: Any
+) -> None:
+    events = len(repo.events.events_for_experiment(str(run.experiment_id)))
+    with pytest.raises(ProvenanceError, match="returned a proposal signed rules"):
+        _propose(
+            repo, run, ResizeMicrobatch(target=_target(run), micro_batch_size=2), policy=policy
+        )
+    assert (_rows(repo, "actions"), _rows(repo, "policy_decisions")) == (0, 0)
+    assert len(repo.events.events_for_experiment(str(run.experiment_id))) == events
+
+
+class _Counting:
+    name, version = POLICY.name, POLICY.version
 
     def __init__(self) -> None:
         self.calls = 0
@@ -398,6 +468,28 @@ def test_approving_again_the_same_way_writes_nothing_and_any_other_answer_is_ref
             repo.approve_action(pending.id, **change)
     with pytest.raises(ApprovalConflictError):
         repo.reject_action(pending.id, approver=ANA, reason="checked the curves")
+
+
+def test_the_same_human_answering_the_same_way_is_the_same_answer_whatever_the_metadata(
+    repo: ControlPlaneRepository, pending: Any
+) -> None:
+    first = Actor(type="human", id="ana", metadata={"session": 1})
+    approved = repo.approve_action(pending.id, approver=first, reason="looks good")
+    events = len(repo.events.events_for_aggregate(str(pending.id)))
+
+    later = Actor(type="human", id="ana", metadata={"session": 2})
+    again = repo.approve_action(pending.id, approver=later, reason="looks good")
+
+    assert again == approved
+    assert len(repo.events.events_for_aggregate(str(pending.id))) == events
+    (event,) = [
+        e
+        for e in repo.events.events_for_aggregate(str(pending.id))
+        if e.event_type == "ActionApproved"
+    ]
+    assert event.actor == first, "the original answer keeps its provenance"
+    with pytest.raises(ApprovalConflictError):
+        repo.reject_action(pending.id, approver=later, reason="looks good")
 
 
 def test_a_human_may_reject_what_awaits_approval(

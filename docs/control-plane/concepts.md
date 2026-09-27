@@ -361,15 +361,21 @@ approval        does a human have to say yes?    when policy says so
   - An operational change needs a run that has not ended.
   - A learning-rate, schedule or warmup change needs a run that is training.
     A change before training starts is a different candidate.
-  - `reject-candidate` needs a node that has not ended, and `promote-candidate`
-    needs a completed one.
+  - `reject-candidate` needs a node that has not ended (completed, rejected,
+    cancelled or failed), and `promote-candidate` needs a completed one.
   - `change-worker-count` needs the runtime to declare that its worker count can
     change (`elasticity.supported`), and a count inside every range it declares.
     If the runtime is silent, the proposal is refused. The local runtime is
     silent, so it refuses.
 - **Policy.** A `PolicyEngine` is pure, like a `DecisionEngine`: it reads only
   the spec and a snapshot of the record. The snapshot covers the experiment,
-  the target, the budget and the runtime's capabilities.
+  the target, the budget and the runtime's capabilities, and who proposed the
+  action by type and id only: an actor's metadata is provenance, kept on the
+  Action, and never policy input. Everything policy can read is part of the
+  snapshot's fingerprint.
+  - A decision is recorded under the name and version of the engine that was
+    asked. A proposal signed by any other engine is refused, and nothing is
+    written.
   - `RulePolicyEngine` applies the first rule that matches the action's type or
     mutation class, and otherwise its default.
   - **With no policy configured, every proposal is denied**, and the decision
@@ -379,8 +385,9 @@ approval        does a human have to say yes?    when policy says so
   decision, since nothing else keeps the runtime's capabilities. A decision is
   never recorded against a state that changed while the policy was judging.
 - **Approval** is by a human (`Actor(type="human")`) and approves the recorded
-  proposal; policy does not judge again. Giving the same answer twice changes
-  nothing. A different answer is refused, never rewritten.
+  proposal; policy does not judge again. The same human (type and id) giving
+  the same answer for the same reason changes nothing, whatever the actor's
+  metadata. A different answer is refused, never rewritten.
 - **Cancellation is not proposed.** It stays controller-owned and always
   possible, through `handle.cancel()`.
 - **Nothing is executed yet.** A proposed action waiting for approval or for an

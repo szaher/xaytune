@@ -93,6 +93,7 @@ from xaytune.core.domain.policy import (
     GovernedAction,
     PolicyContext,
     PolicyDecision,
+    PolicyProposer,
     PolicyVerdict,
     applicability_problems,
     awaits_execution,
@@ -166,6 +167,16 @@ _VERDICT_EVENT: dict[PolicyVerdict, str] = {
     PolicyVerdict.DENY: "ActionRejected",
     PolicyVerdict.REQUIRE_APPROVAL: "ActionApprovalPending",
 }
+
+
+def _approval_identity(event_type: str, answer: dict[str, Any]) -> tuple[str, str, str, str]:
+    """What makes two human answers the same: the answer, who (type and id), and why.
+
+    The approver's metadata is provenance, kept on the event; it is not who
+    answered, so a replay differing only in metadata is the same answer.
+    """
+    approver = answer["approver"]
+    return event_type, approver["type"], approver["id"], answer["reason"]
 
 
 def _plain(value: Any) -> Any:
@@ -1529,7 +1540,7 @@ class ControlPlaneRepository:
             parameters=FrozenDict(spec.parameters()),
             target_status=status,
             target_revision=revision,
-            proposed_by=proposed_by,
+            proposed_by=PolicyProposer.of(proposed_by),
             budget=self.budget_status(experiment.id),
             capabilities=capabilities,
         )
@@ -1574,7 +1585,7 @@ class ControlPlaneRepository:
             IdempotencyConflictError: If *action_id* was recorded for a
                 different request.
             ProvenanceError: If the engine's proposal names inputs other than
-                the snapshot it was given.
+                the snapshot it was given, or an engine other than itself.
             StalePolicyContextError: If the state changed meanwhile.
         """
         if spec.type in CANCELLATION_TYPES:  # type: ignore[attr-defined]
@@ -1595,6 +1606,15 @@ class ControlPlaneRepository:
         )
         problems = applicability_problems(spec, context)
         proposal = None if problems else policy.evaluate(spec, context)
+        if proposal is not None and (proposal.engine_name, proposal.engine_version) != (
+            policy.name,
+            policy.version,
+        ):
+            raise ProvenanceError(
+                f"policy {policy.name} {policy.version} returned a proposal signed "
+                f"{proposal.engine_name} {proposal.engine_version}; a decision is recorded "
+                f"under the name of the engine that made it, and nothing was written"
+            )
         if proposal is not None and proposal.input_fingerprint != context.input_fingerprint():
             raise ProvenanceError(
                 f"{proposal.engine_name} {proposal.engine_version} claims input "
@@ -1740,6 +1760,7 @@ class ControlPlaneRepository:
         if not reason.strip():
             raise ApprovalError("an approval or rejection says why")
         answer = {"approver": approver.model_dump(mode="json"), "reason": reason}
+        identity = _approval_identity(event_type, answer)
         with write_transaction(self._connection):
             action = self.actions.get(str(action_id))
             if action is None:
@@ -1761,7 +1782,7 @@ class ControlPlaneRepository:
                     f"action {action.id} is {action.status.value}, not awaiting approval"
                 )
             kind, recorded = given
-            if kind == event_type and recorded == answer:
+            if _approval_identity(kind, recorded) == identity:
                 return action
             raise ApprovalConflictError(
                 f"action {action.id} was already {action.status.value} by "

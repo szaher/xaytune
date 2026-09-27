@@ -16,9 +16,14 @@ import pytest
 from pydantic import ValidationError
 
 from xaytune.core.capabilities import (
+    AgentRolloutCapabilities,
+    AlgorithmCapabilities,
     CapabilityDocument,
+    CheckpointCapabilities,
     DistributedCapabilities,
     ElasticityCapabilities,
+    PrecisionCapabilities,
+    ResilienceCapabilities,
 )
 from xaytune.core.domain.action import ActionTarget
 from xaytune.core.domain.actions import (
@@ -38,6 +43,7 @@ from xaytune.core.domain.actions import (
 from xaytune.core.domain.budget import BudgetDimension, BudgetStatus, DimensionStatus
 from xaytune.core.domain.policy import (
     PolicyContext,
+    PolicyProposer,
     PolicyVerdict,
     applicability_problems,
     policy_input_identity_v1,
@@ -45,7 +51,8 @@ from xaytune.core.domain.policy import (
 from xaytune.core.ids import ExperimentId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor
-from xaytune.core.state.status import ExperimentStatus
+from xaytune.core.state.machines import NODE_MACHINE
+from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 from xaytune.policy import DenyAllPolicy, PolicyEngine, PolicyRule, RulePolicyEngine
 
 EXPERIMENT = ExperimentId("exp_01J9ZQ00000000000000000EXP")
@@ -73,7 +80,7 @@ def _context(spec: ActionSpec, **overrides: Any) -> PolicyContext:
         "parameters": FrozenDict(spec.parameters()),
         "target_status": "active",
         "target_revision": 2,
-        "proposed_by": AGENT,
+        "proposed_by": PolicyProposer.of(AGENT),
     }
     values.update(overrides)
     return PolicyContext(**values)
@@ -147,6 +154,25 @@ def test_a_candidate_is_judged_only_where_that_makes_sense(
     assert (applicability_problems(spec, _context(spec, target_status=status)) == ()) is applies
 
 
+@pytest.mark.parametrize("status", list(ExperimentNodeStatus), ids=lambda s: s.value)
+def test_a_candidate_that_has_ended_in_any_way_is_not_rejected(
+    status: ExperimentNodeStatus,
+) -> None:
+    spec = RejectCandidate(target=NODE)
+    problems = applicability_problems(spec, _context(spec, target_status=status.value))
+    ended = NODE_MACHINE.is_terminal(status)
+    assert (f"node node_1 has already ended ({status.value})" in problems) is ended
+    assert ended is (
+        status
+        in {
+            ExperimentNodeStatus.COMPLETED,
+            ExperimentNodeStatus.REJECTED,
+            ExperimentNodeStatus.CANCELLED,
+            ExperimentNodeStatus.FAILED,
+        }
+    ), "every terminal node status, FAILED included"
+
+
 @pytest.mark.parametrize(
     ("capabilities", "workers", "problem"),
     [
@@ -203,9 +229,93 @@ def test_a_worker_count_changes_only_where_the_runtime_says_it_can(
 def test_the_snapshot_is_identified_by_what_it_says_not_when_or_by_whose_metadata() -> None:
     spec = ChangeLearningRate(target=RUN, learning_rate=1e-4)
     one = _context(spec)
-    two = _context(spec, proposed_by=Actor(type="llm_agent", id="planner", metadata={"x": 1}))
+    tagged = Actor(type="llm_agent", id="planner", metadata={"role": "admin"})
+    two = _context(spec, proposed_by=PolicyProposer.of(tagged))
+    assert one == two, "the proposer's metadata never reaches policy"
     assert one.input_fingerprint() == two.input_fingerprint()
     assert "created_at" not in str(policy_input_identity_v1(one))
+
+
+@pytest.mark.parametrize(
+    "proposer",
+    [
+        Actor(type="llm_agent", id="planner", metadata={"role": "admin"}),
+        {"type": "llm_agent", "id": "planner", "metadata": {"role": "admin"}},
+    ],
+    ids=["actor", "mapping"],
+)
+def test_policy_is_never_shown_the_proposers_metadata(proposer: Any) -> None:
+    spec = ChangeLearningRate(target=RUN, learning_rate=1e-4)
+    with pytest.raises(ValidationError):
+        _context(spec, proposed_by=proposer)
+
+
+# What an engine can read, field by field. Each is projected by v1; a field
+# added to any of these models is readable by policy and not identified, and
+# fails here -- deciding whether it is v2 input is then an explicit choice.
+_READABLE = {
+    PolicyContext: {
+        "experiment_id",
+        "experiment_status",
+        "experiment_revision",
+        "action_type",
+        "action_version",
+        "provider",
+        "mutation_class",
+        "target",
+        "parameters",
+        "target_status",
+        "target_revision",
+        "proposed_by",
+        "budget",
+        "capabilities",
+    },
+    ActionTarget: {"kind", "id"},
+    PolicyProposer: {"type", "id"},
+    BudgetStatus: {"dimensions"},
+    DimensionStatus: {
+        "dimension",
+        "kind",
+        "limit",
+        "reserved",
+        "committed",
+        "consumed",
+        "released",
+        "outstanding",
+        "remaining",
+    },
+    CapabilityDocument: {
+        "schema_version",
+        "precision",
+        "distributed",
+        "checkpoint",
+        "elasticity",
+        "resilience",
+        "agent_rollout",
+        "algorithms",
+        "extensions",
+    },
+    PrecisionCapabilities: {"supported"},
+    DistributedCapabilities: {"strategies", "min_workers", "max_workers"},
+    CheckpointCapabilities: {"formats", "asynchronous", "reshardable", "atomic_commit"},
+    ElasticityCapabilities: {"supported", "min_workers", "max_workers", "membership_change"},
+    ResilienceCapabilities: {
+        "per_step",
+        "provider",
+        "provider_version",
+        "supports_event_replay",
+        "reports_completed_operations",
+    },
+    AgentRolloutCapabilities: {"stateful", "asynchronous"},
+    AlgorithmCapabilities: {"supported"},
+}
+
+
+@pytest.mark.parametrize("model", list(_READABLE), ids=lambda m: m.__name__)
+def test_everything_policy_can_read_is_identified_by_v1(model: type) -> None:
+    assert set(model.model_fields) == _READABLE[model], (  # type: ignore[attr-defined]
+        f"{model.__name__} changed shape: policy can read what v1 does not identify"
+    )
 
 
 @pytest.mark.parametrize(
@@ -215,7 +325,7 @@ def test_the_snapshot_is_identified_by_what_it_says_not_when_or_by_whose_metadat
         {"experiment_status": ExperimentStatus.PAUSED},
         {"target_status": "succeeded"},
         {"target_revision": 3},
-        {"proposed_by": Actor(type="human", id="ana")},
+        {"proposed_by": PolicyProposer(type="human", id="ana")},
         {"capabilities": ELASTIC},
         {
             "budget": BudgetStatus(

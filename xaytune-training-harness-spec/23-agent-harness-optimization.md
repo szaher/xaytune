@@ -61,8 +61,15 @@ ExperimentCandidate (versioned envelope)
 
 AgentHarnessCandidateSpec
   harness: AgentHarnessSpec
-  task_contract: resolved TaskEnvironmentContract
+  environment_contract: resolved BehaviorEnvironmentContract? (scientific role only)
 ```
+
+The candidate's optional `environment_contract` covers behavior-affecting
+interfaces/environment semantics when they are part of the hypothesis. It does
+not contain benchmark membership, held-out tasks or scoring configuration.
+`BenchmarkSuiteRef` and task sampling/scoring configuration attach separately
+to the evaluation/comparison specification. These are conceptual roles, not
+concrete H02 wire schemas.
 
 The names remain subject to review. The discriminator describes experiment
 kind, not the training algorithm. A training payload may still select SFT or
@@ -149,9 +156,9 @@ Its projection covers model/provider semantics, pinned model revisions and
 generation/reasoning configuration; instructions; enabled tools, tool artifacts,
 schemas, descriptions and requested capabilities; context and retrieval;
 memory policy and initial state; orchestration/delegation; middleware; routing;
-stopping; behavior-defining code artifacts; and the scientific task/environment
-contract. Stable subagent ordering and default normalization must be specified
-before H02 ships. Seeds and replicate numbers remain realization identity.
+stopping; behavior-defining code artifacts; and the explicitly scientific
+`BehaviorEnvironmentContract`, when present. Stable subagent ordering and
+default normalization must be specified before H02 ships. Seeds and replicate numbers remain realization identity.
 
 **Proposed model decision:** include the resolved model binding in
 `HarnessFingerprint` for harness-only experiments, even when every candidate
@@ -178,13 +185,23 @@ behavior-defining artifacts from execution implementation artifacts explicitly;
 record both. An unclassified semantic change must not masquerade as operational.
 Execution differences are not statistically interchangeable by fingerprint alone.
 
-The task contract identifies behavior-facing interfaces, task framing, tool
-semantics, observation/reset rules and scientifically relevant environment
-behavior. The pinned benchmark sample set and post-hoc scoring rules normally
-belong to evaluation/comparison identity, so rescoring does not create a new
-harness candidate. If a particular suite, retrieval corpus or environment
-revision is part of the declared hypothesis or changes behavior, its pinned
-reference also enters scientific identity. Record each role explicitly.
+`BehaviorEnvironmentContract` identifies behavior-facing tool/action/observation
+interfaces, reset semantics and environment behavior that form part of the
+hypothesis. Agent-visible retrieval/environment state enters scientific identity
+only when it is behavior-defining; pin its reference and declare that role.
+Benchmark sample membership, held-out inputs, sampling and scoring normally
+belong to evaluation/comparison identity. Ordinary benchmark task inputs are
+variable test instances under the contract; different observations or answers
+on those instances do not by themselves define a new harness hypothesis.
+
+**Invariant: same harness + different benchmark normally remains the same
+HarnessFingerprint and gets a different EvaluationFingerprint/comparison cohort.**
+Rescoring likewise does not create a new harness candidate. If a task/environment
+input is explicitly declared part of the scientific hypothesis or changes
+agent-visible behavior rather than merely supplying another benchmark sample,
+its pinned reference may also enter HarnessFingerprint. Record the scientific
+and evaluation roles explicitly; suite membership alone never supplies an
+implicit scientific binding.
 
 ## 5. Nodes, runs and attempts
 
@@ -206,7 +223,7 @@ ADR-011's existing training continuation rules remain intact.
 
 ## 6. Compilation and execution boundary
 
-![Training and planned harness compilation share capability resolution and RuntimeBackend.](assets/diagrams/harness-optimization.svg)
+![Training and harness compilation share resolution and runtime; candidate branching and Action governance are separate controller concerns.](assets/diagrams/harness-optimization.svg)
 
 ```text
 TrainingCandidate (today: CandidateSpec)
@@ -250,17 +267,28 @@ rather than vendor branches in runtime.
 
 ## 7. Repeatable tasks and environments
 
-Propose a versioned `TaskEnvironmentContract`, `TaskSpec` and `BenchmarkSuiteRef`
-protocol, independent of any named benchmark. Providers can describe coding,
-tool-use, browser/terminal, customer-support, agent-environment and custom suites.
+Propose versioned `BehaviorEnvironmentContract`, `TaskSpec` and
+`BenchmarkSuiteRef` abstractions, independent of any named benchmark. Providers
+can describe coding, tool-use, browser/terminal, customer-support,
+agent-environment and custom suites. Keep their identity roles separate:
 
-The contract declares task inputs, observation/action interfaces, permitted
-tools/capabilities, isolation/reset behavior, output artifacts, termination and
-scoring interfaces. Each task has a stable namespaced ID plus resolved revision
-and content digest; suite manifests pin ordered task membership, input digests,
-fixtures, environment snapshots and provider/contract versions. Task IDs alone
-do not prove unchanged contents. Dynamic services need snapshot/replay evidence
-or an explicit weaker reproducibility declaration.
+| Role | Contents / attachment |
+|---|---|
+| Candidate/scientific | AgentHarnessSpec plus an optional BehaviorEnvironmentContract for behavior-affecting tool/action/observation/reset semantics; explicitly scientific agent-visible retrieval/environment state |
+| Evaluation/comparison | BenchmarkSuiteRef, ordered task/sample membership, held-out inputs, task sampling policy/assignments, scoring rules/rubric and evaluator/judge configuration |
+
+Behavior contracts describe interfaces and semantics, not which benchmark
+samples are selected or how outputs are graded. A task spec describes its
+inputs, output artifacts and evaluation contract; each task has a stable
+namespaced ID plus resolved revision and content digest. Suite manifests pin
+ordered task membership, input digests, fixtures, environment snapshots and
+provider/contract versions. Any behavior-defining snapshot shared with the
+candidate is explicitly bound in its scientific role, not inherited implicitly
+from the benchmark reference. Sampling policy belongs to the evaluation spec;
+concrete task assignments and seeds remain run/comparison provenance, outside
+HarnessFingerprint. Task IDs alone do not prove unchanged contents. Dynamic
+services need snapshot/replay evidence or an explicit weaker reproducibility
+declaration.
 
 Follow Xaytune's evaluation-resolution principle: retain requested and resolved
 specifications; pin mutable branches, dataset aliases and benchmark inputs before
@@ -302,8 +330,9 @@ or provider-level determinism. Reconnecting telemetry does not create a retry.
 
 Record mutation provenance as well: parent node/fingerprint, typed patch,
 old/new artifact digests, rationale, provider/version, search state/trial ID,
-generation model/prompt when applicable, source evaluation IDs, approval/action
-IDs and resulting candidate fingerprint. A proposal is not evidence of execution.
+generation model/prompt when applicable, source evaluation IDs,
+candidate-governance records and any applicable approval/action IDs, and resulting
+candidate fingerprint. A proposal is not evidence of execution.
 
 Secrets remain secret references. Sensitive tool outputs use redaction and
 access-controlled artifact storage with declared retention; sanitize before
@@ -375,17 +404,38 @@ GEPA/MIPRO-style prompt optimization and external harness optimizers. These are
 examples, not selected dependencies or implemented integrations. Optimizer
 state and provenance are durable artifact references for restart/audit.
 
-Proposals feed the existing planner → typed Action → PolicyEngine → budget
-authorization → experiment graph path. Search is replaceable; there is one
-controller, decision engine and execution system.
+Preserve the [chapter 09](09-agent-planner-policy-budget.md#2-planner-protocol)
+planner contract: `Planner → CandidateProposal | ActionProposal`.
+HarnessMutationProvider/SearchProvider may produce a typed `CandidateProposal`
+for a new comparative harness alternative. The controller validates it, checks
+budget and applies the generic candidate/branching governance contract before
+creating a new `ExperimentNode` in the existing experiment graph.
+
+Actual Actions, including permission grants, connector/tool authorization and
+operational changes, use `ActionProposal → ActionSpec → PolicyEngine/approval`.
+PolicyEngine currently governs ActionSpec, not arbitrary CandidateProposal.
+Candidate creation does not already have an Action-based governance contract.
+
+**PR-025/H07 must settle candidate-proposal governance before harness mutation
+execution.** A future `BranchExperiment` Action is one possible design, not a
+decision made here. Generated candidates still require validation, budget checks
+and whatever governance the generic branching contract defines. Search remains
+replaceable; both proposal paths use one controller, decision engine, experiment
+graph and execution system.
 
 ## 11. Safety and policy
 
-Generated variants remain subject to Action/Policy controls, explicit tool
-permissions, connector trust boundaries, runtime sandboxing, human approvals
-and cost/budget enforcement. Prompt text cannot grant capabilities. Requested
-tool/capability changes are typed proposals checked against separately
-authorized grants; enabling a new tool requires that policy path.
+Generated candidates require candidate validation, budget checks and the generic
+branching governance settled by PR-025/H07. Their execution remains constrained
+by explicit tool permissions, connector trust boundaries, runtime sandboxing,
+applicable human approvals and cost/budget enforcement. CandidateProposal is
+not implicitly an Action or an input to PolicyEngine.
+
+Prompt text cannot grant capabilities. A candidate may request a tool set within
+existing grants; a new permission grant or connector/tool authorization requires
+an explicit typed ActionProposal/ActionSpec through PolicyEngine and approval
+where required. A candidate proposal cannot authorize its own requested tools.
+Operational changes and other actual Actions retain that same governed path.
 
 Effective permissions are resolved outside the prompt and recorded with the
 plan/trajectory. If policy denies a required capability, reject the candidate
@@ -409,7 +459,8 @@ it. Reject variants whose semantic requirements cannot be enforced.
 | Experiment graph / provenance | Parentage, mutation rationale and artifact lineage |
 | Evaluation / decision engine | Trajectory scoring, uncertainty and comparison decisions |
 | Planner / search | Proposals and branching through the same controller |
-| Action / policy / budget ledger | Authorized mutations/submissions, approvals and resource accounting |
+| Action / policy | Actual Actions, permission/connector authorization and applicable approvals; candidate branching governance remains a PR-025/H07 decision |
+| Budget ledger | Candidate/run resource checks and accounting across both proposal paths |
 | Artifact storage | Harness/code, pinned tasks, trajectories, reports and search state |
 | Runtime abstraction | Resolved plans, operation identity and reconciliation |
 
@@ -441,5 +492,7 @@ and unresolved decisions. Before the corresponding implementation steps:
   security/retention requirements without claiming unavailable reproducibility.
 - H06/H07 must settle replicate aggregation, objective contract evolution and
   optimizer capabilities; reuse policy remains separately governed by ADR-017.
+- PR-025/H07 must settle candidate-proposal governance before harness mutation
+  execution, preserving CandidateProposal and ActionProposal as distinct paths.
 - Joint mode must resolve trained artifact/model binding and composed identity
   before scheduling any joint search. No Cartesian-product design is frozen here.

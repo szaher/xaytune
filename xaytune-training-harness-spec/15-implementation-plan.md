@@ -1208,7 +1208,7 @@ now so later planner contracts avoid unnecessary training-only assumptions.
 | H04 | Benchmark/task/environment protocol and input resolution | H02; repeatability/pinning review; required before comparable execution |
 | H05 | Trajectory artifact model | H03–H04; provenance/security/retention review |
 | H06 | Harness evaluator + multi-objective metrics | H04–H05; replicate and objective contract review |
-| H07 | Mutation/search provider protocols | H02, H06; generic planner/branching; policy-controlled proposals |
+| H07 | Mutation/search provider protocols | H02, H06; PR-025 candidate-proposal governance settled before mutation execution; distinct CandidateProposal/ActionProposal paths |
 | H08 | Pi adapter | H03–H05; declared supported subset and capability checks |
 | H09 | Codex adapter | H03–H05; declared supported subset and capability checks |
 | H10 | Claude Code adapter | H03–H05; declared supported subset and capability checks |

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1290" viewBox="0 0 1200 1290" role="img" aria-labelledby="harness-optimization-title harness-optimization-desc">
 <title id="harness-optimization-title">Agent harness optimization</title>
-<desc id="harness-optimization-desc">TrainingCandidate passes through TrainerCompiler and TrainingExecutionSpec. AgentHarnessCandidate passes through HarnessCompiler and AgentExecutionSpec. Both share capability resolution, ResolvedExecutionPlan and RuntimeBackend. The harness loop is candidate, pinned tasks and environment, trajectory, evaluation, planner or search, and a new candidate. Policy and budgets govern the same controller.</desc>
+<desc id="harness-optimization-desc">TrainingCandidate passes through TrainerCompiler and TrainingExecutionSpec. AgentHarnessCandidate passes through HarnessCompiler and AgentExecutionSpec. Both share capability resolution, ResolvedExecutionPlan and RuntimeBackend. The harness loop is candidate, pinned tasks and environment, trajectory, evaluation, planner or search, and a new candidate. Candidate proposals use generic branching governance; actual Actions use PolicyEngine and approval. Both share one controller and experiment graph, separate from capability resolution.</desc>
 <defs><marker id="harness-optimization-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
 <style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
 <rect width="1200" height="1290" fill="#f5f8fb"/>
@@ -30,12 +30,13 @@
 <rect x="48" y="505" width="1104" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
 <rect x="68" y="529" width="5" height="62" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
 <text x="90" y="547" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Capability resolution → ResolvedExecutionPlan</text>
-<text x="90" y="579" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">One control plane · typed Actions · policy · budget authorization</text>
+<text x="90" y="579" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Matches workload requirements to compiler/runtime capabilities</text>
 <path d="M 600 615 L 600 660" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
 <rect x="48" y="660" width="1104" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
 <rect x="68" y="684" width="5" height="62" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
 <text x="90" y="702" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">RuntimeBackend</text>
 <text x="90" y="734" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Executes the resolved plan; harness-vendor semantics stay above runtime</text>
+<text x="48" y="810" font-size="20" fill="#52677b" font-weight="400" text-anchor="start" class="">One controller / graph · candidate governance: PR-025/H07 · Actions → PolicyEngine</text>
 <text x="48" y="840" font-size="28" fill="#087f79" font-weight="700" text-anchor="start" class="">Planned harness experiment loop</text>
 <rect x="48" y="890" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
 <rect x="68" y="914" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
@@ -56,11 +57,11 @@
 <rect x="432" y="1080" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
 <rect x="452" y="1104" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
 <text x="474" y="1122" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Planner / search</text>
-<text x="474" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Typed mutation proposal</text>
+<text x="474" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Typed CandidateProposal</text>
 <rect x="48" y="1080" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
 <rect x="68" y="1104" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
-<text x="90" y="1122" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">New candidate</text>
-<text x="90" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">New experiment node</text>
+<text x="90" y="1122" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Branching path</text>
+<text x="90" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Validated candidate → node</text>
 <path d="M 384 945 L 432 945" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
 <path d="M 768 945 L 816 945" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
 <path d="M 984 1000 L 984 1080" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>

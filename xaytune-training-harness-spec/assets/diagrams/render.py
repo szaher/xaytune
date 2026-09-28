@@ -472,7 +472,9 @@ def harness_optimization():
         "AgentHarnessCandidate passes through HarnessCompiler and AgentExecutionSpec. "
         "Both share capability resolution, ResolvedExecutionPlan and RuntimeBackend. "
         "The harness loop is candidate, pinned tasks and environment, trajectory, evaluation, "
-        "planner or search, and a new candidate. Policy and budgets govern the same controller.",
+        "planner or search, and a new candidate. Candidate proposals use generic branching "
+        "governance; actual Actions use PolicyEngine and approval. Both share one controller "
+        "and experiment graph, separate from capability resolution.",
     )
     d.card(48, 165, 532, 110, "TrainingCandidate", ["Today: compatible CandidateSpec"], BLUE)
     d.card(
@@ -490,7 +492,7 @@ def harness_optimization():
         1104,
         110,
         "Capability resolution → ResolvedExecutionPlan",
-        ["One control plane · typed Actions · policy · budget authorization"],
+        ["Matches workload requirements to compiler/runtime capabilities"],
         PURPLE,
     )
     d.arrow([(600, 615), (600, 660)])
@@ -503,14 +505,21 @@ def harness_optimization():
         ["Executes the resolved plan; harness-vendor semantics stay above runtime"],
         PURPLE,
     )
+    d.text(
+        48,
+        810,
+        "One controller / graph · candidate governance: PR-025/H07 · Actions → PolicyEngine",
+        20,
+        MUTED,
+    )
     d.text(48, 840, "Planned harness experiment loop", 28, TEAL, bold=True)
     steps = (
         (48, 890, "Harness candidate", "Immutable hypothesis"),
         (432, 890, "Tasks / environment", "Pinned suite and inputs"),
         (816, 890, "Trajectory", "Durable artifact + digests"),
         (816, 1080, "Evaluation", "Quality · cost · latency"),
-        (432, 1080, "Planner / search", "Typed mutation proposal"),
-        (48, 1080, "New candidate", "New experiment node"),
+        (432, 1080, "Planner / search", "Typed CandidateProposal"),
+        (48, 1080, "Branching path", "Validated candidate → node"),
     )
     for x, y, heading, detail in steps:
         d.card(x, y, 336, 110, heading, [detail], TEAL)

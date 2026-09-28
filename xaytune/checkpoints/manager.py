@@ -51,6 +51,14 @@ class CheckpointManager:
         self, record: RecordedCheckpoint, context: RestoreContext
     ) -> RestoredCheckpoint:
         """Bind localized bytes to the durable producer and reported capture."""
+        context = RestoreContext.model_validate_json(context.model_dump_json())
+        localized = await self.validate_recorded(record, context)
+        return await self.codec.decode(localized.directory, localized.manifest, context)
+
+    async def validate_recorded(
+        self, record: RecordedCheckpoint, context: RestoreContext
+    ) -> LocalizedCheckpoint:
+        """Validate eligibility without decoding or applying trainer state."""
         record = RecordedCheckpoint.model_validate_json(record.model_dump_json())
         context = RestoreContext.model_validate_json(context.model_dump_json())
         localized = await self.store.get(record.payload.checkpoint_ref)
@@ -65,11 +73,19 @@ class CheckpointManager:
             raise CheckpointCorruptionError(
                 "checkpoint bundle disagrees with its durable commit report"
             )
-        return await self._decode(localized, context)
+        self._validate_compatibility(localized, context)
+        self.codec.validate(manifest)
+        return localized
 
     async def _decode(
         self, localized: LocalizedCheckpoint, context: RestoreContext
     ) -> RestoredCheckpoint:
+        self._validate_compatibility(localized, context)
+        return await self.codec.decode(localized.directory, localized.manifest, context)
+
+    def _validate_compatibility(
+        self, localized: LocalizedCheckpoint, context: RestoreContext
+    ) -> None:
         manifest = localized.manifest
         if (
             manifest.codec != self.codec.descriptor.name
@@ -94,4 +110,3 @@ class CheckpointManager:
             raise CheckpointCompatibilityError(
                 "checkpoint does not provide the requested guarantee"
             )
-        return await self.codec.decode(localized.directory, manifest, context)

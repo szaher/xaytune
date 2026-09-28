@@ -33,6 +33,7 @@ The body after the prefix is ULID-shaped: 10 Crockford base32 characters of mill
 | `RunAttemptId` | `attempt_` |
 | `ActionId` | `act_` |
 | `IncidentId` | `inc_` |
+| `RecoveryPlanId` | `recovery_` |
 | `EvaluationId` | `eval_` |
 | `EvaluationRunId` | `evalrun_` |
 | `EvaluationAttemptId` | `evalattempt_` |
@@ -176,6 +177,79 @@ ExecutionOverride(
 The `kind` vocabulary is closed. Learning rate, optimizer, LoRA rank, data, scheduler, reward and model revision changes are not override kinds, and the type rejects them. Depending on experimental intent they are either a `TrainingIntervention` or a new `ExperimentNode`.
 
 `TrainingIntervention` itself is not in this package yet — it arrives with the controller work. The rule is recorded here so the distinction is not rediscovered from the older binary model.
+
+## Recovery decisions (PR-019)
+
+`RecoveryPlan`, `RecoveryStrategy`, `Recoverability`, `RecoveryLimits` and
+`RecoveryRequest` describe what recovery should happen. The coordinator records
+one immutable plan per incident with a `RecoveryPlanned` event and outbox in one
+transaction. It does not execute recovery, change an aggregate's status, create
+an Action, submit a workload, or create an attempt or experiment node.
+
+```python
+from xaytune.core import RecoveryLimits, RecoveryRequest
+from xaytune.resilience.recovery import RecoveryCoordinator
+
+coordinator = RecoveryCoordinator(repository, checkpoint_manager)
+request = RecoveryRequest(
+    limits=RecoveryLimits(
+        max_attempts_per_run=3,
+        max_recoveries_per_experiment=10,
+        max_same_incident_repeats=2,
+    ),
+    restore_context=consumer_restore_context,
+)
+plan = await coordinator.plan(incident_id, request)
+
+# After restart, preserve existing plans and fill incident→plan gaps.
+plans = await coordinator.reconcile(
+    experiment_id, request_for_incident=lambda incident: request,
+)
+```
+
+The consumer must supply its own `RestoreContext`; copying compatibility from an
+available checkpoint would hide incompatibility. Selection considers committed
+reports from the same logical run, through the incident's attempt, preceding the
+incident. It orders checkpoints by optimizer step, producer attempt number, then
+checkpoint ID, newest first. It validates bytes, producer/candidate/execution
+provenance, codec layout, topology, dataset and ordering through
+`CheckpointManager.validate_recorded`, without decoding or applying state.
+Generic resume requires `FULL + EXACT`, an optimizer-step boundary and a data
+cursor. A corrupt or incompatible newest checkpoint can fall back to an older
+eligible checkpoint. Reports from other runs and future training positions are
+excluded. Execution must revalidate the selected checkpoint later.
+
+Generic transient infrastructure failures select `RESUME` when eligible. Without
+an eligible checkpoint they select `PAUSE_FOR_APPROVAL`, unless
+`allow_retry_without_checkpoint=True` explicitly permits a fresh `RETRY`.
+CUDA OOM and numerical incidents pause for their later specialised planners;
+evaluation recovery and unknown diagnoses require review. Corrected data or
+configuration is required for fatal diagnoses. Completed/cancelled work,
+terminal experiments/candidates and superseded attempts cannot be recovered.
+
+Limits count recorded `RETRY`/`RESUME` decisions as conservative recovery
+reservations, not completed executions. Current-attempt reservations consume
+future attempt slots; once a successor attempt exists, it represents older
+reservations in the actual attempt count. Experiment recovery limits count all
+such decisions. A failure pattern includes category, structured code location,
+resource shape, numerical quantity and candidate fingerprint. It ignores delivery
+IDs, counters and free-form detail. Repeating that pattern in the same run under
+unchanged execution/override values refuses another identical recovery; the
+repeat limit also bounds patterns across execution changes.
+The repeat threshold counts earlier matching planned incidents; zero still
+permits an initial response and refuses a repeated response.
+
+Each plan preserves its planning snapshot, request and checkpoint eligibility
+evidence. Recording rechecks durable inputs under the write lock, so concurrent
+planners cannot bypass limits. Exact semantic recording retries return the
+original ID/time; changed decisions for the same incident conflict. Coordinator
+replay returns the recorded decision without reevaluating changed policy or
+checkpoint files. Reconciliation resolves consumer configuration only for
+missing plans. A pause plan describes a future approval requirement; it does not
+create an approval request or grant execution authority. Action governance,
+capability checks, execution budget checks, overrides and scientific interventions
+belong to the later execution path. EmbeddedControllerHost does not yet invoke
+the coordinator automatically.
 
 ## State machines
 

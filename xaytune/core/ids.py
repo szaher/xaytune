@@ -39,6 +39,7 @@ __all__ = [
     "ExperimentId",
     "ExperimentNodeId",
     "IncidentId",
+    "RecoveryPlanId",
     "OperationId",
     "RunAttemptId",
     "RunId",
@@ -192,6 +193,13 @@ class IncidentId(TypedId):
 
     __slots__ = ()
     prefix = "inc_"
+
+
+class RecoveryPlanId(TypedId):
+    """Identifies an immutable recovery decision."""
+
+    __slots__ = ()
+    prefix = "recovery_"
 
 
 class EvaluationId(TypedId):

@@ -1021,6 +1021,35 @@ Start local-only.
 
 ### PR-019 — recovery plan + coordinator
 
+**As built:**
+
+- Immutable `RecoveryPlan`, typed plan ID, strategy/recoverability vocabulary,
+  explicit `RecoveryRequest` and strict `RecoveryLimits`. The pure deterministic
+  planner uses recorded ownership, statuses, execution state and recovery history.
+- `RecoveryCoordinator` selects committed checkpoints from the same logical run,
+  through the failing attempt and before its incident. It validates bytes,
+  provenance, consumer compatibility and `FULL + EXACT` optimizer-boundary capture
+  through the manager's validation-only API. It never decodes or applies state.
+  Selection is deterministic and can fall back from a corrupt newest report.
+- Generic infrastructure failures decide resume or explicitly permitted fresh
+  retry. CUDA OOM, numerical incidents, evaluation failures and unknown diagnoses
+  pause for specialised planning/review. No OOM algorithm or numerical mutation.
+- Attempt/experiment limits include planned recovery reservations. Structured,
+  versioned incident signatures and execution/override state prevent identical
+  recovery loops and bound repeats across execution changes.
+- Migration 012 stores one append-only plan per incident. Plan/event/outbox share
+  a transaction; recording rechecks the input snapshot and refuses stale limits,
+  changed semantic replay, conflicting provenance and unrecorded checkpoint refs.
+- Explicit coordinator reconciliation fills incident→plan crash gaps after restart
+  and preserves recorded decisions without re-evaluating policy or files. Tests
+  cover hard process exits before/after commit, process contention, exact replay,
+  limits/loops and checkpoint eligibility. Controller auto-invocation waits for
+  the execution path; existing incident-only host behavior is preserved.
+- No recovery execution, Actions, RuntimeOperations, new attempts/nodes, execution
+  overrides, scientific mutations, budget-ledger reservations or harness work.
+  Plans grant no authority; future execution must revalidate checkpoints and use
+  Action/policy/capability/budget governance.
+
 ### PR-020 — adaptive OOM recovery
 
 Implement execution override:

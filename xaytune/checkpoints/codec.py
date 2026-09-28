@@ -50,6 +50,10 @@ class CheckpointCodec(Protocol):
 
     def compatibility_key(self, context: CheckpointContext | RestoreContext) -> str: ...
 
+    def validate(self, manifest: CheckpointManifest) -> None:
+        """Validate the encoded layout without decoding or applying state."""
+        ...
+
     async def encode(
         self, state: CheckpointState, destination: Path, context: CheckpointContext
     ) -> CheckpointManifest: ...
@@ -78,6 +82,9 @@ class SerializedStateCodec:
                 "compatibility": context.compatibility.model_dump(mode="json"),
             }
         )
+
+    def validate(self, manifest: CheckpointManifest) -> None:
+        self._validate_components(manifest)
 
     async def encode(
         self, state: CheckpointState, destination: Path, context: CheckpointContext

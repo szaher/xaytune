@@ -17,7 +17,7 @@ Responsibilities:
 - validate actions
 - reserve budget
 - create nodes/runs/attempts
-- compile training
+- compile the candidate through its compiler (training today; harness planned)
 - submit runtime workload
 - observe runtime
 - request evaluation
@@ -107,6 +107,16 @@ get_logs()
 cancel()
 lookup_operation()
 ```
+
+### Planned harness execution path
+
+[Chapter 23](23-agent-harness-optimization.md#6-compilation-and-execution-boundary)
+proposes a sibling HarnessCompiler and AgentExecutionSpec above the existing
+resolved-plan/runtime boundary. Harness adapters translate agent behavior;
+runtimes execute plans. Candidate generalization is proposed in ADR-018, with
+existing CandidateSpec compatibility preserved. No second controller is added.
+
+![Training and planned harness paths share resolution, runtime and the experiment loop.](assets/diagrams/harness-optimization.svg)
 
 ## 4. Evaluation path
 

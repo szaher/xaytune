@@ -134,6 +134,16 @@ xaytune.search_providers
 xaytune.event_sinks
 ```
 
+### Planned harness plugin boundaries
+
+[Chapter 23](23-agent-harness-optimization.md) proposes HarnessCompiler/adapters,
+task/environment providers, HarnessMutationProvider and HarnessSearchProvider
+under the same versioned plugin discipline. Registration names and capability
+schemas await H02–H07 review; no entry points are added by this specification.
+Technical capability declarations do not grant tool permissions. Harness
+requirements must be resolved against separately authorized grants and policy,
+and unsupported settings must be refused rather than silently ignored.
+
 ## 8. ABI compatibility
 
 Each plugin load must validate:

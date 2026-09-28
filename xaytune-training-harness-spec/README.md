@@ -12,11 +12,11 @@ The design assumes the current Xaytune repository continues to exist and is evol
 post-training. It coordinates training, evaluation, adaptation, recovery and experiment
 lineage across trainer and runtime backends.
 
-**Internal architectural definition:** Xaytune is an experiment control plane that compiles training intent into serializable execution plans, delegates execution to runtimes, observes the result, evaluates it, applies policy and budget constraints, and decides what should happen next.
+**Internal architectural definition:** Xaytune is an experiment control plane that compiles scientific intent into serializable execution plans, delegates execution to runtimes, observes the result, evaluates it, applies policy and budget constraints, and decides what should happen next. Training is the current candidate type; Agent Harness Optimization is a planned extension.
 
 The governing rule is:
 
-> Xaytune controls the experiment. Trainer integrations compile training intent. Runtime integrations execute training.
+> Xaytune controls the experiment. Compiler integrations translate scientific intent. Runtime integrations execute resolved plans.
 
 ## What Xaytune is not
 
@@ -42,6 +42,12 @@ membership recovery and topology repair. Those belong in the runtime, not in a c
 plane. Xaytune owns semantic recovery ("this workload has OOMed three times after worker
 replacement, so infrastructure retry is not solving it"), not distributed-systems fault
 tolerance.
+
+**Planned:** Agent Harness Optimization adds the parallel shape
+`candidate → tasks/environment → trajectory → evaluate → compare → mutate`.
+It optimizes harness/system behavior with fixed model weights, distinct from
+Agent Training. [Chapter 23](23-agent-harness-optimization.md) defines the future
+contracts; existing training APIs do not yet support harness candidates.
 
 ## Why this exists
 
@@ -103,6 +109,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 - `20-security-and-governance.md` — agent authority, secrets, audit, supply chain, execution safety
 - `21-observability-and-provenance.md` — event model, MLflow/W&B mapping, lineage
 - `22-open-questions.md` — decisions intentionally deferred
+- [23-agent-harness-optimization.md](23-agent-harness-optimization.md) — planned harness candidates, identity, compilation, tasks, trajectories, evaluation and search
 - `adrs/` — architecture decision records required before implementation
   - ADR-011 extends ADR-003 and ADR-006 with `TrainingIntervention` and a layered
     identity model; read it alongside both
@@ -120,15 +127,18 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   - ADR-017 holds the reuse-policy question split out of ADR-006; it gates band G
     and nothing earlier, because a reuse rule is a query over fingerprints that
     already exist
+  - [ADR-018](adrs/ADR-018-agent-harness-candidates.md) proposes first-class harness
+    candidates while preserving CandidateSpec; it gates the future H02–H12 track,
+    not current recovery or generic planner work
 
   ADR status is **not** a single block. It is:
 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-005 – ADR-007, ADR-009, ADR-011 – ADR-016 |
+  | Accepted by decision | ADR-001, ADR-005 – ADR-009, ADR-011 – ADR-016 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-004, ADR-017 |
+  | Still `Proposed` | ADR-004, ADR-017, ADR-018 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.
@@ -141,7 +151,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   aggregates. ADR-008 was accepted on 2026-09-22, which unblocked band C.
   ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for
   band F and the legacy read-surface contract for PR-018. The remaining proposed
-  ADRs gate later work: ADR-017 band G and ADR-004 band H.
+  ADRs gate later work: ADR-017 band G, ADR-004 band H and ADR-018 the separate harness track.
 - `schemas/` — proposed YAML and JSON/Python schema examples, and the design
   drafts of migrations 001–003 with their rationale. They are not the schema:
   the shipped migrations are `xaytune/storage/migrations/001`–`006` (core
@@ -171,9 +181,13 @@ Note **action / policy / budget precedes incidents and recovery**. ADR-011 makes
 an intervention the outcome of an approved Action, so recovery cannot come
 first — it needs something to authorize it.
 
+The separate [Harness Optimization track](15-implementation-plan.md#harness-optimization-track-planned)
+uses H01–H12 IDs. Its specification lands now; implementation depends on the
+generic planner/branching foundation and does not reorder Phase 5 recovery.
+
 ## Definition of success
 
-A successful Xaytune experiment can:
+A successful training-path Xaytune experiment can (target capabilities):
 
 1. accept a training objective and immutable training specification
 2. compile it into a serializable execution plan

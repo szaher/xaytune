@@ -35,6 +35,12 @@ TrainerBackend.evaluate(...)
 
 Evaluation has its own protocol and execution path.
 
+The planned harness path measures trajectory/output artifacts through this same
+independent lifecycle. It preserves success, quality, cost, tokens and latency
+as separate metrics, distinguishing stochastic execution replicates from judge
+replicates. Multi-objective selection and harness evaluator support remain
+future work; see [chapter 23](23-agent-harness-optimization.md#9-evaluation-and-independent-objectives).
+
 ## 2. EvaluationSpec
 
 ```python

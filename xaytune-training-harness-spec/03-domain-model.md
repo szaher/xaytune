@@ -79,8 +79,8 @@ A node should not be created for worker replacement, preemption, or ordinary ret
 
 ### CandidateSpec
 
-A candidate is the whole scientific proposition, not just trainer hyperparameters
-(ADR-011):
+Today, `CandidateSpec` is the whole **training** scientific proposition, not
+just trainer hyperparameters (ADR-011):
 
 ```python
 class CandidateSpec(BaseModel):
@@ -99,6 +99,16 @@ ADR-006 exists to prevent. Evaluation attaches to the node, run or artifact.
 The same grader can appear in both roles: used inside the training loop it is a reward
 and belongs to `RewardSpec`; used to score the artifact it is an evaluator and
 contributes only to `EvaluationFingerprint`. The role decides, not the object.
+
+### Planned candidate kinds
+
+[ADR-018](adrs/ADR-018-agent-harness-candidates.md) proposes a versioned candidate
+envelope with `TRAINING` and `AGENT_HARNESS` payloads. Existing `CandidateSpec`
+remains readable and API-compatible as the training representation. The node
+and run hierarchy is reused; no schema changes are made here. A future harness
+node tests behavior configuration rather than necessarily training model weights.
+See [chapter 23](23-agent-harness-optimization.md#2-candidate-generalization-and-compatibility)
+for the staged migration and scientific/execution identity boundary.
 
 ## 4. Run
 

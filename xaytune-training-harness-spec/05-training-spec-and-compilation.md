@@ -1,5 +1,11 @@
 # Training Specification and Compilation
 
+> This chapter defines the training candidate/compiler path. `CandidateSpec`
+> remains the current training API. The planned sibling harness path and future
+> candidate envelope are proposed in [chapter 23](23-agent-harness-optimization.md)
+> and [ADR-018](adrs/ADR-018-agent-harness-candidates.md); harness support is not
+> yet implemented. A harness candidate does not require training fields.
+
 ## 1. Why this boundary exists
 
 Trainer libraries and execution runtimes are different concerns.

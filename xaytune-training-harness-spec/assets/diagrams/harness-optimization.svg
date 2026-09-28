@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1290" viewBox="0 0 1200 1290" role="img" aria-labelledby="harness-optimization-title harness-optimization-desc">
+<title id="harness-optimization-title">Agent harness optimization</title>
+<desc id="harness-optimization-desc">TrainingCandidate passes through TrainerCompiler and TrainingExecutionSpec. AgentHarnessCandidate passes through HarnessCompiler and AgentExecutionSpec. Both share capability resolution, ResolvedExecutionPlan and RuntimeBackend. The harness loop is candidate, pinned tasks and environment, trajectory, evaluation, planner or search, and a new candidate. Policy and budgets govern the same controller.</desc>
+<defs><marker id="harness-optimization-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52677b"/></marker></defs>
+<style>text{font-family:Arial,Helvetica,sans-serif} .mono{font-family:Menlo,Consolas,monospace}</style>
+<rect width="1200" height="1290" fill="#f5f8fb"/>
+<text x="48" y="40" font-size="15" fill="#087f79" font-weight="700" text-anchor="start" class="">XAYTUNE  /  ARCHITECTURE SPECIFICATION</text>
+<text x="48" y="86" font-size="34" fill="#172b40" font-weight="700" text-anchor="start" class="">Agent harness optimization</text>
+<text x="48" y="119" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Proposed in ADR-018; harness support is planned, not yet implemented.</text>
+<rect x="48" y="165" width="532" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="189" width="5" height="62" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
+<text x="90" y="207" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">TrainingCandidate</text>
+<text x="90" y="239" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Today: compatible CandidateSpec</text>
+<rect x="620" y="165" width="532" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="640" y="189" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="662" y="207" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">AgentHarnessCandidate</text>
+<text x="662" y="239" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Planned: fixed-weight agent behavior</text>
+<path d="M 314 275 L 314 330" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 886 275 L 886 330" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<rect x="48" y="330" width="532" height="120" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="354" width="5" height="72" rx="2" fill="#2567ad" stroke="#2567ad" stroke-width="1.5"/>
+<text x="90" y="372" font-size="24" fill="#2567ad" font-weight="700" text-anchor="start" class="">TrainerCompiler</text>
+<text x="90" y="404" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Emits TrainingExecutionSpec</text>
+<rect x="620" y="330" width="532" height="120" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="640" y="354" width="5" height="72" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="662" y="372" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">HarnessCompiler</text>
+<text x="662" y="404" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Emits AgentExecutionSpec</text>
+<path d="M 314 450 L 314 477 L 600 477 L 600 505" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 886 450 L 886 477 L 600 477" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<rect x="48" y="505" width="1104" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="529" width="5" height="62" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="90" y="547" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">Capability resolution → ResolvedExecutionPlan</text>
+<text x="90" y="579" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">One control plane · typed Actions · policy · budget authorization</text>
+<path d="M 600 615 L 600 660" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<rect x="48" y="660" width="1104" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="684" width="5" height="62" rx="2" fill="#694bb1" stroke="#694bb1" stroke-width="1.5"/>
+<text x="90" y="702" font-size="24" fill="#694bb1" font-weight="700" text-anchor="start" class="">RuntimeBackend</text>
+<text x="90" y="734" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Executes the resolved plan; harness-vendor semantics stay above runtime</text>
+<text x="48" y="840" font-size="28" fill="#087f79" font-weight="700" text-anchor="start" class="">Planned harness experiment loop</text>
+<rect x="48" y="890" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="914" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="90" y="932" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Harness candidate</text>
+<text x="90" y="964" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Immutable hypothesis</text>
+<rect x="432" y="890" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="452" y="914" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="474" y="932" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Tasks / environment</text>
+<text x="474" y="964" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Pinned suite and inputs</text>
+<rect x="816" y="890" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="836" y="914" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="858" y="932" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Trajectory</text>
+<text x="858" y="964" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Durable artifact + digests</text>
+<rect x="816" y="1080" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="836" y="1104" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="858" y="1122" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Evaluation</text>
+<text x="858" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Quality · cost · latency</text>
+<rect x="432" y="1080" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="452" y="1104" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="474" y="1122" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">Planner / search</text>
+<text x="474" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">Typed mutation proposal</text>
+<rect x="48" y="1080" width="336" height="110" rx="16" fill="white" stroke="#d5e0ea" stroke-width="1.5"/>
+<rect x="68" y="1104" width="5" height="62" rx="2" fill="#087f79" stroke="#087f79" stroke-width="1.5"/>
+<text x="90" y="1122" font-size="24" fill="#087f79" font-weight="700" text-anchor="start" class="">New candidate</text>
+<text x="90" y="1154" font-size="19" fill="#52677b" font-weight="400" text-anchor="start" class="">New experiment node</text>
+<path d="M 384 945 L 432 945" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 768 945 L 816 945" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 984 1000 L 984 1080" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 816 1135 L 768 1135" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 432 1135 L 384 1135" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)"/>
+<path d="M 48 1135 L 24 1135 L 24 945 L 48 945" fill="none" stroke="#52677b" stroke-width="2" marker-end="url(#harness-optimization-arrow)" stroke-dasharray="7 6"/>
+<text x="600" y="1230" font-size="21" fill="#52677b" font-weight="400" text-anchor="middle" class="">Harness-only MVP requires no model training or weight updates.</text>
+<text x="48" y="1266" font-size="14" fill="#52677b" font-weight="400" text-anchor="start" class="">Xaytune 2.0 · Target architecture</text>
+<text x="1152" y="1266" font-size="14" fill="#52677b" font-weight="400" text-anchor="end" class="">Contracts and rollout status: see linked specification</text>
+</svg>

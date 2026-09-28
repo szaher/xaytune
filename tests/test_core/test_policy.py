@@ -26,6 +26,7 @@ from xaytune.core.capabilities import (
     PrecisionCapabilities,
     ResilienceCapabilities,
 )
+from xaytune.core.domain import policy as policy_domain
 from xaytune.core.domain.action import ActionTarget
 from xaytune.core.domain.actions import (
     ActionSpec,
@@ -457,9 +458,44 @@ def test_policy_input_identity_v1_is_pinned() -> None:
     """Changing what v1 projects changes this value: that is a v2, not an edit of v1."""
     spec = ChangeWorkerCount(target=RUN, workers=4)
     context = _context(spec, capabilities=ELASTIC, budget=BudgetStatus(dimensions=(_RUNS,)))
+    assert policy_input_identity_v1(context)["budget"] == [
+        {
+            "dimension": "runs",
+            "kind": "quota",
+            "limit": "2",
+            "reserved": "1",
+            "committed": "1",
+            "consumed": "1",
+            "released": "0",
+            "outstanding": "0",
+            "remaining": "1",
+        }
+    ]
     assert context.input_fingerprint() == (
         "sha256:3505b09610f40e9af4fda27e21dcb2b932e827148c9c7eee168ea77a64dbf56e"
     )
+
+
+@pytest.mark.parametrize("field", sorted(_READABLE[DimensionStatus]))
+def test_budget_normalization_and_identity_use_the_same_v1_fields(
+    field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing the shared declaration must affect both paths, never just one."""
+    spec = ChangeWorkerCount(target=RUN, workers=4)
+    budget = BudgetStatus(dimensions=(_RUNS,))
+    context = _context(spec, budget=budget)
+    fields = policy_domain._DIMENSION_FIELDS_V1
+    assert set(fields) == _READABLE[DimensionStatus]
+    assert len(fields) == len(set(fields))
+
+    monkeypatch.setattr(
+        policy_domain, "_DIMENSION_FIELDS_V1", tuple(f for f in fields if f != field)
+    )
+    projection = policy_input_identity_v1(context)["budget"][0]
+    assert set(projection) == _READABLE[DimensionStatus] - {field}
+    with pytest.raises(ValidationError) as error:
+        _context(spec, budget=budget)
+    assert any(e["loc"][-1:] == (field,) and e["type"] == "missing" for e in error.value.errors())
 
 
 class _LaterElasticity(ElasticityCapabilities):

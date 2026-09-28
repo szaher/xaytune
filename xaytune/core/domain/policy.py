@@ -282,20 +282,14 @@ def _budget_v1(budget: BudgetStatus | None) -> list[dict[str, Any]] | None:
         return None
     return [
         {
-            "dimension": d.dimension.value,
-            "kind": d.kind,
-            **{
-                name: str(getattr(d, name))
-                for name in (
-                    "limit",
-                    "reserved",
-                    "committed",
-                    "consumed",
-                    "released",
-                    "outstanding",
-                    "remaining",
-                )
-            },
+            name: (
+                d.dimension.value
+                if name == "dimension"
+                else d.kind
+                if name == "kind"
+                else str(getattr(d, name))
+            )
+            for name in _DIMENSION_FIELDS_V1
         }
         for d in sorted(budget.dimensions, key=lambda d: d.dimension.value)
     ]
@@ -339,7 +333,7 @@ _DIMENSION_FIELDS_V1 = (
     "outstanding",
     "remaining",
 )
-"""The ``DimensionStatus`` fields policy sees; ``_budget_v1`` identifies each."""
+"""Frozen v1 fields driving both exact budget normalization and identity projection."""
 
 _CAPABILITY_SECTIONS_V1: dict[str, type[Any]] = {
     "precision": PrecisionCapabilities,

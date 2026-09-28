@@ -462,6 +462,84 @@ def roadmap():
     d.save()
 
 
+def harness_optimization():
+    d = Diagram(
+        "harness-optimization",
+        1290,
+        "Agent harness optimization",
+        "Proposed in ADR-018; harness support is planned, not yet implemented.",
+        "TrainingCandidate passes through TrainerCompiler and TrainingExecutionSpec. "
+        "AgentHarnessCandidate passes through HarnessCompiler and AgentExecutionSpec. "
+        "Both share capability resolution, ResolvedExecutionPlan and RuntimeBackend. "
+        "The harness loop is candidate, pinned tasks and environment, trajectory, evaluation, "
+        "planner or search, and a new candidate. Candidate proposals use generic branching "
+        "governance; actual Actions use PolicyEngine and approval. Both share one controller "
+        "and experiment graph, separate from capability resolution.",
+    )
+    d.card(48, 165, 532, 110, "TrainingCandidate", ["Today: compatible CandidateSpec"], BLUE)
+    d.card(
+        620, 165, 532, 110, "AgentHarnessCandidate", ["Planned: fixed-weight agent behavior"], TEAL
+    )
+    d.arrow([(314, 275), (314, 330)])
+    d.arrow([(886, 275), (886, 330)])
+    d.card(48, 330, 532, 120, "TrainerCompiler", ["Emits TrainingExecutionSpec"], BLUE)
+    d.card(620, 330, 532, 120, "HarnessCompiler", ["Emits AgentExecutionSpec"], TEAL)
+    d.arrow([(314, 450), (314, 477), (600, 477), (600, 505)])
+    d.arrow([(886, 450), (886, 477), (600, 477)])
+    d.card(
+        48,
+        505,
+        1104,
+        110,
+        "Capability resolution → ResolvedExecutionPlan",
+        ["Matches workload requirements to compiler/runtime capabilities"],
+        PURPLE,
+    )
+    d.arrow([(600, 615), (600, 660)])
+    d.card(
+        48,
+        660,
+        1104,
+        110,
+        "RuntimeBackend",
+        ["Executes the resolved plan; harness-vendor semantics stay above runtime"],
+        PURPLE,
+    )
+    d.text(
+        48,
+        810,
+        "One controller / graph · candidate governance: PR-025/H07 · Actions → PolicyEngine",
+        20,
+        MUTED,
+    )
+    d.text(48, 840, "Planned harness experiment loop", 28, TEAL, bold=True)
+    steps = (
+        (48, 890, "Harness candidate", "Immutable hypothesis"),
+        (432, 890, "Tasks / environment", "Pinned suite and inputs"),
+        (816, 890, "Trajectory", "Durable artifact + digests"),
+        (816, 1080, "Evaluation", "Quality · cost · latency"),
+        (432, 1080, "Planner / search", "Typed CandidateProposal"),
+        (48, 1080, "Branching path", "Validated candidate → node"),
+    )
+    for x, y, heading, detail in steps:
+        d.card(x, y, 336, 110, heading, [detail], TEAL)
+    d.arrow([(384, 945), (432, 945)])
+    d.arrow([(768, 945), (816, 945)])
+    d.arrow([(984, 1000), (984, 1080)])
+    d.arrow([(816, 1135), (768, 1135)])
+    d.arrow([(432, 1135), (384, 1135)])
+    d.arrow([(48, 1135), (24, 1135), (24, 945), (48, 945)], dashed=True)
+    d.text(
+        600,
+        1230,
+        "Harness-only MVP requires no model training or weight updates.",
+        21,
+        MUTED,
+        center=True,
+    )
+    d.save()
+
+
 if __name__ == "__main__":
-    for render in (overview, execution, evaluation, dependencies, roadmap):
+    for render in (overview, execution, evaluation, dependencies, roadmap, harness_optimization):
         render()

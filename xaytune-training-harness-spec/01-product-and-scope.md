@@ -12,6 +12,13 @@ The boundary is **experiment topology, not GPU count**. Xaytune may direct very 
 
 It does not replace the trainer or runtime.
 
+**Planned extension:** Agent Harness Optimization compares prompts, tools,
+context and agent-system behavior using existing models, without requiring
+weight updates. It is separate from Agent Training (model-weight optimization).
+[Chapter 23](23-agent-harness-optimization.md) and proposed
+[ADR-018](adrs/ADR-018-agent-harness-candidates.md) define the future seam and
+compatibility path; harness support is not yet implemented.
+
 The product surface should make this possible:
 
 ```python
@@ -107,7 +114,10 @@ Trainer integrations compile a `CandidateSpec` into a `TrainingExecutionSpec`. T
 whole candidate is passed, not just its `TrainingSpec`: a GRPO or agent compiler
 needs the reward and environment to emit a runnable plan.
 
-Runtime integrations execute `TrainingExecutionSpec`.
+Runtime integrations execute resolved execution plans. Training uses
+`TrainingExecutionSpec`; the planned harness path uses a sibling
+`AgentExecutionSpec` through `HarnessCompiler` and the same resolution boundary.
+RuntimeBackend must not acquire harness-vendor semantics.
 
 A trainer integration must not own remote execution.
 
@@ -200,8 +210,9 @@ Wants a typed API for planning and changing experiments without uncontrolled inf
 3. evaluation-driven experiment branching
 4. HPO/search with Ray Tune / Katib / Optuna while preserving experiment lineage
 5. agent-planned model training
-6. agent training through TRL/OpenEnv/verl backends
+6. Agent Training through TRL/OpenEnv/verl backends (model-weight optimization)
 7. local-to-platform portability
 8. reproducibility and provenance
 9. training knowledge reuse
 10. policy- and budget-constrained autonomous experimentation
+11. planned Agent Harness Optimization (harness/system optimization; chapter 23)

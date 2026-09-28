@@ -104,6 +104,7 @@ matter of record rather than of review:
 | ADR-005 — the persistence transaction contract | band B, including PR-004; every transaction boundary and repository invariant the repository must hold |
 | ADR-006 — fingerprints (identity model) | PR-007 fingerprint framework; reuse policy split out to ADR-017 |
 | ADR-007 — evaluation independence | band D; extended by ADR-015 |
+| ADR-008 — versioned plugin ABI | band C; accepted 2026-09-22 |
 | ADR-009 — checkpoint layers | band F; accepted 2026-09-28, including PR-018's local-only and legacy read-surface boundaries |
 | ADR-011 — candidates, interventions, overrides | PR-005 event schema; supersedes ADR-003's two-level lineage and extends ADR-006 |
 | ADR-012 — data position and resume semantics | PR-005 checkpoint schema; all adaptive recovery |
@@ -120,8 +121,8 @@ that does not depend on it:
 | ADR | Blocks |
 |---|---|
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
-| ADR-008 — versioned plugin ABI | band C (compiler/runtime plugin loading) |
 | ADR-017 — reuse policy | band G (planner reuse decisions); split out of ADR-006 |
+| ADR-018 — agent harness candidates | future H02–H12 harness track; does not gate Phase 5/6 |
 
 ### Superseded
 
@@ -150,7 +151,7 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** The remaining `Proposed`
-ones gate later bands: ADR-017 band G and ADR-004 band H.
+ones gate later bands: ADR-017 band G, ADR-004 band H and ADR-018 the separate harness track.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
 ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for band F
@@ -1167,7 +1168,7 @@ Xaytune
 
 ---
 
-## Phase 11 — Search/memory/agent training
+## Phase 11 — Search/memory and Agent Training (model-weight optimization)
 
 After core stabilizes:
 
@@ -1175,7 +1176,49 @@ After core stabilizes:
 - KatibSearchProvider
 - structured experiment memory
 - semantic memory plugin
-- TRL/OpenEnv agent-training compiler
-- verl compiler
+- TRL/OpenEnv Agent Training compiler (weight updates through agent environments)
+- verl compiler (model-weight optimization)
 - torchtune compiler
 - Studio migration
+
+Agent Training changes model weights. Agent Harness Optimization changes how a
+model is operated and can run without training any model. The track below is
+separate from Phase 11's training integrations and experiment-memory plugins.
+
+---
+
+## Harness Optimization track (planned)
+
+[Chapter 23](23-agent-harness-optimization.md) defines the proposed architecture.
+[ADR-018](adrs/ADR-018-agent-harness-candidates.md) remains `Proposed`: H01 is
+specification/review only; H02 onward requires acceptance and the generic
+experiment/planner foundation. Existing historical PR numbers remain intact.
+
+**Current implementation priority is unchanged:** PR-019 RecoveryPlan/coordinator,
+PR-020 adaptive OOM recovery, PR-021 numerical recovery, PR-024 RuleBasedPlanner,
+PR-025 branching, PR-026 adaptive MVP. Harness implementation depends on those
+generic experiment/planning foundations and must not delay recovery. H01 lands
+now so later planner contracts avoid unnecessary training-only assumptions.
+
+| ID | Planned deliverable | Prerequisites / gate |
+|---|---|---|
+| H01 | Candidate-generalization ADR/spec | Architecture review; this spec-only PR |
+| H02 | AgentHarnessSpec + HarnessFingerprint and compatible candidate envelope | ADR-018 accepted; PR-024–026 foundation; wire/projection review |
+| H03 | Harness compiler/execution/runner protocol | H02; workload target/telemetry/version compatibility review |
+| H04 | Benchmark/task/environment protocol and input resolution | H02; repeatability/pinning review; required before comparable execution |
+| H05 | Trajectory artifact model | H03–H04; provenance/security/retention review |
+| H06 | Harness evaluator + multi-objective metrics | H04–H05; replicate and objective contract review |
+| H07 | Mutation/search provider protocols | H02, H06; PR-025 candidate-proposal governance settled before mutation execution; distinct CandidateProposal/ActionProposal paths |
+| H08 | Pi adapter | H03–H05; declared supported subset and capability checks |
+| H09 | Codex adapter | H03–H05; declared supported subset and capability checks |
+| H10 | Claude Code adapter | H03–H05; declared supported subset and capability checks |
+| H11 | Additional harness adapters: OpenCode, Hermes, custom production agents | H03–H05; each independently scoped |
+| H12 | End-to-end harness optimization MVP | H02–H07 and at least one validated adapter; safe isolated pinned suite |
+
+The first MVP optimizes **prompt, context policy and tool descriptions/configuration**
+within a fixed, already authorized tool set. It retains success, quality, cost,
+input/output tokens and latency separately, records trajectory and mutation
+provenance, enforces policy/budgets, and returns an immutable harness artifact.
+One validated adapter is sufficient; H09–H11 need not delay H12. Expand later
+into middleware, delegation, persistent memory and joint model+harness work.
+Search providers remain pluggable; no particular optimizer is required.

@@ -51,6 +51,10 @@ Runtime integrations implement execution.
 
 Do not add remote execution inside a TrainerCompiler.
 
+The planned HarnessCompiler follows the same rule: harness-specific translation
+belongs above runtime, which executes a resolved plan. See chapter 23 and
+proposed ADR-018; these documents do not authorize harness implementation.
+
 ### Rule 5 — Scientific lineage is immutable
 
 Do not mutate an active or completed `CandidateSpecSnapshot`. Immutability is deep:

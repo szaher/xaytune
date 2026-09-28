@@ -10,6 +10,7 @@ losing label clarity. Each includes an accessible title and description.
 | [Evaluation path](evaluation-path.svg) | Chapter 10, ADR-015 |
 | [Dependency boundaries](dependency-boundaries.svg) | Chapter 02 |
 | [Implementation order](implementation-order.svg) | Chapter 15 |
+| [Agent harness optimization](harness-optimization.svg) | Chapter 23, proposed ADR-018 |
 
 Edit `render.py`, then regenerate from the repository root:
 

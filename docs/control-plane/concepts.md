@@ -423,8 +423,44 @@ placeholder is not populated. Recording an observation does not advance the
 attempt's aggregate revision.
 
 An incident proposes no response. It creates no Action, runtime operation, new
-attempt, or experiment node. Checkpoint management, recovery plans, and recovery
-execution remain later work.
+attempt, or experiment node. Recovery plans and recovery execution remain later
+work.
+
+## Local checkpoint bundles
+
+`xaytune.checkpoints` provides a codec, local store and manager. The initial
+`SerializedStateCodec` packages **already serialized** trainer components,
+validating their state manifest, file digests and producing attempt. It does
+not capture or apply a live trainer's state. Existing legacy trainer checkpoints
+remain unchanged; their absent cursor/RNG evidence cannot support exact resume.
+
+The store validates and fsyncs private staging before atomically publishing a
+bundle. Incomplete staging cannot be listed or restored. The same checkpoint
+ID and manifest return the original committed reference; different content
+under that ID is refused. Every manifest and file has a mandatory digest, and
+localization verifies all bytes again. This requires a trusted local filesystem
+supporting directory rename and fsync; the local async APIs perform synchronous
+file I/O.
+
+Before decoding, `CheckpointManager` checks scientific identity, state format,
+framework/layout/topology compatibility, dataset identity and ordering, and any
+requested resume guarantee. Compatibility is conservative exact matching;
+there is no implicit resharding or guarantee downgrade. `restore_recorded`
+also binds the bundle to its durable producer and reported state. Decode returns
+encoded local files for a trainer adapter to apply; it does not create an
+attempt or claim that a trainer has resumed.
+
+The controller records `CheckpointCommitted` reports through
+`host.repository.checkpoints.for_attempt(attempt_id)`. A report, its event,
+delivery receipt and replay cursor commit atomically. Re-delivery and
+re-emission produce one semantic checkpoint and event. Recording preserves
+evidence without advancing the attempt revision or setting a second checkpoint
+output list on it. A report alone does not establish byte integrity or resume
+eligibility; a future recovery coordinator must verify it through the manager.
+
+Live trainer capture/application, retention and audited deletion, remote stores,
+recovery plans and automatic resume remain later work. Existing compilers still
+refuse checkpoint intent until their worker adapters implement capture.
 
 ## Not yet
 
@@ -433,5 +469,5 @@ implemented**: decisions that compare candidates (promotion, noise-aware
 comparison across replicates), lm-eval generation tasks, reusing earlier
 evaluation results, carrying out a proposed action (other than
 cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
-checkpoints and semantic recovery,
+live checkpoint capture/application and semantic recovery,
 planners and branching, daemon hosting, and runtimes other than local.

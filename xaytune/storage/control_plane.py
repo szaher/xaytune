@@ -46,6 +46,7 @@ from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar
 
 from xaytune.core.capabilities import CapabilityDocument
+from xaytune.core.checkpoint import RecordedCheckpoint, checkpoint_state_refs
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.action import (
     CANCELLATION_TYPES,
@@ -123,9 +124,10 @@ from xaytune.core.state.status import (
     RunAttemptStatus,
     RunStatus,
 )
-from xaytune.core.telemetry import EvaluationCompletedPayload
+from xaytune.core.telemetry import CheckpointCommittedPayload, EvaluationCompletedPayload
 from xaytune.storage.actions import ActionStore
 from xaytune.storage.budget import BudgetLedgerStore
+from xaytune.storage.checkpoints import CheckpointRecordStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
 from xaytune.storage.graph import ExperimentGraph
@@ -473,6 +475,7 @@ class ControlPlaneRepository:
         self.budget = BudgetLedgerStore(connection)
         self.policy = PolicyDecisionStore(connection)
         self.incidents = IncidentStore(connection)
+        self.checkpoints = CheckpointRecordStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
@@ -797,6 +800,94 @@ class ControlPlaneRepository:
                 target.id, (incident.stream_generation, incident.sequence), kind=target.kind
             )
         return incident
+
+    def record_checkpoint(
+        self,
+        attempt_id: RunAttemptId,
+        payload: CheckpointCommittedPayload,
+        *,
+        evidence: FrozenDict,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> RecordedCheckpoint:
+        """Persist a commit report, event/outbox, replay receipt and cursor atomically.
+
+        Reports never establish byte integrity or an achieved restore. A
+        future coordinator must use the checkpoint manager before selecting
+        one for resume. Re-emission at a new position adds a receipt, not a
+        second checkpoint/event. The original provenance remains authoritative.
+        """
+        target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+        with write_transaction(self._connection):
+            context = self.incident_context(target)
+            attempt = self.aggregates.load_attempt(str(attempt_id))
+            run = self.aggregates.load_run(str(attempt.run_id))
+            if attempt.execution_fingerprint is None:
+                raise ProvenanceError("checkpoint producer has no recorded execution fingerprint")
+            correlation = evidence.get("context") or {}
+            claims = {
+                "experiment_id": str(context.experiment_id),
+                "node_id": str(context.node_id),
+                "run_id": context.run_id,
+                "attempt_id": target.id,
+            }
+            if any(
+                correlation.get(name) is not None
+                for name in ("evaluation_run_id", "evaluation_attempt_id")
+            ):
+                raise ProvenanceError("checkpoint evidence claims an evaluation producer")
+            if any(correlation.get(name) not in (None, value) for name, value in claims.items()):
+                raise ProvenanceError("checkpoint evidence claims another owner")
+            record = RecordedCheckpoint.model_validate(
+                {
+                    "context": context,
+                    "candidate_fingerprint": run.candidate_fingerprint,
+                    "execution_fingerprint": attempt.execution_fingerprint,
+                    "payload": payload.model_dump(mode="json"),
+                    "evidence": evidence,
+                }
+            )
+            refs = checkpoint_state_refs(record.payload.state_manifest, record.payload.data_cursor)
+            if any(
+                ref is not None
+                and (
+                    ref.producer_attempt_id != attempt_id or ref.producer_evaluation_id is not None
+                )
+                for ref in refs
+            ):
+                raise ProvenanceError("checkpoint state names another or unknown producer")
+            generation, sequence = evidence["stream_generation"], evidence["sequence"]
+            receipt = self.checkpoints._receipt(str(attempt_id), generation, sequence)
+            if receipt is not None:
+                if receipt["evidence_digest"] != fingerprint(evidence):
+                    raise IdempotencyConflictError(
+                        str(attempt_id), ("evidence",), kind="checkpoint observation"
+                    )
+                existing = self.checkpoints.get(receipt["checkpoint_id"])
+                assert existing is not None
+                return existing
+            checkpoint_id = str(record.payload.checkpoint_ref.id)
+            existing = self.checkpoints.get(checkpoint_id)
+            if existing is not None:
+                if existing.context != context or (
+                    fingerprint(existing.payload) != fingerprint(record.payload)
+                ):
+                    raise IdempotencyConflictError(
+                        checkpoint_id, ("producer or payload",), kind="checkpoint"
+                    )
+            else:
+                self.checkpoints._insert(record)
+                self._emit(
+                    attempt,
+                    "CheckpointRecorded",
+                    str(context.experiment_id),
+                    actor,
+                    destinations,
+                    extra={"checkpoint": record.model_dump(mode="json")},
+                )
+            self.checkpoints._insert_receipt(record)
+            self.aggregates._advance_telemetry(str(attempt_id), (generation, sequence))
+        return existing or record
 
     def record_telemetry_degraded(
         self,

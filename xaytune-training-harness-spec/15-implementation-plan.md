@@ -972,6 +972,44 @@ classification → immutable incident and its event → stop.
 
 Start local-only.
 
+**As built:**
+
+- `xaytune.checkpoints` separates codec, store and manager (ADR-009).
+  `SerializedStateCodec` packages already serialized components using the
+  ADR-012 state manifest. Trainer adapters remain responsible for capturing
+  and applying actual state. The codec verifies every state/sampler/worker RNG
+  reference against bundled bytes, digest and producer, without loading ML
+  libraries or pickle.
+- The versioned manifest carries producer/candidate/execution provenance,
+  training position, cursor, intervention capture, guarantee, codec/version,
+  exact-match compatibility and mandatory manifest/file digests. The existing
+  telemetry validator enforces evidence for resume claims; missing legacy
+  state is never upgraded into `FULL` or `EXACT`.
+- `LocalCheckpointStore` validates and fsyncs same-filesystem staging, then
+  atomically renames into the committed namespace. Only published valid
+  bundles can be listed/localized. Stable checkpoint IDs and manifest identity
+  make publication replay-safe. Changed content under one ID conflicts,
+  including across processes. Identical retries discard their redundant staging.
+- The manager checks candidate, codec/layout/framework/topology compatibility,
+  dataset/ordering identity and requested guarantee before decode.
+  `restore_recorded` additionally binds bytes to the durable producer,
+  candidate, execution fingerprint and reported capture. Decode returns local
+  encoded files for an adapter to apply; it records no achieved trainer restore.
+- Migration 011 and the training observation loop record typed
+  `CheckpointCommitted` reports. Report, `CheckpointRecorded` event/outbox,
+  delivery receipt and cursor share one transaction. Replay or re-emission
+  records one semantic checkpoint/event; changed evidence or producer/payload
+  is refused. Reports and receipts are append-only. Reports do not prove byte
+  integrity: a coordinator must use the manager before selecting a checkpoint.
+  `repository.checkpoints.for_attempt(id)` is authoritative; recording does
+  not maintain a second output projection or advance the attempt revision.
+- No recovery plan/coordinator, automatic resume, action execution, new
+  attempt/node, live trainer integration, remote/distributed store, resharding,
+  retention/deletion or legacy conversion. Existing compilers still refuse
+  checkpoint intent until their adapters implement capture. Local storage
+  requires a trusted filesystem supporting atomic directory rename and fsync.
+  File I/O is synchronous within the async local APIs.
+
 ### PR-019 — recovery plan + coordinator
 
 ### PR-020 — adaptive OOM recovery

@@ -45,6 +45,7 @@ FORBIDDEN_ROOTS = frozenset(
 FORBIDDEN_XAYTUNE_MODULES = frozenset(
     {
         "xaytune.cli",
+        "xaytune.checkpoints",
         "xaytune.compilation",
         "xaytune.config",
         "xaytune.data",
@@ -281,6 +282,19 @@ def test_incident_detection_imports_without_runtime_or_recovery_integrations():
 import xaytune.resilience
 assert 'xaytune.runtimes' not in sys.modules
 assert 'xaytune.storage' not in sys.modules
+assert 'xaytune.policy' not in sys.modules
+""")
+    assert result.returncode == 0, result.stderr
+
+
+def test_checkpoint_layers_import_without_trainer_runtime_or_recovery():
+    result = _run_isolated("""
+import xaytune.core.checkpoint
+import xaytune.checkpoints
+assert 'xaytune.trainer' not in sys.modules
+assert 'xaytune.runtimes' not in sys.modules
+assert 'xaytune.storage' not in sys.modules
+assert 'xaytune.resilience' not in sys.modules
 assert 'xaytune.policy' not in sys.modules
 """)
     assert result.returncode == 0, result.stderr

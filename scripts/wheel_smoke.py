@@ -86,9 +86,11 @@ def import_the_installed_package() -> None:
     _no_training_stack("import xaytune")
     _step(f"import xaytune {xaytune.__version__} from {location.parent}")
 
+    import xaytune.checkpoints
     import xaytune.compilation.native
     import xaytune.compilation.trl
     import xaytune.core
+    import xaytune.core.checkpoint
     import xaytune.evaluation
     import xaytune.experiment
     import xaytune.storage  # noqa: F401
@@ -129,7 +131,14 @@ def migrate_a_new_store(directory: Path) -> None:
         }
     finally:
         connection.close()
-    for table in ("experiments", "runtime_operations", "actions", "evaluation_results"):
+    for table in (
+        "experiments",
+        "runtime_operations",
+        "actions",
+        "evaluation_results",
+        "checkpoints",
+        "checkpoint_receipts",
+    ):
         _check(table in tables, f"the migrated store has no {table} table")
     _step(f"new store migrated through {len(versions)} migrations: {', '.join(shipped)}")
 

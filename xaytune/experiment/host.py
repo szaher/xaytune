@@ -107,6 +107,7 @@ from xaytune.core.ids import (
     RunAttemptId,
     RunId,
 )
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, ArtifactRef, ControllerHostRef, RuntimeRef
 from xaytune.core.sqlite import connect
 from xaytune.core.state.machines import (
@@ -124,6 +125,7 @@ from xaytune.core.state.status import (
 )
 from xaytune.core.telemetry import (
     ArtifactProducedPayload,
+    CheckpointCommittedPayload,
     EvaluationCompletedPayload,
     EvaluationStartedPayload,
     TrainingStartedPayload,
@@ -639,6 +641,13 @@ class EmbeddedControllerHost:
                 self._advance_attempt(attempt_id, RunAttemptStatus.RUNNING, position)
             elif isinstance(observation, ArtifactProducedPayload):
                 self._record_artifact(attempt_id, observation.artifact_ref, position)
+            elif isinstance(observation, CheckpointCommittedPayload):
+                self.repository.record_checkpoint(
+                    attempt_id,
+                    observation,
+                    evidence=FrozenDict(envelope.model_dump(mode="json")),
+                    actor=_ACTOR,
+                )
             else:
                 self._record_incident(
                     RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id)), envelope

@@ -77,6 +77,14 @@ from xaytune.core.domain.experiment import (
     Experiment,
     ExperimentNode,
 )
+from xaytune.core.domain.incident import (
+    AttemptContext,
+    DetectorProvenance,
+    Incident,
+    IncidentCandidate,
+    IncidentCategory,
+    incident_observation_identity_v1,
+)
 from xaytune.core.domain.objective import (
     BudgetSpec,
     MetricConstraint,
@@ -108,6 +116,12 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "AttemptContext",
+    "DetectorProvenance",
+    "Incident",
+    "IncidentCandidate",
+    "IncidentCategory",
+    "incident_observation_identity_v1",
     "BudgetDimension",
     "BudgetExhaustedError",
     "BudgetLedgerEntry",

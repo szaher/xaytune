@@ -349,6 +349,7 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
             "IncidentObserved",
             reason="nonzero-exit" if code > 0 else "signalled",
             exit_code=code,
+            metadata={"cancelled": cancelled},
         )
 
     write_atomic(

@@ -56,6 +56,7 @@ FORBIDDEN_XAYTUNE_MODULES = frozenset(
         "xaytune.plugins",
         "xaytune.policy",
         "xaytune.recipes",
+        "xaytune.resilience",
         "xaytune.runtimes",
         "xaytune.studio",
         "xaytune.trainer",
@@ -273,3 +274,13 @@ def test_runtime_declares_no_trainer_or_integration_imports():
         for module in _imported_modules(ast.parse(path.read_text())):
             assert module.split(".")[0] not in FORBIDDEN_ROOTS, (path, module)
             assert not module.startswith(("xaytune.trainer", "xaytune.recipes")), (path, module)
+
+
+def test_incident_detection_imports_without_runtime_or_recovery_integrations():
+    result = _run_isolated("""
+import xaytune.resilience
+assert 'xaytune.runtimes' not in sys.modules
+assert 'xaytune.storage' not in sys.modules
+assert 'xaytune.policy' not in sys.modules
+""")
+    assert result.returncode == 0, result.stderr

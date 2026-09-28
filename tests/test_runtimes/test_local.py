@@ -599,17 +599,21 @@ def test_a_worker_that_cannot_be_started_fails_rather_than_vanishes(
 
 
 def test_cancelling_stops_the_workload(runtime: LocalRuntime) -> None:
-    async def scenario() -> RuntimeStatus:
+    async def scenario():
         ref = await runtime.submit_or_get(
             OperationId.generate(), _plan(*_python("import time; time.sleep(120)"))
         )
         await _await_state(runtime, ref, "running")
         await runtime.cancel(ref, OperationId.generate())
-        return await _settle(runtime, ref)
+        status = await _settle(runtime, ref)
+        return status, [event async for event in runtime.watch(ref)]
 
-    status = asyncio.run(scenario())
+    status, events = asyncio.run(scenario())
 
     assert status.state == "cancelled"
+    exits = [event.payload.data for event in events if event.payload.type == "IncidentObserved"]
+    assert len(exits) == 1
+    assert exits[0].metadata["cancelled"] is True
 
 
 def test_retrying_one_cancellation_does_not_signal_twice(
@@ -1192,6 +1196,7 @@ def test_telemetry_is_ordered_and_names_the_plans_target(runtime: LocalRuntime) 
     assert [event.payload.type for event in events] == ["WorkerReady", "IncidentObserved"]
     assert [event.sequence for event in events] == [0, 1]
     assert all(event.target == target for event in events)
+    assert events[-1].payload.data.metadata["cancelled"] is False
 
 
 def test_an_evaluation_target_gets_evaluation_telemetry(runtime: LocalRuntime) -> None:

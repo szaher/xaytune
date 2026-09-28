@@ -146,10 +146,12 @@ from xaytune.experiment.handle import (
 )
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.policy import DenyAllPolicy, PolicyEngine
-from xaytune.runtimes import RuntimeBackend, RuntimeStatus, StreamCursor
+from xaytune.resilience import IncidentClassifier
+from xaytune.runtimes import RuntimeBackend, RuntimeEventEnvelope, RuntimeStatus, StreamCursor
 from xaytune.storage.control_plane import (
     ControlPlaneRepository,
     EvaluationReconciliation,
+    ProvenanceError,
     StalePolicyContextError,
 )
 from xaytune.storage.migrations import migrate
@@ -163,6 +165,7 @@ __all__ = [
 ]
 
 _ACTOR = Actor(type="system", id="embedded-controller")
+_INCIDENT_CLASSIFIER = IncidentClassifier()
 
 _NODE_ACTIVATION = (
     ExperimentNodeStatus.PLANNED,
@@ -636,6 +639,10 @@ class EmbeddedControllerHost:
                 self._advance_attempt(attempt_id, RunAttemptStatus.RUNNING, position)
             elif isinstance(observation, ArtifactProducedPayload):
                 self._record_artifact(attempt_id, observation.artifact_ref, position)
+            else:
+                self._record_incident(
+                    RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id)), envelope
+                )
 
         status = await runtime.get_status(reference)
         if status.state in _LIVE_STATES:
@@ -1216,6 +1223,10 @@ class EmbeddedControllerHost:
                 self.repository.hold_evaluation_completion(
                     attempt_id, observation, telemetry_position=position, actor=_ACTOR
                 )
+            else:
+                self._record_incident(
+                    RuntimeOperationTarget(kind="evaluation-attempt", id=str(attempt_id)), envelope
+                )
 
         status = await runtime.get_status(reference)
         if status.state in _LIVE_STATES:
@@ -1697,6 +1708,20 @@ class EmbeddedControllerHost:
             actor=_ACTOR,
             telemetry_position=position,
         )
+
+    def _record_incident(
+        self, target: RuntimeOperationTarget, envelope: RuntimeEventEnvelope
+    ) -> None:
+        """Diagnose structured evidence, record it durably, and stop there."""
+        if envelope.target != target:
+            raise ProvenanceError("incident envelope belongs to another attempt")
+        incident = _INCIDENT_CLASSIFIER.inspect(
+            envelope.payload.data,
+            self.repository.incident_context(target),
+            evidence=envelope.model_dump(mode="json"),
+        )
+        if incident is not None:
+            self.repository.record_incident(incident, actor=_ACTOR)
 
     def _settle(
         self,

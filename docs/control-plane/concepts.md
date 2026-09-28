@@ -401,6 +401,31 @@ approval        does a human have to say yes?    when policy says so
   `APPROVED` with a `REQUIRE_APPROVAL` decision. It must check again, at that
   moment, that the action still applies.
 
+## Incidents
+
+An incident records what was observed and how it was classified. The controller
+reads the existing structured telemetry and records process failures, explicit
+CUDA OOM, symbolic NaN/Inf, and checkpoint failures. Other failure reasons are
+`UNKNOWN`; stderr and free-form error details do not determine a category.
+For example, `out-of-memory-error` alone does not distinguish host from CUDA
+memory exhaustion. The initial CUDA detector requires the `cuda-oom` reason.
+
+The record preserves the full telemetry envelope and the detector and classifier
+names and versions. Replay of the same attempt, stream generation, and sequence
+returns the same durable incident. Changed evidence at that position is refused.
+The incident, its event, and the replay cursor commit together, so a controller
+restart cannot lose the diagnosis or record it twice. Incidents are immutable.
+
+Read them through `host.repository.incidents.for_experiment(experiment_id)` or
+`for_attempt(RuntimeOperationTarget(kind="training-attempt", id=attempt_id))`.
+The incident table owns this relationship; the existing `RunAttempt.incident_ids`
+placeholder is not populated. Recording an observation does not advance the
+attempt's aggregate revision.
+
+An incident proposes no response. It creates no Action, runtime operation, new
+attempt, or experiment node. Checkpoint management, recovery plans, and recovery
+execution remain later work.
+
 ## Not yet
 
 These are designed in the specification and planned, but **not

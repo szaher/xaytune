@@ -85,6 +85,7 @@ from xaytune.core.domain.evaluation import (
 )
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
+from xaytune.core.domain.incident import AttemptContext, Incident
 from xaytune.core.domain.operation import (
     RuntimeOperation,
     RuntimeOperationTarget,
@@ -128,6 +129,7 @@ from xaytune.storage.budget import BudgetLedgerStore
 from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
 from xaytune.storage.graph import ExperimentGraph
+from xaytune.storage.incidents import IncidentStore
 from xaytune.storage.journal import (
     EventJournal,
     IdempotencyConflictError,
@@ -470,6 +472,7 @@ class ControlPlaneRepository:
         self.actions = ActionStore(connection)
         self.budget = BudgetLedgerStore(connection)
         self.policy = PolicyDecisionStore(connection)
+        self.incidents = IncidentStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
@@ -710,6 +713,90 @@ class ControlPlaneRepository:
             if telemetry_position is not None:
                 self.aggregates._advance_telemetry(str(attempt_id), telemetry_position)
         return recorded
+
+    def incident_context(self, target: RuntimeOperationTarget) -> AttemptContext:
+        """Resolve the observation's attempt, run, node and experiment from the record."""
+        if target.kind == "training-attempt":
+            attempt = self.aggregates.load_attempt(target.id)
+            run = self.aggregates.load_run(str(attempt.run_id))
+        else:
+            evaluation_attempt = self.aggregates.load_evaluation_attempt(target.id)
+            evaluation_run = self.aggregates.load_evaluation_run(
+                str(evaluation_attempt.evaluation_run_id)
+            )
+            return AttemptContext(
+                target=target,
+                run_id=str(evaluation_run.id),
+                node_id=evaluation_run.node_id,
+                experiment_id=evaluation_run.experiment_id,
+            )
+        return AttemptContext(
+            target=target, run_id=str(run.id), node_id=run.node_id, experiment_id=run.experiment_id
+        )
+
+    def record_incident(
+        self, incident: Incident, *, actor: Actor, destinations: tuple[str, ...] = ()
+    ) -> Incident:
+        """Record an incident, its event/outbox and replay cursor in one commit.
+
+        A replay returns the original diagnosis and provenance, even if the
+        caller's classifier has changed. Changed evidence at the same stream
+        position is a conflict. Observations do not change attempt state or
+        revision; the incident table is the authority for attempt membership.
+        """
+        incident = Incident.model_validate_json(incident.model_dump_json())
+        target = incident.context.target
+        with write_transaction(self._connection):
+            context = self.incident_context(target)
+            if context != incident.context:
+                raise ProvenanceError("incident context does not match its recorded attempt")
+            correlation = incident.evidence.get("context") or {}
+            claims = {
+                "experiment_id": str(context.experiment_id),
+                "node_id": str(context.node_id),
+                "run_id"
+                if target.kind == "training-attempt"
+                else "evaluation_run_id": context.run_id,
+                "attempt_id"
+                if target.kind == "training-attempt"
+                else "evaluation_attempt_id": target.id,
+            }
+            other_fields = (
+                ("evaluation_run_id", "evaluation_attempt_id")
+                if target.kind == "training-attempt"
+                else ("run_id", "attempt_id")
+            )
+            for name in other_fields:
+                if correlation.get(name) is not None:
+                    raise ProvenanceError(f"incident evidence claims an unrelated {name}")
+            for name, value in claims.items():
+                if correlation.get(name) is not None and correlation[name] != value:
+                    raise ProvenanceError(f"incident evidence claims a different {name}")
+            existing = self.incidents.for_observation(incident.observation_key)
+            if existing is not None:
+                if existing.evidence_fingerprint != incident.evidence_fingerprint:
+                    raise IdempotencyConflictError(
+                        incident.observation_key, ("evidence",), kind="incident observation"
+                    )
+                return existing
+            self.incidents._insert(incident)
+            aggregate = (
+                self.aggregates.load_attempt(target.id)
+                if target.kind == "training-attempt"
+                else self.aggregates.load_evaluation_attempt(target.id)
+            )
+            self._emit(
+                aggregate,
+                "IncidentRecorded",
+                str(context.experiment_id),
+                actor,
+                destinations,
+                extra={"incident": incident.model_dump(mode="json")},
+            )
+            self.aggregates._advance_telemetry(
+                target.id, (incident.stream_generation, incident.sequence), kind=target.kind
+            )
+        return incident
 
     def record_telemetry_degraded(
         self,

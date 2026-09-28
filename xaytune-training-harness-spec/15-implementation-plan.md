@@ -942,12 +942,31 @@ recorded as a durable governed Action. Nothing is executed.
 
 ### PR-017 — incident model and detectors
 
-Initial:
+**As built.** Structured observation → detector candidates → deterministic
+classification → immutable incident and its event → stop.
 
-- process failure
-- CUDA OOM
-- NaN/Inf
-- checkpoint failure
+- The domain model uses the full category vocabulary in the resilience spec;
+  the initial detectors recognize process failure, explicit CUDA OOM, symbolic
+  NaN/Inf, and checkpoint write/corruption/compatibility failures. Exact reason
+  codes are classified; free-form detail and ambiguous exception names are
+  evidence only. Unrecognized or contradictory diagnoses become `UNKNOWN`.
+- Training and evaluation reuse their existing telemetry observations and
+  envelopes. Evidence preserves the full envelope, detector names/versions,
+  candidates, and classifier name/version. Intentional process cancellation is
+  distinguished by the runtime's structured cancellation flag.
+- Migration 010 stores incidents once per `(target, stream generation,
+  sequence)` (ADR-014). This is observation identity, not a recovery-loop
+  signature. Identical replay returns the original incident, including after
+  restart or a classifier upgrade; conflicting evidence is refused.
+- `record_incident` validates ownership from the recorded attempt/run, and
+  commits the incident, observational event/outbox, and replay cursor together.
+  The incident table is authoritative; `incidents.for_attempt(target)` reads its
+  members without maintaining a second ID list on the attempt or advancing its
+  aggregate revision. SQL also enforces ownership and append-only records.
+- Both controller observation loops record incidents. Polling still determines
+  the workload's terminal outcome; it is not used to invent a diagnostic signal
+  or infer a lost event. No Action, RuntimeOperation, attempt, or node is created
+  by incident detection. No recovery decision, retry, or checkpoint handling.
 
 ### PR-018 — checkpoint codec/store/manager
 

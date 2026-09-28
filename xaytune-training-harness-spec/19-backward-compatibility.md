@@ -130,6 +130,14 @@ Existing checkpoint formats should be:
 
 Never silently treat an incompatible checkpoint as valid.
 
+**PR-018 clarification — 2026-09-28 (accepted ADR-009):** The existing
+`xaytune.trainer.checkpointing.load_checkpoint` preserves legacy reads unchanged.
+PR-018 does not provide a `LegacyCheckpointCodec` or import/conversion feature
+for the new manager. Legacy readability does not establish new control-plane
+recovery eligibility or a `FULL + EXACT` guarantee; an explicit future migration
+must establish the available provenance and evidence. See ADR-009 and ADR-012's
+dated backward-compatibility clarification.
+
 ## 6. Config migration
 
 Legacy config remains parseable.

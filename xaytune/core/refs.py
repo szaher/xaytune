@@ -137,8 +137,9 @@ class ControllerHostRef(_Frozen):
 class CheckpointRef(_Frozen):
     """A committed checkpoint.
 
-    Phase 1 placeholder: the codec/store/manager split and the full
-    compatibility key land with the checkpoint subsystem (ADR-009).
+    The checkpoint subsystem requires a manifest digest and a codec-specific
+    compatibility key before localization. A bare or legacy reference does
+    not establish a resume guarantee (ADR-009/012).
     """
 
     id: CheckpointId

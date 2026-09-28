@@ -116,12 +116,18 @@ The global gate has been replaced with per-ADR gates in
 implementation; ADR-011 through ADR-016 are accepted; ADR-003 is superseded in
 substance by ADR-011.
 
-ADR-004, ADR-009 and ADR-017 remain proposed, each gating its
+ADR-004 and ADR-017 remain proposed, each gating its
 dependent work. ADR-001 and ADR-007 were accepted because accepted ADRs already
 depend on them, and ADR-006's open reuse half was split into ADR-017 so no
 document carries two statuses at once. ADR-005 was accepted on 2026-09-21, which
 opened Band B including PR-004; no remaining open decision blocks work that is
 ready to start, and none of them is a reinstated global implementation gate.
+
+ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for
+Band F / PR-018. Its local codec/store/manager contract preserves unchanged
+legacy reads through the trainer loader; admitting legacy state to control-plane
+recovery requires a future explicit import/migration feature, not invented
+provenance or an automatic `FULL + EXACT` claim.
 
 ## 14. When to unify training and evaluation execution
 

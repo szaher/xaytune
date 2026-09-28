@@ -50,6 +50,7 @@ def checkpoint_path(value: str) -> str:
     path = PurePosixPath(value)
     if (
         not value
+        or not path.parts
         or path.is_absolute()
         or str(path) != value
         or any(part in (".", "..") for part in path.parts)

@@ -136,6 +136,20 @@ def test_corrupt_published_checkpoints_are_refused(tmp_path, damage):
         run(store.list())
 
 
+@pytest.mark.parametrize("operation", ["get", "list"])
+def test_committed_manifest_dot_path_is_corruption(tmp_path, operation):
+    state, context, _ = make_bundle(tmp_path / "source")
+    store = LocalCheckpointStore(tmp_path / "store")
+    reference = run(CheckpointManager(SerializedStateCodec(), store).save(state, context))
+    manifest_path = store._committed / str(reference.id) / "manifest.json"
+    data = json.loads(manifest_path.read_text())
+    data["files"][0]["path"] = "."
+    manifest_path.write_text(json.dumps(data))
+
+    with pytest.raises(CheckpointCorruptionError, match="manifest is missing or invalid"):
+        run(store.get(reference) if operation == "get" else store.list())
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -253,6 +267,9 @@ def test_compatibility_is_explicit_exact_match(tmp_path, field, value):
     "path",
     [
         "",
+        ".",
+        "./",
+        "./.",
         "../model",
         "/model",
         "./model",

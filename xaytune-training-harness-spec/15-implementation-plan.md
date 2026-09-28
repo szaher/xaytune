@@ -104,6 +104,7 @@ matter of record rather than of review:
 | ADR-005 — the persistence transaction contract | band B, including PR-004; every transaction boundary and repository invariant the repository must hold |
 | ADR-006 — fingerprints (identity model) | PR-007 fingerprint framework; reuse policy split out to ADR-017 |
 | ADR-007 — evaluation independence | band D; extended by ADR-015 |
+| ADR-009 — checkpoint layers | band F; accepted 2026-09-28, including PR-018's local-only and legacy read-surface boundaries |
 | ADR-011 — candidates, interventions, overrides | PR-005 event schema; supersedes ADR-003's two-level lineage and extends ADR-006 |
 | ADR-012 — data position and resume semantics | PR-005 checkpoint schema; all adaptive recovery |
 | ADR-013 — operation identity and cancellation | the first runtime implementation |
@@ -120,7 +121,6 @@ that does not depend on it:
 |---|---|
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
 | ADR-008 — versioned plugin ABI | band C (compiler/runtime plugin loading) |
-| ADR-009 — checkpoint layers | band F |
 | ADR-017 — reuse policy | band G (planner reuse decisions); split out of ADR-006 |
 
 ### Superseded
@@ -150,9 +150,12 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** The remaining `Proposed`
-ones gate later bands: ADR-009 blocks band F, ADR-017 band G and ADR-004 band H.
+ones gate later bands: ADR-017 band G and ADR-004 band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
+ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for band F
+before PR-018 merges. It freezes the local codec/store/manager architecture and
+preserves legacy readability through the existing trainer loader.
 
 From here, changes to these contracts should come from an implementation
 finding, a failing test or a demonstrated contradiction — not from another pass
@@ -980,6 +983,11 @@ Start local-only.
   and applying actual state. The codec verifies every state/sampler/worker RNG
   reference against bundled bytes, digest and producer, without loading ML
   libraries or pickle.
+- Legacy directories remain readable unchanged through
+  `xaytune.trainer.checkpointing.load_checkpoint`. They are not automatically
+  eligible for the new manager/recovery path; absent provenance, cursor, RNG and
+  intervention evidence cannot support `FULL + EXACT`. Explicit import/migration
+  remains future work, as clarified in accepted ADR-009 and ADR-012.
 - The versioned manifest carries producer/candidate/execution provenance,
   training position, cursor, intervention capture, guarantee, codec/version,
   exact-match compatibility and mandatory manifest/file digests. The existing

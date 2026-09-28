@@ -432,7 +432,11 @@ work.
 `SerializedStateCodec` packages **already serialized** trainer components,
 validating their state manifest, file digests and producing attempt. It does
 not capture or apply a live trainer's state. Existing legacy trainer checkpoints
-remain unchanged; their absent cursor/RNG evidence cannot support exact resume.
+remain readable unchanged through `xaytune.trainer.checkpointing.load_checkpoint`.
+They lack the new manifest provenance, cursor, RNG and intervention evidence, so
+they are not automatically eligible for the new manager or control-plane recovery
+path and cannot support `FULL + EXACT`. Explicit import/migration is future work;
+PR-018 does not fabricate missing provenance or state (accepted ADR-009).
 
 The store validates and fsyncs private staging before atomically publishing a
 bundle. Incomplete staging cannot be listed or restored. The same checkpoint

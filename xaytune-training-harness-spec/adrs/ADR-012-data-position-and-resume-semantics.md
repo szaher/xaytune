@@ -354,6 +354,17 @@ Existing checkpoints lack every field added here. They remain loadable at `MODEL
 or `EPOCH_BOUNDARY`, and must not be claimed as `EXACT`. Checkpoint metadata gains a
 version field so the distinction is machine-checkable.
 
+**Clarification — 2026-09-28 (ADR-009 / PR-018):** Existing checkpoints remain
+loadable unchanged through `xaytune.trainer.checkpointing.load_checkpoint`, the
+legacy compatibility/read surface. The levels above bound possible legacy
+resume claims; they do not automatically admit legacy directories to the new
+`CheckpointManager` or control-plane recovery path. Missing manifest provenance,
+`DataCursor`, captured RNG and intervention evidence cannot support `FULL + EXACT`.
+A future explicit import/migration feature must establish whatever provenance
+can actually be established before admitting legacy state to that path.
+PR-018 does not fabricate provenance, add missing evidence, convert legacy
+checkpoints, or rewrite the legacy loader.
+
 ## Rejected alternatives
 
 **Keep the batch-index cursor and document the caveat.** The caveat would be that the

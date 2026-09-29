@@ -200,12 +200,17 @@ only for missing episodes. Never invent RecoveryRequest(). Stop at the first
 unresolved request gap: later reservations/repeats depend on preceding history.
 Reconstruct the request and rerun; no skip mechanism.
 
-Future execution can append RecoveryExecutionReceipt with episode ID, plan ID and
-sequence, EXECUTED/ABANDONED/SUPERSEDED outcome, optional successor target and actor/time.
-This adds a new append-only table without mutating episode or plan and leaves
-successor existence authoritative for closure. PR-019 has no such table/behavior,
-execution overrides, scientific mutations, attempts, Actions, runtime operations,
-submissions or checkpoint state application. Sections below describe later work.
+PR-020 adds an append-only RecoveryExecutionReceipt keyed to the episode, plan ID
+and sequence, governed Action, outcome (EXECUTED/ABANDONED/SUPERSEDED), actor and
+time. EXECUTED links the successor attempt and INTENDED submit operation, and may
+bind a selected checkpoint. It means durable submit intent, not runtime confirmation
+or training success. At most one EXECUTED receipt is allowed per episode. Other
+outcomes have no successor, operation or checkpoint. The receipt store has no
+standalone public execution writer: a future executor must revalidate governance,
+decision freshness, limits and checkpoint before inserting it atomically with the
+successor and operation. Episode and plan remain immutable; successor existence
+remains closure authority. Receipt schema alone does not create Actions, attempts,
+operations, submissions or apply checkpoint state.
 
 ## 8. CUDA OOM policy
 

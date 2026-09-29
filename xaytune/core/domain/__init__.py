@@ -126,6 +126,10 @@ from xaytune.core.domain.recovery import (
     RecoveryRequest,
     RecoveryStrategy,
 )
+from xaytune.core.domain.recovery_execution import (
+    RecoveryExecutionOutcome,
+    RecoveryExecutionReceipt,
+)
 from xaytune.core.domain.run import (
     ExecutionOverride,
     ExecutionOverrideKind,
@@ -136,6 +140,8 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "RecoveryExecutionOutcome",
+    "RecoveryExecutionReceipt",
     "OOMEscalation",
     "OOMEscalationCode",
     "OOMRecoveryInputsV1",

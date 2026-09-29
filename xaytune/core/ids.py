@@ -41,6 +41,7 @@ __all__ = [
     "IncidentId",
     "RecoveryPlanId",
     "RecoveryEpisodeId",
+    "RecoveryExecutionReceiptId",
     "OperationId",
     "RunAttemptId",
     "RunId",
@@ -208,6 +209,13 @@ class RecoveryPlanId(TypedId):
 
     __slots__ = ()
     prefix = "recovery_"
+
+
+class RecoveryExecutionReceiptId(TypedId):
+    """Identifies one immutable recovery-intent resolution."""
+
+    __slots__ = ()
+    prefix = "recovery_receipt_"
 
 
 class EvaluationId(TypedId):

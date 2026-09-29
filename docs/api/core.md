@@ -35,6 +35,7 @@ The body after the prefix is ULID-shaped: 10 Crockford base32 characters of mill
 | `IncidentId` | `inc_` |
 | `RecoveryPlanId` | `recovery_` |
 | `RecoveryEpisodeId` | `episode_` |
+| `RecoveryExecutionReceiptId` | `recovery_receipt_` |
 | `EvaluationId` | `eval_` |
 | `EvaluationRunId` | `evalrun_` |
 | `EvaluationAttemptId` | `evalattempt_` |
@@ -319,10 +320,15 @@ Unrelated non-reserving revisions elsewhere do not invalidate the typed projecti
 Relevant reservations, evidence, status/identity, successor, attempts, repeat history
 and checkpoint report changes do. Bounded stale retries fail safely.
 
-Future append-only `RecoveryExecutionReceipt` records can reference episode ID,
-plan ID/sequence, outcome (`EXECUTED`, `ABANDONED`, `SUPERSEDED`), optional successor
-and actor/time without mutating these records. PR-019 implements no receipts or
-execution behavior. Controller auto-invocation and H02 remain outside this PR.
+`RecoveryExecutionReceipt` is an append-only PR-020 record of a governed Action's
+resolution against one episode and plan revision. `EXECUTED` requires a successor
+training attempt and INTENDED submit operation; it means durable submit intent,
+not runtime confirmation or training success. `ABANDONED` and `SUPERSEDED` have no
+successor, operation or checkpoint. A single episode may have multiple non-executed
+action receipts but at most one `EXECUTED` receipt. Receipt insertion is deliberately
+transaction-internal: the future executor must commit it together with the
+successor and operation after rechecking episode/plan freshness, Action governance,
+limits and checkpoint validity. Receipt rows never mutate episode or plan history.
 
 ## CUDA OOM resize proposal (PR-020)
 

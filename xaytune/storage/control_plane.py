@@ -157,6 +157,7 @@ from xaytune.storage.journal import (
 )
 from xaytune.storage.policy import PolicyDecisionStore
 from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
+from xaytune.storage.recovery_execution import RecoveryExecutionReceiptStore
 from xaytune.storage.repository import AggregateStore
 
 __all__ = [
@@ -501,6 +502,7 @@ class ControlPlaneRepository:
         self.checkpoints = CheckpointRecordStore(connection)
         self.recovery_episodes = RecoveryEpisodeStore(connection)
         self.recovery_plans = RecoveryPlanStore(connection)
+        self.recovery_execution_receipts = RecoveryExecutionReceiptStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------

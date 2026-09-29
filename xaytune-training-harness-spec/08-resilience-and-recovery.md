@@ -258,6 +258,15 @@ effective_batch = 256
 
 No new experiment node.
 
+An attempt's infrastructure failure and the logical Run's outcome are separate
+transitions. A CUDA OOM settles the attempt as FAILED and releases its live-attempt
+capacity while the Run remains ACTIVE for recovery. The existing Run reservation
+continues; a successor under that Run spends no new run unit. Each failed attempt
+still consumes one failure unit. The Run becomes FAILED only after recovery is
+definitively refused, abandoned or exhausted, and SUCCEEDED only after an attempt
+succeeds. Terminal Run states are never reopened. Until the PR-020 executor is
+wired, this pending recovery state has no automatic successor submission.
+
 The first PR-020 layer is the pure versioned `OOMRecoveryInputsV1` →
 `OOMResizeProposal | OOMEscalation` contract. It requires a recorded effective
 specialised CUDA-OOM plan, authoritative attempted configuration, and a promise

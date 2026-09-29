@@ -91,6 +91,7 @@ from xaytune.core.domain.experiment import (
     Experiment,
     ExperimentNode,
 )
+from xaytune.core.domain.incident import IncidentCategory
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.run import Run, RunAttempt
@@ -680,7 +681,18 @@ class EmbeddedControllerHost:
                 f"({status.detail or status.state}); it is left unsettled rather than guessed"
             )
             return
-        self._settle(attempt_id, run_id, *outcome, status=status)
+        run_outcome: RunStatus | None = outcome[1]
+        if outcome[0] is RunAttemptStatus.FAILED:
+            target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+            if any(
+                IncidentCategory.CUDA_OOM
+                in {candidate.category for candidate in observed.candidates}
+                for observed in self.repository.incidents.for_attempt(target)
+            ):
+                # Recovery may still create a successor under this logical Run.
+                # The recovery workflow later decides whether to continue or fail it.
+                run_outcome = None
+        self._settle(attempt_id, run_id, outcome[0], run_outcome, status=status)
         self._reconcile_cancellations(experiment_id)
         if outcome[1] is RunStatus.SUCCEEDED:
             run = self.repository.aggregates.load_run(str(run_id))
@@ -1737,16 +1749,19 @@ class EmbeddedControllerHost:
         attempt_id: RunAttemptId,
         run_id: RunId,
         attempt_status: RunAttemptStatus,
-        run_status: RunStatus,
+        run_status: RunStatus | None,
         *,
         status: RuntimeStatus | None = None,
     ) -> None:
-        """Record how an attempt, and so its run, ended.
+        """Settle one attempt; terminalize its logical Run only when resolved.
 
         A successful attempt passes through ``RUNNING`` if telemetry never
         reported the start: it cannot have succeeded without running, and the
         machine requires the state. A failed or cancelled one goes straight to
-        its outcome from wherever it was.
+        its outcome from wherever it was. ``run_status=None`` leaves a failed
+        attempt under an ACTIVE Run while recovery remains unresolved. A later
+        successor attempt can continue that same Run; only a definitive refusal
+        or exhaustion moves it to FAILED.
         """
         attempt = self.repository.aggregates.load_attempt(str(attempt_id))
         if not attempt.is_terminal:
@@ -1760,7 +1775,7 @@ class EmbeddedControllerHost:
                     actor=_ACTOR,
                 )
         run = self.repository.aggregates.load_run(str(run_id))
-        if not RUN_MACHINE.is_terminal(run.status):
+        if run_status is not None and not RUN_MACHINE.is_terminal(run.status):
             self.repository.transition_run(
                 run.id, expected_revision=run.revision, new_status=run_status, actor=_ACTOR
             )

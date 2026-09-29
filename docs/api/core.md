@@ -145,6 +145,11 @@ Lineage has four levels:
 | `RunAttempt` | One infrastructure execution attempt |
 
 An **operational** event — worker restart, preemption, checkpoint restore — creates a new `RunAttempt` under the same `Run`, and never branches the graph.
+When an attempt fails with CUDA OOM, its `Run` can remain `ACTIVE` while recovery
+is pending. The failed attempt releases parallel capacity and consumes a failure
+unit; the Run keeps its existing run reservation for a possible successor.
+Definitive refusal or exhaustion ends the Run as `FAILED`. No terminal Run state
+is reopened.
 
 **Comparability** decides between a node and an intervention:
 

@@ -226,6 +226,10 @@ The extension raises `CheckpointCompatibilityError` for unsupported layouts or
 `ValueError` (including Pydantic `ValidationError`) to corruption with its cause
 preserved. Those failures and unavailable bytes (`OSError`) become checkpoint
 ineligibility; unexpected programmer errors propagate without recording a plan.
+Eligibility reasons distinguish `codec lacks validation capability`,
+`checkpoint incompatible with intended consumer`, and
+`checkpoint bytes/provenance missing or corrupt`. Missing capability is checked
+before consumer compatibility and is not recorded as consumer incompatibility.
 Generic resume requires `FULL + EXACT`, an optimizer-step boundary and a data
 cursor. A corrupt or incompatible newest checkpoint can fall back to an older
 eligible checkpoint. Reports from other runs and future training positions are

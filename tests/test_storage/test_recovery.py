@@ -785,16 +785,24 @@ def test_recovery_requires_the_optional_codec_validation_capability(
     if validation_capable:
         assert plan.checkpoint_ref == report.payload.checkpoint_ref
         assert codec.validations == 1
+    else:
+        assert plan.checkpoint_eligibility[0].reason == "codec lacks validation capability"
     assert codec.decodes == 0
 
 
 @pytest.mark.parametrize(
     "error,reason",
     [
-        (CheckpointCompatibilityError("unsupported custom layout"), "incompatible"),
-        (CheckpointCorruptionError("contradictory custom capture"), "corrupt"),
-        (ValueError("malformed custom capture"), "corrupt"),
-        (OSError("custom capture unavailable"), "corrupt"),
+        (
+            CheckpointCompatibilityError("unsupported custom layout"),
+            "checkpoint incompatible with intended consumer",
+        ),
+        (
+            CheckpointCorruptionError("contradictory custom capture"),
+            "checkpoint bytes/provenance missing or corrupt",
+        ),
+        (ValueError("malformed custom capture"), "checkpoint bytes/provenance missing or corrupt"),
+        (OSError("custom capture unavailable"), "checkpoint bytes/provenance missing or corrupt"),
     ],
 )
 def test_supported_codec_validation_failures_make_checkpoints_ineligible(
@@ -807,7 +815,7 @@ def test_supported_codec_validation_failures_make_checkpoints_ineligible(
     plan = asyncio.run(coordinator.plan(str(observed.id), request))
     assert plan.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
     assert not plan.checkpoint_eligibility[0].eligible
-    assert reason in plan.checkpoint_eligibility[0].reason
+    assert plan.checkpoint_eligibility[0].reason == reason
     assert codec.decodes == 0
 
 

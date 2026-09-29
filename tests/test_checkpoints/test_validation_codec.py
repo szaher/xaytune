@@ -61,6 +61,7 @@ def test_legacy_v1alpha1_save_restore_and_recorded_restore_remain_supported(tmp_
     recorded_restore = asyncio.run(manager.restore_recorded(recorded, consumer))
     assert restored == recorded_restore
     assert codec.decodes == 2
+    assert not manager.supports_validation
     with pytest.raises(CheckpointCompatibilityError, match="lacks validation-only"):
         asyncio.run(manager.validate_recorded(recorded, consumer))
     assert codec.decodes == 2
@@ -75,6 +76,7 @@ def test_validation_capable_codec_inspects_without_decode(tmp_path):
     manager = CheckpointManager(codec, LocalCheckpointStore(tmp_path / "store"))
     reference = asyncio.run(manager.save(state, context))
     recorded = report(manager, reference)
+    assert manager.supports_validation
     localized = asyncio.run(manager.validate_recorded(recorded, consumer))
     assert localized.reference == reference
     assert codec.validations == 1
@@ -104,6 +106,7 @@ def test_method_presence_without_supported_declaration_is_ineligible(tmp_path, d
         )
     manager = CheckpointManager(codec, LocalCheckpointStore(tmp_path / "store"))
     reference = asyncio.run(manager.save(state, context))
+    assert not manager.supports_validation
     with pytest.raises(CheckpointCompatibilityError, match="supported version"):
         asyncio.run(manager.validate_recorded(report(manager, reference), consumer))
     assert codec.validations == 0

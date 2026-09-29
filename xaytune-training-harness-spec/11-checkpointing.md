@@ -92,6 +92,12 @@ Validation failure contract:
 | `OSError` from localization or validation | Unavailable checkpoint bytes; the coordinator marks the checkpoint ineligible. |
 | Other exceptions, such as `RuntimeError`, `TypeError` or `KeyError` | Programmer errors propagate; they are not evidence of checkpoint ineligibility and do not produce a plan for that incident. |
 
+The coordinator checks the declaration before catching consumer-compatibility
+failures. `CheckpointEligibility.reason` distinguishes `codec lacks validation capability`,
+`checkpoint incompatible with intended consumer`, and
+`checkpoint bytes/provenance missing or corrupt`; lack of validation support is
+not recorded as consumer incompatibility.
+
 The coordinator records supported failures as eligibility evidence and can
 continue to an older valid checkpoint. Adding this optional extension does not
 change the required v1alpha1 ABI; future incompatible changes to either contract

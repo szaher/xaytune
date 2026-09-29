@@ -167,10 +167,12 @@ class RecoveryCoordinator:
             return "generic resume requires FULL/EXACT state and an optimizer-boundary data cursor"
         if request.restore_context is None or self.checkpoint_manager is None:
             return "consumer restore context or checkpoint manager is unavailable"
+        if not self.checkpoint_manager.supports_validation:
+            return "codec lacks validation capability"
         try:
             await self.checkpoint_manager.validate_recorded(record, request.restore_context)
         except CheckpointCompatibilityError:
-            return "checkpoint is incompatible with the intended consumer"
+            return "checkpoint incompatible with intended consumer"
         except (CheckpointCorruptionError, OSError):
-            return "checkpoint bytes or provenance are missing or corrupt"
+            return "checkpoint bytes/provenance missing or corrupt"
         return None

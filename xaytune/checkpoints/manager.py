@@ -27,6 +27,14 @@ class CheckpointManager:
         self.codec = codec
         self.store = store
 
+    @property
+    def supports_validation(self) -> bool:
+        """Whether the codec explicitly declares the supported validation API."""
+        return (
+            self.codec.descriptor.metadata.get("checkpoint_validation_api")
+            == CHECKPOINT_VALIDATION_API_VERSION
+        )
+
     async def save(self, state: CheckpointState, context: CheckpointContext) -> CheckpointRef:
         context = CheckpointContext.model_validate_json(context.model_dump_json())
         with tempfile.TemporaryDirectory(prefix="xaytune-checkpoint-") as scratch:
@@ -71,8 +79,7 @@ class CheckpointManager:
         ValueError from layout validation is normalized to corruption. Programmer
         errors propagate; absence of this extension never falls back to decode.
         """
-        validation_api = self.codec.descriptor.metadata.get("checkpoint_validation_api")
-        if validation_api != CHECKPOINT_VALIDATION_API_VERSION:
+        if not self.supports_validation:
             raise CheckpointCompatibilityError(
                 "codec lacks validation-only checkpoint capability at a supported version"
             )

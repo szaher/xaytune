@@ -7,37 +7,50 @@ import sqlite3
 import pytest
 from pydantic import ValidationError
 
-from xaytune.core.domain.action import ActionTarget
-from xaytune.core.domain.actions import ResizeMicrobatch, action_from_spec
+from xaytune.core.domain.actions import action_from_spec, spec_of
+from xaytune.core.domain.oom_recovery import OOMRecoveryInputsV1, OOMResizeProposal
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
 from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.domain.recovery_action import RecoveryActionBinding
 from xaytune.core.domain.recovery_execution import (
     RecoveryExecutionOutcome,
     RecoveryExecutionReceipt,
 )
 from xaytune.core.ids import OperationId, RecoveryExecutionReceiptId, RunAttemptId
+from xaytune.resilience.oom import OOMRecoveryPlanner
 from xaytune.storage import ControlPlaneRepository, connect, migrate, write_transaction
 
 from .conftest import make_attempt
-from .test_recovery import ACTOR, draft, incident, record_plan
+from .test_recovery import ACTOR
+from .test_recovery_episodes import decide, incident, signal
 
 
 def prepared(connection, seeded):
     repo = ControlPlaneRepository(connection)
-    observed = incident(repo, seeded["attempt"])
-    plan = record_plan(repo, draft(repo, observed, RecoveryRequest()), actor=ACTOR)
+    observed = incident(repo, seeded["attempt"], signal=signal("cuda-oom"))
+    plan = decide(repo, observed, RecoveryRequest())
+    inputs = OOMRecoveryInputsV1(
+        plan=plan,
+        run_id=seeded["run"].id,
+        candidate_fingerprint=plan.inputs.candidate_fingerprint,
+        execution_state_fingerprint=plan.execution_state_fingerprint,
+        current_micro_batch_size=4,
+        current_gradient_accumulation=8,
+        world_size=8,
+    )
+    proposal = OOMRecoveryPlanner().plan(inputs)
+    assert isinstance(proposal, OOMResizeProposal)
     action = action_from_spec(
-        ResizeMicrobatch(
-            target=ActionTarget(kind="run", id=str(seeded["run"].id)),
-            micro_batch_size=2,
-            gradient_accumulation=16,
-        ),
+        proposal.action_spec,
         experiment_id=seeded["experiment"].id,
         proposed_by=ACTOR,
         reason="test governed resize intent",
     )
     with write_transaction(connection):
         repo.actions._insert(action)
+        repo.recovery_action_bindings._insert(
+            RecoveryActionBinding.for_proposal(action.id, proposal)
+        )
     return repo, plan, action
 
 
@@ -104,6 +117,35 @@ def test_receipt_refuses_wrong_plan_sequence_and_duplicate_action(connection, se
     with pytest.raises(sqlite3.IntegrityError), write_transaction(connection):
         repo.recovery_execution_receipts._insert(receipt(plan, action))
     assert repo.recovery_execution_receipts.for_episode(str(plan.episode_id)) == (first,)
+
+
+def test_receipt_refuses_same_run_resize_action_without_plan_binding(connection, seeded):
+    repo, plan, action = prepared(connection, seeded)
+    unrelated = action_from_spec(
+        spec_of(action),
+        experiment_id=action.experiment_id,
+        proposed_by=ACTOR,
+        reason="unbound resize on the same Run",
+    )
+    with write_transaction(connection):
+        repo.actions._insert(unrelated)
+    with (
+        pytest.raises(sqlite3.IntegrityError, match="receipt plan/action"),
+        write_transaction(connection),
+    ):
+        repo.recovery_execution_receipts._insert(receipt(plan, unrelated))
+
+
+def test_receipt_refuses_action_bound_to_an_earlier_plan_revision(connection, seeded):
+    repo, plan, action = prepared(connection, seeded)
+    later = incident(repo, seeded["attempt"], sequence=10, signal=signal("process-failure"))
+    revised = decide(repo, later)
+    assert revised.supersedes_plan_id == plan.id
+    with (
+        pytest.raises(sqlite3.IntegrityError, match="receipt plan/action"),
+        write_transaction(connection),
+    ):
+        repo.recovery_execution_receipts._insert(receipt(revised, action))
 
 
 def test_executed_receipt_requires_bound_successor_and_submit_intent(connection, seeded):

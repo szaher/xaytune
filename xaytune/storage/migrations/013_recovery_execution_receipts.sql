@@ -1,6 +1,52 @@
 -- PR-020: immutable accounting for governed recovery intent.
 -- An EXECUTED receipt is committed with the successor attempt and INTENDED
 -- submit operation, before any external runtime call. Episode/plan stay immutable.
+CREATE TABLE recovery_action_bindings (
+  action_id TEXT PRIMARY KEY REFERENCES actions(id),
+  episode_id TEXT NOT NULL REFERENCES recovery_episodes(id),
+  plan_id TEXT NOT NULL UNIQUE REFERENCES recovery_plans(id),
+  plan_sequence INTEGER NOT NULL CHECK (plan_sequence >= 1),
+  proposal_fingerprint TEXT NOT NULL,
+  input_fingerprint TEXT NOT NULL,
+  source_execution_state_fingerprint TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_recovery_action_bindings_episode
+  ON recovery_action_bindings(episode_id, plan_sequence);
+
+CREATE TRIGGER recovery_action_binding_authority
+BEFORE INSERT ON recovery_action_bindings
+WHEN NOT EXISTS (
+  SELECT 1 FROM recovery_episodes e
+  JOIN recovery_effective_plans p ON p.episode_id = e.id
+  JOIN recovery_episode_closure c ON c.id = e.id
+  JOIN actions a ON a.id = NEW.action_id
+  WHERE e.id = NEW.episode_id AND p.id = NEW.plan_id
+    AND p.sequence = NEW.plan_sequence AND c.successor_exists = 0
+    AND p.accepted_through_sequence = (
+      SELECT MAX(m.membership_sequence) FROM recovery_episode_incidents m
+      WHERE m.episode_id = e.id AND m.disposition = 'ACCEPTED_FOR_DECISION'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM incidents i WHERE i.target_kind = e.target_kind
+        AND i.target_id = e.target_id AND NOT EXISTS (
+          SELECT 1 FROM recovery_episode_incidents m WHERE m.incident_id = i.id
+        )
+    )
+    AND e.target_kind = 'training-attempt'
+    AND a.experiment_id = e.experiment_id AND a.target_kind = 'run'
+    AND a.target_id = e.run_id AND a.type = 'resize-microbatch'
+)
+BEGIN SELECT RAISE(ABORT, 'recovery Action binding lacks current plan or Action ownership'); END;
+
+CREATE TRIGGER recovery_action_bindings_immutable
+BEFORE UPDATE ON recovery_action_bindings
+BEGIN SELECT RAISE(ABORT, 'recovery Action bindings are append-only'); END;
+CREATE TRIGGER recovery_action_bindings_permanent
+BEFORE DELETE ON recovery_action_bindings
+BEGIN SELECT RAISE(ABORT, 'recovery Action bindings are append-only'); END;
+
 CREATE TABLE recovery_execution_receipts (
   id TEXT PRIMARY KEY,
   episode_id TEXT NOT NULL REFERENCES recovery_episodes(id),
@@ -31,10 +77,13 @@ WHEN NOT EXISTS (
   SELECT 1 FROM recovery_episodes e
   JOIN recovery_plans p ON p.id = NEW.plan_id
   JOIN actions a ON a.id = NEW.action_id
+  JOIN recovery_action_bindings b ON b.action_id = a.id
   WHERE e.id = NEW.episode_id AND e.target_kind = 'training-attempt'
     AND p.episode_id = e.id AND p.sequence = NEW.plan_sequence
     AND a.experiment_id = e.experiment_id AND a.target_kind = 'run'
     AND a.target_id = e.run_id AND a.type = 'resize-microbatch'
+    AND b.episode_id = e.id AND b.plan_id = p.id
+    AND b.plan_sequence = p.sequence
 )
 BEGIN SELECT RAISE(ABORT, 'receipt plan/action does not belong to training episode'); END;
 

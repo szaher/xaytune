@@ -334,6 +334,9 @@ action receipts but at most one `EXECUTED` receipt. Receipt insertion is deliber
 transaction-internal: the future executor must commit it together with the
 successor and operation after rechecking episode/plan freshness, Action governance,
 limits and checkpoint validity. Receipt rows never mutate episode or plan history.
+The receipt schema also requires an immutable `RecoveryActionBinding` from its
+Action to that exact episode, plan ID and revision. Same-run/action-type matching
+alone is insufficient to authorize a recovery effect.
 
 ## CUDA OOM resize proposal (PR-020)
 
@@ -369,8 +372,19 @@ Hitting the floor, requiring fractional/over-limit accumulation, or disabling
 preservation escalates without an autonomous proposal. A proposal includes the
 plan ID/sequence and input fingerprint as freshness bindings. It creates no
 Action, override, successor attempt or runtime operation, and grants no execution
-authority. Policy, checkpoint revalidation and successor creation are later
-PR-020 layers.
+authority.
+
+`propose_oom_recovery_action(inputs, proposal, ...)` records one
+`RecoveryActionBinding` with the full proposal, proposal/input fingerprints and
+source execution-state fingerprint. The binding commits in the same transaction
+as the Action, its policy decision when applicable, events and outbox. A new
+proposal requires an open episode and an effective, fully covered plan. The
+failed attempt's durable execution identity must also match. Identical replay returns
+the original governed Action without current policy; a changed proposal for the
+same plan is refused. Approval may happen later, but the Action's recovery origin
+is already durable. This is governance provenance, not successor authority:
+the executor must still verify the failed attempt's resolved configuration,
+checkpoint bytes, limits and plan freshness before any successor write.
 
 ## State machines
 

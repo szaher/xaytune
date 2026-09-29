@@ -289,6 +289,18 @@ previous resize escalates. Autonomous OOM adjustment never changes effective
 batch. The one governed `ResizeMicrobatch` intent can carry both new knobs;
 the successor attempt later records their separate `ExecutionOverride` lineage.
 
+The governed proposal records an immutable `RecoveryActionBinding` at Action
+creation time. It identifies the exact episode and plan revision, stores the
+full OOM proposal plus its input/proposal/source-execution fingerprints, and is
+committed with the Action, any policy decision, events and outbox. One plan revision
+cannot mint two independently governed resize Actions. A stale or uncovered
+plan cannot mint a new binding; replay of an existing identical proposal returns
+its original Action without consulting current policy. The binding grants no
+execution authority. An `EXECUTED` recovery receipt must reference an Action
+bound to the same episode, plan and revision; the future executor additionally
+rechecks approval, resolved source configuration, checkpoint bytes, limits and
+freshness before creating a successor.
+
 ## 9. Numerical failure policy
 
 Default:

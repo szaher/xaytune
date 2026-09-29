@@ -87,6 +87,7 @@ from xaytune.core.domain.evaluation import (
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.incident import AttemptContext, Incident
+from xaytune.core.domain.oom_recovery import OOMRecoveryInputsV1, OOMResizeProposal
 from xaytune.core.domain.operation import (
     RuntimeOperation,
     RuntimeOperationTarget,
@@ -118,6 +119,7 @@ from xaytune.core.domain.recovery import (
     execution_state_fingerprint_v1,
     recovery_requires_checkpoints,
 )
+from xaytune.core.domain.recovery_action import RecoveryActionBinding
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.fingerprint import fingerprint
@@ -157,6 +159,7 @@ from xaytune.storage.journal import (
 )
 from xaytune.storage.policy import PolicyDecisionStore
 from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
+from xaytune.storage.recovery_actions import RecoveryActionBindingStore
 from xaytune.storage.recovery_execution import RecoveryExecutionReceiptStore
 from xaytune.storage.repository import AggregateStore
 
@@ -502,6 +505,7 @@ class ControlPlaneRepository:
         self.checkpoints = CheckpointRecordStore(connection)
         self.recovery_episodes = RecoveryEpisodeStore(connection)
         self.recovery_plans = RecoveryPlanStore(connection)
+        self.recovery_action_bindings = RecoveryActionBindingStore(connection)
         self.recovery_execution_receipts = RecoveryExecutionReceiptStore(connection)
         self.graph = ExperimentGraph(connection)
 
@@ -2071,6 +2075,8 @@ class ControlPlaneRepository:
         capabilities: CapabilityDocument | None,
         action_id: ActionId | None = None,
         destinations: tuple[str, ...] = (),
+        _recovery_binding: RecoveryActionBinding | None = None,
+        _recovery_inputs: OOMRecoveryInputsV1 | None = None,
     ) -> GovernedAction:
         """Validate, authorize and record one proposed action, in one commit. Applies nothing.
 
@@ -2105,6 +2111,13 @@ class ControlPlaneRepository:
         """
         if spec.type in CANCELLATION_TYPES:  # type: ignore[attr-defined]
             raise CancellationNotGovernedError(spec.type)  # type: ignore[attr-defined]
+        if (_recovery_binding is None) != (_recovery_inputs is None):
+            raise ValueError("recovery Action binding and inputs must be supplied together")
+        if _recovery_binding is not None and (
+            action_id != _recovery_binding.action_id
+            or spec != _recovery_binding.proposal.action_spec
+        ):
+            raise ProvenanceError("recovery Action spec or id disagrees with its binding")
         action = action_from_spec(
             spec,
             experiment_id=ExperimentId(str(experiment_id)),
@@ -2112,8 +2125,14 @@ class ControlPlaneRepository:
             reason=reason,
             action_id=action_id,
         )
+        if _recovery_binding is not None:
+            bound = self._replay_recovery_action(_recovery_binding)
+            if bound is not None:
+                return bound
         replayed = self._replay_governed(action)
         if replayed is not None:
+            if _recovery_binding is not None:
+                raise IdempotencyConflictError(str(action.id), ("recovery binding",), kind="Action")
             return replayed
 
         context = self.policy_context(
@@ -2137,9 +2156,20 @@ class ControlPlaneRepository:
             )
 
         with write_transaction(self._connection):
+            if _recovery_binding is not None:
+                bound = self._replay_recovery_action(_recovery_binding)
+                if bound is not None:
+                    return bound
             replayed = self._replay_governed(action)
             if replayed is not None:
+                if _recovery_binding is not None:
+                    raise IdempotencyConflictError(
+                        str(action.id), ("recovery binding",), kind="Action"
+                    )
                 return replayed
+            if _recovery_binding is not None:
+                assert _recovery_inputs is not None
+                self._require_current_oom_action(_recovery_binding, _recovery_inputs)
             current = self.policy_context(
                 spec,
                 experiment_id=experiment_id,
@@ -2154,6 +2184,8 @@ class ControlPlaneRepository:
                 )
 
             self.actions._insert(action)
+            if _recovery_binding is not None:
+                self.recovery_action_bindings._insert(_recovery_binding)
             self._emit_action(
                 action, "ActionProposed", proposed_by, destinations, extra={"reason": reason}
             )
@@ -2201,6 +2233,87 @@ class ControlPlaneRepository:
                 },
             )
             return GovernedAction(action=governed, decision=decision)
+
+    def propose_oom_recovery_action(
+        self,
+        inputs: OOMRecoveryInputsV1,
+        proposal: OOMResizeProposal,
+        *,
+        proposed_by: Actor,
+        reason: str,
+        policy: Any,
+        capabilities: CapabilityDocument | None,
+        action_id: ActionId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> GovernedAction:
+        """Govern one decision-bound resize and atomically bind its Action.
+
+        The binding is written with the Action and any policy decision, before
+        approval or execution. Replay of the same plan/proposal returns that
+        Action without using current policy or configuration. This method
+        creates no successor attempt, override, operation or receipt.
+        """
+        binding = RecoveryActionBinding.for_proposal(action_id or ActionId.generate(), proposal)
+        return self.propose_action(
+            proposal.action_spec,
+            experiment_id=inputs.plan.inputs.context.experiment_id,
+            proposed_by=proposed_by,
+            reason=reason,
+            policy=policy,
+            capabilities=capabilities,
+            action_id=binding.action_id,
+            destinations=destinations,
+            _recovery_binding=binding,
+            _recovery_inputs=inputs,
+        )
+
+    def _replay_recovery_action(self, requested: RecoveryActionBinding) -> GovernedAction | None:
+        existing = self.recovery_action_bindings.for_plan(str(requested.plan_id))
+        if existing is None:
+            return None
+        if existing.proposal != requested.proposal:
+            raise IdempotencyConflictError(
+                str(requested.plan_id), ("OOM proposal",), kind="recovery plan"
+            )
+        return self.governed_action(existing.action_id)
+
+    def _require_current_oom_action(
+        self, binding: RecoveryActionBinding, inputs: OOMRecoveryInputsV1
+    ) -> None:
+        proposal = binding.proposal
+        if (
+            proposal.input_fingerprint != inputs.input_fingerprint
+            or proposal.run_id != inputs.run_id
+            or proposal.candidate_fingerprint != inputs.candidate_fingerprint
+            or proposal.source_execution_state_fingerprint != inputs.execution_state_fingerprint
+            or proposal.old_micro_batch_size != inputs.current_micro_batch_size
+            or proposal.old_gradient_accumulation != inputs.current_gradient_accumulation
+            or proposal.world_size != inputs.world_size
+            or proposal.effective_batch_size != inputs.effective_batch_size
+        ):
+            raise ProvenanceError("OOM proposal disagrees with its typed planning inputs")
+        plan = self.recovery_plans.get(str(binding.plan_id))
+        if (
+            plan is None
+            or plan != inputs.plan
+            or plan.episode_id != binding.episode_id
+            or plan.sequence != binding.plan_sequence
+        ):
+            raise ProvenanceError("OOM proposal does not describe the recorded RecoveryPlan")
+        if not self.recovery_plans.is_effective_and_fresh(str(plan.id)):
+            raise StaleRecoveryContextError("OOM RecoveryPlan is no longer open and fresh")
+        context = plan.inputs.context
+        run = self.aggregates.load_run(context.run_id)
+        attempt = self.aggregates.load_attempt(context.target.id)
+        if (
+            run.status is not RunStatus.ACTIVE
+            or attempt.status not in (RunAttemptStatus.FAILED, RunAttemptStatus.PREEMPTED)
+            or attempt.run_id != run.id
+            or run.candidate_fingerprint != proposal.candidate_fingerprint
+            or execution_state_fingerprint_v1(FrozenDict(attempt.model_dump(mode="json")))
+            != proposal.source_execution_state_fingerprint
+        ):
+            raise StaleRecoveryContextError("OOM source execution changed before Action proposal")
 
     def governed_action(self, action_id: ActionId | str) -> GovernedAction:
         """An action as governance left it: its decision, or why validation refused it.

@@ -69,6 +69,7 @@ from xaytune.compilation import (
     TrainerCompiler,
     UnsupportedCandidateError,
 )
+from xaytune.compilation.attempt_resolution import resolve_training_attempt
 from xaytune.core.domain.actions import ActionSpec
 from xaytune.core.domain.budget import (
     BudgetExhaustedError,
@@ -381,7 +382,7 @@ class EmbeddedControllerHost:
         try:
             run = self._record_run(node, spec.seed)
             attempt = RunAttempt(id=RunAttemptId.generate(), run_id=run.id, attempt_number=1)
-            plan = self._plan(experiment, run, attempt.id, compiler)
+            plan = self._plan(experiment, run, attempt, compiler)
             attempt, operation = await self._create_attempt(attempt, plan.request_digest("submit"))
         except BudgetExhaustedError as exhausted:
             self.repository.exhaust_budget(experiment.id, reasons=exhausted.reasons, actor=_ACTOR)
@@ -704,32 +705,35 @@ class EmbeddedControllerHost:
         self,
         experiment: Experiment,
         run: Run,
-        attempt_id: RunAttemptId,
+        attempt: RunAttempt | RunAttemptId,
         compiler: TrainerCompiler,
     ) -> ResolvedExecutionPlan:
         """The attempt's execution plan, built from the durable record alone.
 
         Submission and reconciliation both use this, so a submission re-issued
-        after a restart is the same request by construction: the same
-        candidate snapshot, seed, output location and target, compiled by the
-        same compiler version. Its digest is still checked against the
-        recorded one before anything is issued.
+        after a restart is the same request by construction: the same candidate
+        snapshot, seed, output location and target, compiled by the same compiler
+        version, then resolved through that attempt's durable overrides and
+        checkpoint binding. Its digest is checked before anything is issued.
         """
         node = self.repository.aggregates.load_node(str(run.node_id))
         assert experiment.runtime is not None and experiment.artifact_root is not None
         assert run.seed is not None
-        return ResolvedExecutionPlan(
-            spec=compiler.compile(
-                node.candidate.candidate,
-                CompilationContext(
-                    run_id=str(run.id),
-                    seed=run.seed,
-                    output_uri=str(Path(experiment.artifact_root) / str(run.id)),
-                ),
+        if isinstance(attempt, RunAttemptId):
+            attempt = self.repository.aggregates.get_attempt(str(attempt)) or RunAttempt(
+                id=attempt, run_id=run.id, attempt_number=1
+            )
+        if attempt.run_id != run.id:
+            raise ValueError("attempt belongs to a different logical run")
+        spec = compiler.compile(
+            node.candidate.candidate,
+            CompilationContext(
+                run_id=str(run.id),
+                seed=run.seed,
+                output_uri=str(Path(experiment.artifact_root) / str(run.id)),
             ),
-            runtime=experiment.runtime.kind,
-            target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id)),
         )
+        return resolve_training_attempt(spec, attempt, experiment.runtime.kind)
 
     async def _issue(
         self,
@@ -1021,7 +1025,8 @@ class EmbeddedControllerHost:
             compiler = self._compiler(experiment.compiler.name)
             _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
             run = self.repository.aggregates.load_run(str(run_id))
-            return self._plan(experiment, run, RunAttemptId(attempt_id), compiler)
+            attempt = self.repository.aggregates.load_attempt(str(attempt_id))
+            return self._plan(experiment, run, attempt, compiler)
 
         evaluation_run = self.repository.aggregates.load_evaluation_run(str(run_id))
         evaluator = self._recorded_evaluator(evaluation_run.spec)

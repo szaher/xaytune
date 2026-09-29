@@ -258,6 +258,14 @@ effective_batch = 256
 
 No new experiment node.
 
+The PR-020 attempt resolver compiles the unchanged candidate first, then applies
+the successor attempt's ordered operational overrides and checkpoint binding.
+The Native and TRL compilation paths share this resolver. The two batch
+overrides must preserve effective batch, and the restore override must identify
+the attempt's recorded checkpoint. Inconsistent lineage fails closed. The
+resolved checkpoint reference is part of the canonical runtime request, so
+rebuilding a submission after restart yields the same request digest.
+
 An attempt's infrastructure failure and the logical Run's outcome are separate
 transitions. A CUDA OOM settles the attempt as FAILED and releases its live-attempt
 capacity while the Run remains ACTIVE for recovery. The existing Run reservation

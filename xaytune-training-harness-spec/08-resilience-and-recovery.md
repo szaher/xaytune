@@ -220,8 +220,9 @@ check configured lower bound
   ↓
 calculate smaller micro batch
   ↓
-if preserve_effective_batch:
-    increase grad accumulation
+calculate integral grad accumulation preserving effective batch
+  ↓
+propose one ResizeMicrobatch action carrying both values
   ↓
 check policy + capability + budget
   ↓
@@ -251,6 +252,16 @@ effective_batch = 256
 ```
 
 No new experiment node.
+
+The first PR-020 layer is the pure versioned `OOMRecoveryInputsV1` →
+`OOMResizeProposal | OOMEscalation` contract. It requires a recorded effective
+specialised CUDA-OOM plan, authoritative attempted configuration, and a promise
+check against any preceding executed adaptive resize. The proposal is bound to
+the plan revision and input fingerprint; it grants no execution authority. A
+minimum micro-batch, nonintegral or over-limit accumulation, or an unapplied
+previous resize escalates. Autonomous OOM adjustment never changes effective
+batch. The one governed `ResizeMicrobatch` intent can carry both new knobs;
+the successor attempt later records their separate `ExecutionOverride` lineage.
 
 ## 9. Numerical failure policy
 

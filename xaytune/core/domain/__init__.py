@@ -91,6 +91,13 @@ from xaytune.core.domain.objective import (
     Objective,
     ObjectiveMetric,
 )
+from xaytune.core.domain.oom_recovery import (
+    OOMEscalation,
+    OOMEscalationCode,
+    OOMRecoveryInputsV1,
+    OOMResizeProposal,
+    PriorOOMResize,
+)
 from xaytune.core.domain.operation import (
     OperationState,
     OperationTargetKind,
@@ -129,6 +136,11 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "OOMEscalation",
+    "OOMEscalationCode",
+    "OOMRecoveryInputsV1",
+    "OOMResizeProposal",
+    "PriorOOMResize",
     "CheckpointEligibility",
     "Recoverability",
     "RecoveryDecision",

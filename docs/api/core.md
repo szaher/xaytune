@@ -324,6 +324,29 @@ plan ID/sequence, outcome (`EXECUTED`, `ABANDONED`, `SUPERSEDED`), optional succ
 and actor/time without mutating these records. PR-019 implements no receipts or
 execution behavior. Controller auto-invocation and H02 remain outside this PR.
 
+## CUDA OOM resize proposal (PR-020)
+
+`OOMRecoveryPlanner.plan(OOMRecoveryInputsV1)` is pure. Its versioned input binds a
+recorded, effective CUDA-OOM `RecoveryPlan` to the failed attempt's actual resolved
+micro-batch, gradient accumulation, world size, candidate and execution identities,
+minimum micro-batch and optional accumulation ceiling. The caller must derive
+those execution values from the attempted execution spec; a future executor must
+recheck that binding under its write lock. A previous executed resize supplies
+the promised successor values and prior execution fingerprint. If the current
+attempt did not reflect that promise, planning escalates instead of repeating it.
+
+The planner returns either `OOMResizeProposal` containing **one**
+`ResizeMicrobatch` spec with both `micro_batch_size` and
+`gradient_accumulation`, or a reason-coded `OOMEscalation`. It halves the current
+micro-batch with a configured floor, then calculates the exact integral
+accumulation needed to preserve `micro_batch × accumulation × world_size`.
+Hitting the floor, requiring fractional/over-limit accumulation, or disabling
+preservation escalates without an autonomous proposal. A proposal includes the
+plan ID/sequence and input fingerprint as freshness bindings. It creates no
+Action, override, successor attempt or runtime operation, and grants no execution
+authority. Policy, checkpoint revalidation and successor creation are later
+PR-020 layers.
+
 ## State machines
 
 Each aggregate has its own lifecycle. There is deliberately no single experiment-wide status covering training and evaluation: with concurrent branches, an experiment-wide `EVALUATING` would be meaningless.

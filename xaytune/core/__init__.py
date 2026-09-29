@@ -58,10 +58,15 @@ from xaytune.core.domain import (
     MutationClass,
     Objective,
     ObjectiveMetric,
+    OOMEscalation,
+    OOMEscalationCode,
+    OOMRecoveryInputsV1,
+    OOMResizeProposal,
     OptimizationSpec,
     OptimizerSpec,
     OutboxRecord,
     PrecisionSpec,
+    PriorOOMResize,
     Recoverability,
     RecoveryDecision,
     RecoveryEpisode,
@@ -180,6 +185,11 @@ from xaytune.core.state import (
 )
 
 __all__ = [
+    "OOMEscalation",
+    "OOMEscalationCode",
+    "OOMRecoveryInputsV1",
+    "OOMResizeProposal",
+    "PriorOOMResize",
     "CheckpointEligibility",
     "Recoverability",
     "RecoveryDecision",

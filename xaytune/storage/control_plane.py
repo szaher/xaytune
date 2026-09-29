@@ -101,10 +101,22 @@ from xaytune.core.domain.policy import (
     awaits_execution,
 )
 from xaytune.core.domain.recovery import (
+    COORDINATOR_NAME,
+    COORDINATOR_VERSION,
+    RecoveryCheckpointReport,
+    RecoveryEpisode,
+    RecoveryEvidence,
+    RecoveryEvidenceDisposition,
+    RecoveryInputsV1,
     RecoveryPlan,
+    RecoveryPredecessor,
+    RecoveryRepeatCount,
+    RecoveryRequest,
+    checkpoint_order,
+    checkpoint_report_problem,
     decide_recovery,
     execution_state_fingerprint_v1,
-    incident_signature_v1,
+    recovery_requires_checkpoints,
 )
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
@@ -144,7 +156,7 @@ from xaytune.storage.journal import (
     OperationJournal,
 )
 from xaytune.storage.policy import PolicyDecisionStore
-from xaytune.storage.recovery import RecoveryPlanStore
+from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
 from xaytune.storage.repository import AggregateStore
 
 __all__ = [
@@ -487,6 +499,7 @@ class ControlPlaneRepository:
         self.policy = PolicyDecisionStore(connection)
         self.incidents = IncidentStore(connection)
         self.checkpoints = CheckpointRecordStore(connection)
+        self.recovery_episodes = RecoveryEpisodeStore(connection)
         self.recovery_plans = RecoveryPlanStore(connection)
         self.graph = ExperimentGraph(connection)
 
@@ -749,115 +762,266 @@ class ControlPlaneRepository:
             target=target, run_id=str(run.id), node_id=run.node_id, experiment_id=run.experiment_id
         )
 
-    def recovery_snapshot(self, incident_id: str) -> FrozenDict:
-        """Read all durable planning inputs under one short transaction.
-
-        File validation happens afterwards, outside the database lock. The
-        recording transaction checks this snapshot again, including reservations
-        made by other coordinators. No aggregate revision is advanced.
-        """
+    def prepare_recovery_episode(
+        self, incident_id: str, request: RecoveryRequest, actor: Actor
+    ) -> RecoveryEpisode:
+        """Prepare immutable initial provenance without writing a half-episode."""
         with write_transaction(self._connection):
-            return self._recovery_snapshot(incident_id)
+            incident = self.incidents.get(incident_id)
+            if incident is None:
+                raise AggregateNotFoundError("incident", incident_id)
+            existing = self.recovery_episodes.for_attempt(incident.context.target)
+            if existing is not None:
+                return existing
+            context = self.incident_context(incident.context.target)
+            attempt, run, _ = self._recovery_attempt_state(context)
+            node = self.aggregates.load_node(str(context.node_id))
+            return RecoveryEpisode(
+                context=context,
+                attempt_number=attempt.attempt_number,
+                candidate_fingerprint=(
+                    run.candidate_fingerprint
+                    if isinstance(run, Run)
+                    else node.candidate_fingerprint
+                ),
+                request=request,
+                created_by=actor,
+            )
 
-    def _recovery_snapshot(self, incident_id: str) -> FrozenDict:
-        incident = self.incidents.get(incident_id)
-        if incident is None:
-            raise AggregateNotFoundError("incident", incident_id)
-        context = self.incident_context(incident.context.target)
-        if context != incident.context:
-            raise ProvenanceError("incident owner differs from its durable attempt")
-        aggregates = self.aggregates
-        experiment = aggregates.load_experiment(str(context.experiment_id))
-        node = aggregates.load_node(str(context.node_id))
-        checkpoints: list[RecordedCheckpoint] = []
-        attempt: RunAttempt | EvaluationAttempt
-        run: Run | EvaluationRun
-        attempts: tuple[RunAttempt, ...] | tuple[EvaluationAttempt, ...]
+    def _recovery_attempt_state(
+        self, context: AttemptContext
+    ) -> tuple[
+        RunAttempt | EvaluationAttempt,
+        Run | EvaluationRun,
+        tuple[RunAttempt, ...] | tuple[EvaluationAttempt, ...],
+    ]:
         if context.target.kind == "training-attempt":
-            attempt = aggregates.load_attempt(context.target.id)
-            run = aggregates.load_run(context.run_id)
-            attempts = aggregates.attempts_for_run(context.run_id)
+            attempt = self.aggregates.load_attempt(context.target.id)
+            return (
+                attempt,
+                self.aggregates.load_run(context.run_id),
+                self.aggregates.attempts_for_run(context.run_id),
+            )
+        evaluation_attempt = self.aggregates.load_evaluation_attempt(context.target.id)
+        return (
+            evaluation_attempt,
+            self.aggregates.load_evaluation_run(context.run_id),
+            self.aggregates.evaluation_attempts_for_run(context.run_id),
+        )
+
+    def recovery_target_is_superseded(self, context: AttemptContext) -> bool:
+        with write_transaction(self._connection):
+            attempt, _, attempts = self._recovery_attempt_state(context)
+            return any(a.attempt_number > attempt.attempt_number for a in attempts)
+
+    def recovery_snapshot(self, episode: RecoveryEpisode) -> RecoveryInputsV1:
+        """Typed decision-only projection. Byte inspection happens outside this lock."""
+        with write_transaction(self._connection):
+            return self._recovery_snapshot(episode)
+
+    def _recovery_snapshot(self, episode: RecoveryEpisode) -> RecoveryInputsV1:
+        context = self.incident_context(episode.context.target)
+        attempt, run, attempts = self._recovery_attempt_state(context)
+        experiment = self.aggregates.load_experiment(str(context.experiment_id))
+        node = self.aggregates.load_node(str(context.node_id))
+        candidate = (
+            run.candidate_fingerprint if isinstance(run, Run) else node.candidate_fingerprint
+        )
+        if (
+            context != episode.context
+            or episode.attempt_number != attempt.attempt_number
+            or candidate != episode.candidate_fingerprint
+        ):
+            raise ProvenanceError("episode does not describe its authoritative attempt")
+        if (episode.coordinator_name, episode.coordinator_version) != (
+            COORDINATOR_NAME,
+            COORDINATOR_VERSION,
+        ):
+            raise ProvenanceError("unsupported episode coordinator identity")
+        previous = self.recovery_plans.effective_for_episode(str(episode.id))
+        memberships = self.recovery_episodes.memberships(str(episode.id))
+        evidence: list[RecoveryEvidence] = []
+        if self.recovery_episodes.get(str(episode.id)) is None:
+            for sequence, incident in enumerate(self.incidents.for_attempt(context.target), 1):
+                evidence.append(RecoveryEvidence.from_incident(incident, sequence, candidate))
+        else:
+            for membership in memberships:
+                if membership.disposition is RecoveryEvidenceDisposition.ACCEPTED_FOR_DECISION:
+                    member_incident = self.incidents.get(str(membership.incident_id))
+                    assert member_incident is not None
+                    evidence.append(
+                        RecoveryEvidence.from_incident(
+                            member_incident, membership.membership_sequence, candidate
+                        )
+                    )
+        all_evidence = tuple(sorted(evidence, key=lambda e: str(e.incident_id)))
+        # Repair every accepted extension, even if several arrived before planning resumed.
+        through = len(evidence) if previous is None else previous.accepted_through_sequence + 1
+        prefix = tuple(e for e in all_evidence if e.membership_sequence <= through)
+        signatures = sorted({e.signature for e in prefix})
+        inputs = RecoveryInputsV1(
+            context=context,
+            experiment_status=experiment.status,
+            experiment_revision=experiment.revision,
+            node_status=node.status,
+            node_revision=node.revision,
+            run_status=run.status,
+            run_revision=run.revision,
+            attempt_status=attempt.status,
+            attempt_revision=attempt.revision,
+            attempt_number=attempt.attempt_number,
+            actual_attempt_count=len(attempts),
+            successor_exists=any(a.attempt_number > attempt.attempt_number for a in attempts),
+            pending_other_run_reservations=self.recovery_episodes.pending_excluding(
+                context.target, context.run_id, str(episode.id)
+            ),
+            candidate_fingerprint=candidate,
+            execution_state_fingerprint=execution_state_fingerprint_v1(
+                FrozenDict(attempt.model_dump(mode="json"))
+            ),
+            episode_id=episode.id,
+            request_fingerprint=episode.request_fingerprint,
+            coordinator_name=episode.coordinator_name,
+            coordinator_version=episode.coordinator_version,
+            accepted_evidence=prefix,
+            accepted_membership_count=len(all_evidence),
+            accepted_membership_fingerprint=fingerprint(all_evidence),
+            predecessor=None
+            if previous is None
+            else RecoveryPredecessor(
+                plan_id=previous.id,
+                sequence=previous.sequence,
+                accepted_through_sequence=previous.accepted_through_sequence,
+                accepted_evidence_fingerprint=previous.accepted_evidence_fingerprint,
+            ),
+            experiment_recovery_usage_excluding_target=self.recovery_episodes.usage_excluding(
+                str(context.experiment_id), str(episode.id)
+            ),
+            repeat_counts=tuple(
+                RecoveryRepeatCount(
+                    signature=signature,
+                    prior_matching_episodes=self.recovery_episodes.prior_matching(
+                        episode, signature
+                    ),
+                )
+                for signature in signatures
+            ),
+        )
+        if recovery_requires_checkpoints(inputs, episode.request):
+            reports = []
             for producer in attempts:
                 if producer.attempt_number <= attempt.attempt_number:
-                    checkpoints.extend(self.checkpoints.for_attempt(str(producer.id)))
-        else:
-            attempt = aggregates.load_evaluation_attempt(context.target.id)
-            run = aggregates.load_evaluation_run(context.run_id)
-            attempts = aggregates.evaluation_attempts_for_run(context.run_id)
-        history = self.recovery_plans.for_experiment(str(context.experiment_id))
-        return FrozenDict(
-            {
-                "incident": incident.model_dump(mode="json"),
-                "experiment": {"status": experiment.status.value, "revision": experiment.revision},
-                "node": {"status": node.status.value, "revision": node.revision},
-                "candidate_fingerprint": node.candidate_fingerprint,
-                "run": run.model_dump(mode="json"),
-                "attempt": attempt.model_dump(mode="json"),
-                "attempts": [item.model_dump(mode="json") for item in attempts],
-                "checkpoints": [item.model_dump(mode="json") for item in checkpoints],
-                # Never embed other plans' input snapshots recursively.
-                "history": [
-                    {
-                        "id": str(plan.id),
-                        "run_id": plan.context.run_id,
-                        "target_id": plan.context.target.id,
-                        "signature": plan.incident_signature,
-                        "execution_state": plan.execution_state_fingerprint,
-                        "reserves_recovery": plan.reserves_recovery,
-                    }
-                    for plan in history
-                ],
-            }
+                    for record in self.checkpoints.for_attempt(str(producer.id)):
+                        reports.append(
+                            RecoveryCheckpointReport.from_record(record, producer.attempt_number)
+                        )
+            inputs = inputs.model_copy(
+                update={
+                    "checkpoint_reports": tuple(sorted(reports, key=checkpoint_order, reverse=True))
+                }
+            )
+        return inputs
+
+    def attach_recovery_evidence(
+        self, incident_id: str, *, actor: Actor, destinations: tuple[str, ...] = ()
+    ) -> None:
+        """Repair audit linkage only; accepted coverage gaps intentionally fail closed."""
+        with write_transaction(self._connection):
+            incident = self.incidents.get(incident_id)
+            if incident is None:
+                raise AggregateNotFoundError("incident", incident_id)
+            episode = self.recovery_episodes.for_attempt(incident.context.target)
+            if episode is not None and self.recovery_episodes.membership(incident_id) is None:
+                self._attach_recovery_evidence(episode, incident, actor, destinations)
+
+    def _attach_recovery_evidence(
+        self,
+        episode: RecoveryEpisode,
+        incident: Incident,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> None:
+        membership = self.recovery_episodes._attach(episode, incident, actor)
+        aggregate = (
+            self.aggregates.load_attempt(incident.context.target.id)
+            if incident.context.target.kind == "training-attempt"
+            else self.aggregates.load_evaluation_attempt(incident.context.target.id)
+        )
+        self._emit(
+            aggregate,
+            "RecoveryEvidenceAttached",
+            str(episode.context.experiment_id),
+            actor,
+            destinations,
+            extra={"membership": membership.model_dump(mode="json")},
         )
 
     def record_recovery_plan(
-        self, plan: RecoveryPlan, *, actor: Actor, destinations: tuple[str, ...] = ()
+        self,
+        plan: RecoveryPlan,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+        episode: RecoveryEpisode | None = None,
     ) -> RecoveryPlan:
-        """Commit an immutable decision and RecoveryPlanned event/outbox together.
+        """Authoritatively bind DB inputs and trusted coordinator eligibility.
 
-        One incident has one plan. Identical semantic retries return the original
-        ID/time; a different decision conflicts. No execution intent is written.
+        This lock cannot prove byte integrity: inspection is outside the lock.
+        A future executor MUST revalidate checkpoint bytes before using them.
         """
         plan = RecoveryPlan.model_validate_json(plan.model_dump_json())
         with write_transaction(self._connection):
-            existing = self.recovery_plans.for_incident(str(plan.incident_id))
+            revisions = self.recovery_plans.revisions_for_episode(str(plan.episode_id))
+            existing = next((p for p in revisions if p.sequence == plan.sequence), None)
+            reused = self.recovery_plans.get(str(plan.id))
+            if reused is not None and (reused.episode_id, reused.sequence) != (
+                plan.episode_id,
+                plan.sequence,
+            ):
+                raise IdempotencyConflictError(
+                    str(plan.id), ("episode_id", "sequence"), kind="recovery plan"
+                )
             if existing is not None:
                 if existing.semantic_fingerprint() != plan.semantic_fingerprint():
                     raise IdempotencyConflictError(
-                        str(plan.incident_id), ("recovery_plan",), kind="recovery incident"
+                        str(plan.episode_id), ("recovery_plan",), kind="episode revision"
                     )
                 return existing
-            snapshot = self._recovery_snapshot(str(plan.incident_id))
-            if self.recovery_plans.get(str(plan.id)) is not None:
-                raise IdempotencyConflictError(str(plan.id), ("incident_id",), kind="recovery plan")
-            if fingerprint(snapshot) != fingerprint(plan.input_snapshot):
-                raise StaleRecoveryContextError("recovery inputs changed; nothing was recorded")
-            incident = Incident.model_validate(snapshot["incident"])
-            if (
-                plan.context != incident.context
-                or plan.incident_signature
-                != incident_signature_v1(incident, snapshot["candidate_fingerprint"])
-                or plan.execution_state_fingerprint
-                != execution_state_fingerprint_v1(snapshot["attempt"])
+            stored = self.recovery_episodes.get(str(plan.episode_id))
+            if stored is None:
+                if episode is None or episode.id != plan.episode_id:
+                    raise ProvenanceError(
+                        "first plan requires explicit immutable episode provenance"
+                    )
+                owner = self.recovery_episodes.for_attempt(episode.context.target)
+                if owner is not None:
+                    raise StaleRecoveryContextError("another planner created the target episode")
+                stored = RecoveryEpisode.model_validate_json(episode.model_dump_json())
+            elif episode is not None and episode != stored:
+                raise ProvenanceError("episode provenance is immutable")
+            inputs = self._recovery_snapshot(stored)
+            if inputs != plan.inputs or inputs.successor_exists:
+                raise StaleRecoveryContextError("decision-relevant recovery inputs changed")
+            expected_reports = inputs.checkpoint_reports
+            eligibility = plan.checkpoint_eligibility
+            if tuple((e.checkpoint_ref, e.report_fingerprint) for e in eligibility) != tuple(
+                (r.checkpoint_ref, r.report_fingerprint) for r in expected_reports
             ):
-                raise ProvenanceError("recovery plan does not describe its authoritative incident")
-            reports = {
-                raw["payload"]["checkpoint_ref"]["id"]: raw["payload"]["checkpoint_ref"]
-                for raw in snapshot["checkpoints"]
-            }
-            assessed = {str(item.checkpoint_ref.id): item for item in plan.checkpoint_eligibility}
-            if len(assessed) != len(plan.checkpoint_eligibility) or set(assessed) != set(reports):
                 raise ProvenanceError(
-                    "recovery eligibility must cover each recorded checkpoint once"
+                    "eligibility must bind every relevant report once in canonical order"
                 )
             if any(
-                fingerprint(item.checkpoint_ref) != fingerprint(reports[checkpoint_id])
-                for checkpoint_id, item in assessed.items()
+                e.eligible
+                and (
+                    checkpoint_report_problem(r, inputs) is not None
+                    or stored.request.restore_context is None
+                )
+                for e, r in zip(eligibility, expected_reports)
             ):
-                raise ProvenanceError("recovery eligibility names a different checkpoint reference")
-            if (plan.coordinator_name, plan.coordinator_version) != ("deterministic-recovery", "1"):
-                raise ProvenanceError("unsupported recovery coordinator identity")
-            expected = decide_recovery(snapshot, plan.request, plan.checkpoint_eligibility)
+                raise ProvenanceError(
+                    "eligible checkpoint contradicts authoritative structured provenance"
+                )
+            expected = decide_recovery(inputs, stored.request, eligibility)
             for field in (
                 "strategy",
                 "recoverability",
@@ -867,19 +1031,41 @@ class ControlPlaneRepository:
             ):
                 if getattr(plan, field) != getattr(expected, field):
                     raise ProvenanceError("recovery decision disagrees with deterministic planning")
+            initial = self.recovery_episodes.get(str(stored.id)) is None
+            if initial:
+                self.recovery_episodes._insert(stored)
+                for incident in self.incidents.for_attempt(stored.context.target):
+                    self.recovery_episodes._attach(stored, incident, actor)
             self.recovery_plans._insert(plan)
             aggregate = (
-                self.aggregates.load_attempt(plan.context.target.id)
-                if plan.context.target.kind == "training-attempt"
-                else self.aggregates.load_evaluation_attempt(plan.context.target.id)
+                self.aggregates.load_attempt(stored.context.target.id)
+                if stored.context.target.kind == "training-attempt"
+                else self.aggregates.load_evaluation_attempt(stored.context.target.id)
             )
+            extra: dict[str, Any] = {
+                "episode_id": str(stored.id),
+                "plan_id": str(plan.id),
+                "sequence": plan.sequence,
+                "supersedes_plan_id": None
+                if plan.supersedes_plan_id is None
+                else str(plan.supersedes_plan_id),
+                "accepted_through_sequence": plan.accepted_through_sequence,
+                "accepted_evidence_fingerprint": plan.accepted_evidence_fingerprint,
+                "recovery_plan": plan.model_dump(mode="json"),
+            }
+            if initial:
+                extra["recovery_episode"] = stored.model_dump(mode="json")
+                extra["memberships"] = [
+                    m.model_dump(mode="json")
+                    for m in self.recovery_episodes.memberships(str(stored.id))
+                ]
             self._emit(
                 aggregate,
                 "RecoveryPlanned",
-                str(plan.context.experiment_id),
+                str(stored.context.experiment_id),
                 actor,
                 destinations,
-                extra={"recovery_plan": plan.model_dump(mode="json")},
+                extra=extra,
             )
         return plan
 
@@ -929,6 +1115,9 @@ class ControlPlaneRepository:
                     )
                 return existing
             self.incidents._insert(incident)
+            episode = self.recovery_episodes.for_attempt(target)
+            if episode is not None:
+                self._attach_recovery_evidence(episode, incident, actor, destinations)
             aggregate = (
                 self.aggregates.load_attempt(target.id)
                 if target.kind == "training-attempt"

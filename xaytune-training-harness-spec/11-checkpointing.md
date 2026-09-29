@@ -90,7 +90,7 @@ Validation failure contract:
 | `CheckpointCorruptionError` | Malformed or contradictory capture/bytes; checkpoint is ineligible. |
 | `ValueError`, including Pydantic `ValidationError` | Supported malformed-capture convention; the manager normalizes it to `CheckpointCorruptionError`, preserving its cause. |
 | `OSError` from localization or validation | Unavailable checkpoint bytes; the coordinator marks the checkpoint ineligible. |
-| Other exceptions, such as `RuntimeError`, `TypeError` or `KeyError` | Programmer errors propagate; they are not evidence of checkpoint ineligibility and do not produce a plan for that incident. |
+| Other exceptions, such as `RuntimeError`, `TypeError` or `KeyError` | Programmer errors propagate; they are not evidence of checkpoint ineligibility and do not produce a new decision revision for that episode. |
 
 The coordinator checks the declaration before catching consumer-compatibility
 failures. `CheckpointEligibility.reason` distinguishes `codec lacks validation capability`,
@@ -102,6 +102,17 @@ The coordinator records supported failures as eligibility evidence and can
 continue to an older valid checkpoint. Adding this optional extension does not
 change the required v1alpha1 ABI; future incompatible changes to either contract
 must use explicit version negotiation under ADR-008.
+
+Each planning eligibility entry binds the immutable authoritative checkpoint
+report fingerprint and exact reference. The recording transaction rechecks these
+bindings and decision-relevant database state, using inspection evidence supplied
+by the trusted coordinator. It performs no byte I/O and cannot establish current
+byte integrity from an eligible flag or database hash alone. Planning-time
+eligibility grants no execution authority. A future executor MUST revalidate the
+selected checkpoint bytes/provenance and intended-consumer compatibility before
+using it; it must also atomically check episode openness and effective evidence
+coverage before creating a successor. Cheap blocking recovery paths may record
+empty eligibility because checkpoints did not participate in their derivation.
 
 ## 3. CheckpointStore
 

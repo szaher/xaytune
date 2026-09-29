@@ -28,13 +28,16 @@ from xaytune.core.domain.recovery import (
     RecoveryRequest,
     RecoveryStrategy,
     decide_recovery,
-    execution_state_fingerprint_v1,
     incident_signature_v1,
 )
 from xaytune.core.ids import CheckpointId, RecoveryPlanId
 from xaytune.core.refs import Actor
 from xaytune.core.telemetry import IncidentObservedPayload, NumericalInstabilityObserved
-from xaytune.resilience.recovery import RecoveryCoordinator
+from xaytune.resilience.recovery import (
+    RecoveryCoordinator,
+    RecoveryEpisodeClosedError,
+    RecoveryRequestUnavailableError,
+)
 from xaytune.storage import ControlPlaneRepository, connect, write_transaction
 from xaytune.storage.control_plane import ProvenanceError, StaleRecoveryContextError
 from xaytune.storage.errors import AggregateNotFoundError
@@ -75,18 +78,18 @@ def prepare(connection, seeded, tmp_path):
     return repo, attempt, report, request, coordinator
 
 
+_EPISODES = {}
+
+
 def draft(repo, observed, request):
-    snapshot = repo.recovery_snapshot(str(observed.id))
-    decision = decide_recovery(snapshot, request, ())
-    return RecoveryPlan(
-        **decision.model_dump(),
-        incident_id=observed.id,
-        context=observed.context,
-        incident_signature=incident_signature_v1(observed, snapshot["candidate_fingerprint"]),
-        execution_state_fingerprint=execution_state_fingerprint_v1(snapshot["attempt"]),
-        input_snapshot=snapshot,
-        request=request,
-    )
+    episode = repo.prepare_recovery_episode(str(observed.id), request, ACTOR)
+    _EPISODES[str(episode.id)] = episode
+    inputs = repo.recovery_snapshot(episode)
+    return RecoveryPlan.from_decision(inputs, decide_recovery(inputs, episode.request, ()), ())
+
+
+def record_plan(repo, plan, **kwargs):
+    return repo.record_recovery_plan(plan, episode=_EPISODES.get(str(plan.episode_id)), **kwargs)
 
 
 def test_resume_is_deterministic_and_durable_without_decoding_or_effects(
@@ -109,14 +112,15 @@ def test_resume_is_deterministic_and_durable_without_decoding_or_effects(
     assert RecoveryPlan.model_validate_json(plan.model_dump_json()) == plan
     code = """
 import sys
-from xaytune.core.domain.recovery import RecoveryPlan, decide_recovery
+from xaytune.core.domain.recovery import RecoveryPlan, RecoveryRequest, decide_recovery
 plan = RecoveryPlan.model_validate_json(sys.argv[1])
-decision = decide_recovery(plan.input_snapshot, plan.request, plan.checkpoint_eligibility)
+decision = decide_recovery(
+    plan.inputs, RecoveryRequest.model_validate_json(sys.argv[2]), plan.checkpoint_eligibility)
 print(decision.model_dump_json())
 print(plan.input_fingerprint)
 """
     output = subprocess.check_output(
-        [sys.executable, "-c", code, plan.model_dump_json()], text=True
+        [sys.executable, "-c", code, plan.model_dump_json(), request.model_dump_json()], text=True
     ).splitlines()
     assert output == [
         plan.model_dump_json(
@@ -288,7 +292,7 @@ def test_limits_refuse_recovery(connection, seeded, limits):
     assert plan.strategy is RecoveryStrategy.FAIL
 
 
-def test_same_incident_and_execution_cannot_loop(connection, seeded):
+def test_duplicate_signatures_on_one_attempt_share_recovery(connection, seeded):
     repo = ControlPlaneRepository(connection)
     coordinator = RecoveryCoordinator(repo)
     request = RecoveryRequest(allow_retry_without_checkpoint=True)
@@ -297,12 +301,13 @@ def test_same_incident_and_execution_cannot_loop(connection, seeded):
     second = incident(repo, seeded["attempt"], sequence=10)
     repeated = asyncio.run(coordinator.plan(str(second.id), request))
     assert first.observation_key != second.observation_key
-    assert initial.incident_signature == repeated.incident_signature
-    assert repeated.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
-    assert "loop" in repeated.reason
+    assert initial.incident_signatures == repeated.incident_signatures
+    assert repeated.strategy is RecoveryStrategy.RETRY
+    assert repeated.episode_id == initial.episode_id
+    assert repeated.sequence == 2
 
 
-def test_pending_plans_reserve_attempt_and_experiment_limits(connection, seeded):
+def test_plan_revisions_replace_the_episode_reservation(connection, seeded):
     repo = ControlPlaneRepository(connection)
     coordinator = RecoveryCoordinator(repo)
     request = RecoveryRequest(
@@ -310,7 +315,7 @@ def test_pending_plans_reserve_attempt_and_experiment_limits(connection, seeded)
     )
     first = incident(repo, seeded["attempt"])
     assert asyncio.run(coordinator.plan(str(first.id), request)).strategy is RecoveryStrategy.RETRY
-    # Different pattern would pass loop protection, but cannot claim a third slot.
+    # Different evidence still reserves only the episode's one successor slot.
     second = incident(
         repo,
         seeded["attempt"],
@@ -319,19 +324,19 @@ def test_pending_plans_reserve_attempt_and_experiment_limits(connection, seeded)
             reason="process-failure", metadata={"code_location": "elsewhere"}
         ),
     )
-    assert asyncio.run(coordinator.plan(str(second.id), request)).strategy is RecoveryStrategy.FAIL
+    assert asyncio.run(coordinator.plan(str(second.id), request)).strategy is RecoveryStrategy.RETRY
 
 
 def test_identical_replay_returns_original_and_changed_decision_conflicts(connection, seeded):
     repo = ControlPlaneRepository(connection)
     observed = incident(repo, seeded["attempt"])
     plan = draft(repo, observed, RecoveryRequest(allow_retry_without_checkpoint=True))
-    recorded = repo.record_recovery_plan(plan, actor=ACTOR)
+    recorded = record_plan(repo, plan, actor=ACTOR)
     replay = plan.model_copy(update={"id": RecoveryPlanId.generate()})
-    assert repo.record_recovery_plan(replay, actor=ACTOR) == recorded
+    assert record_plan(repo, replay, actor=ACTOR) == recorded
     changed = plan.model_copy(update={"reason": "different decision"})
     with pytest.raises(IdempotencyConflictError):
-        repo.record_recovery_plan(changed, actor=ACTOR)
+        record_plan(repo, changed, actor=ACTOR)
 
 
 def test_plan_event_and_outbox_roll_back_together(connection, seeded, monkeypatch):
@@ -346,7 +351,7 @@ def test_plan_event_and_outbox_roll_back_together(connection, seeded, monkeypatc
 
     monkeypatch.setattr(repo, "_emit", crash)
     with pytest.raises(KeyboardInterrupt):
-        repo.record_recovery_plan(plan, actor=ACTOR, destinations=("audit",))
+        record_plan(repo, plan, actor=ACTOR, destinations=("audit",))
     assert repo.recovery_plans.for_incident(str(observed.id)) is None
     assert connection.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
     assert (
@@ -356,7 +361,7 @@ def test_plan_event_and_outbox_roll_back_together(connection, seeded, monkeypatc
         == 0
     )
     monkeypatch.setattr(repo, "_emit", original)
-    assert repo.record_recovery_plan(plan, actor=ACTOR) == plan
+    assert record_plan(repo, plan, actor=ACTOR) == plan
 
 
 def test_stale_snapshot_cannot_bypass_a_reserved_limit(connection, seeded):
@@ -365,39 +370,40 @@ def test_stale_snapshot_cannot_bypass_a_reserved_limit(connection, seeded):
         limits=RecoveryLimits(max_recoveries_per_experiment=1), allow_retry_without_checkpoint=True
     )
     first = incident(repo, seeded["attempt"])
-    second = incident(repo, seeded["attempt"], sequence=10)
+    other_run = make_run(seeded["node"])
+    repo.create_run(other_run, actor=ACTOR)
+    other_attempt = make_attempt(other_run)
+    with write_transaction(connection):
+        repo.aggregates._insert_attempt(other_attempt)
+    second = incident(repo, other_attempt)
     left, right = draft(repo, first, request), draft(repo, second, request)
-    repo.record_recovery_plan(left, actor=ACTOR)
+    record_plan(repo, left, actor=ACTOR)
     with pytest.raises(StaleRecoveryContextError):
-        repo.record_recovery_plan(right, actor=ACTOR)
-    assert asyncio.run(RecoveryCoordinator(repo).plan(str(second.id), request)).strategy is (
-        RecoveryStrategy.FAIL
+        record_plan(repo, right, actor=ACTOR)
+    assert (
+        asyncio.run(RecoveryCoordinator(repo).plan(str(second.id), request)).strategy
+        is RecoveryStrategy.FAIL
     )
 
 
-@pytest.mark.parametrize("field", ["context", "incident_signature", "execution_state_fingerprint"])
+@pytest.mark.parametrize("field", ["accepted_evidence_fingerprint", "execution_state_fingerprint"])
 def test_recovery_provenance_is_validated(connection, seeded, field):
     repo = ControlPlaneRepository(connection)
     observed = incident(repo, seeded["attempt"])
     plan = draft(repo, observed, RecoveryRequest())
-    value = (
-        plan.context.model_copy(update={"run_id": "another-run"})
-        if field == "context"
-        else "sha256:" + "0" * 64
-    )
-    with pytest.raises(ProvenanceError):
-        repo.record_recovery_plan(plan.model_copy(update={field: value}), actor=ACTOR)
+    with pytest.raises(ValidationError):
+        plan.model_copy(update={field: "sha256:" + "0" * 64})
 
 
 @pytest.mark.parametrize("operation", ["UPDATE", "DELETE"])
 def test_recovery_plans_are_append_only_in_sql(connection, seeded, operation):
     repo = ControlPlaneRepository(connection)
     observed = incident(repo, seeded["attempt"])
-    asyncio.run(RecoveryCoordinator(repo).plan(str(observed.id)))
+    asyncio.run(RecoveryCoordinator(repo).plan(str(observed.id), RecoveryRequest()))
     sql = (
         "DELETE FROM recovery_plans"
         if operation == "DELETE"
-        else "UPDATE recovery_plans SET run_id = 'another-run'"
+        else "UPDATE recovery_plans SET sequence = 100"
     )
     with pytest.raises(sqlite3.IntegrityError, match="append-only"), write_transaction(connection):
         connection.execute(sql)
@@ -462,7 +468,11 @@ print(plan.model_dump_json())
 
 def test_unknown_incident_is_an_error(connection):
     with pytest.raises(AggregateNotFoundError):
-        asyncio.run(RecoveryCoordinator(ControlPlaneRepository(connection)).plan("missing"))
+        asyncio.run(
+            RecoveryCoordinator(ControlPlaneRepository(connection)).plan(
+                "missing", RecoveryRequest()
+            )
+        )
 
 
 @pytest.mark.parametrize("value", [-1, True, 1.0])
@@ -509,9 +519,9 @@ def test_prior_attempt_checkpoint_is_eligible_and_future_attempt_is_not_recovere
     assert plan.strategy is RecoveryStrategy.RESUME
     assert plan.checkpoint_ref == report.payload.checkpoint_ref
     old_incident = incident(repo, attempt, sequence=10)
-    obsolete = asyncio.run(coordinator.plan(str(old_incident.id), request))
-    assert obsolete.strategy is RecoveryStrategy.FAIL
-    assert "superseded" in obsolete.reason
+    with pytest.raises(RecoveryEpisodeClosedError, match="superseded"):
+        asyncio.run(coordinator.plan(str(old_incident.id), request))
+    assert repo.recovery_episodes.for_attempt(old_incident.context.target) is None
 
 
 @pytest.mark.parametrize(
@@ -590,8 +600,11 @@ def test_repeat_limit_survives_an_execution_change(connection, seeded, repeat_li
         repo.aggregates._insert_attempt(second)
     observed = incident(repo, second)
     plan = asyncio.run(RecoveryCoordinator(repo).plan(str(observed.id), request))
-    assert plan.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
-    assert "repeated incident limit" in plan.reason
+    assert plan.strategy is (
+        RecoveryStrategy.PAUSE_FOR_APPROVAL if repeat_limit == 0 else RecoveryStrategy.RETRY
+    )
+    if repeat_limit == 0:
+        assert "repeated incident limit" in plan.reason
 
 
 @pytest.mark.parametrize("checkpoint_id", ["unknown", "forged"])
@@ -600,24 +613,18 @@ def test_eligibility_cannot_name_an_unrecorded_or_forged_reference(
 ):
     repo, attempt, _, request, coordinator = prepare(connection, seeded, tmp_path)
     observed = incident(repo, attempt)
-    # Produce a legitimate plan, then target a fresh incident so replay does not mask forgery.
     plan = asyncio.run(coordinator.plan(str(observed.id), request))
-    next_incident = incident(repo, attempt, sequence=10)
-    snapshot = repo.recovery_snapshot(str(next_incident.id))
+    incident(repo, attempt, sequence=10)
+    episode = repo.recovery_episodes.get(str(plan.episode_id))
+    inputs = repo.recovery_snapshot(episode)
     ref = plan.checkpoint_ref.model_copy(
         update=(
             {"id": CheckpointId.generate()} if checkpoint_id == "unknown" else {"uri": "forged:uri"}
         )
     )
     eligibility = plan.checkpoint_eligibility[0].model_copy(update={"checkpoint_ref": ref})
-    forged = plan.model_copy(
-        update={
-            "id": RecoveryPlanId.generate(),
-            "incident_id": next_incident.id,
-            "input_snapshot": snapshot,
-            "checkpoint_ref": ref,
-            "checkpoint_eligibility": (eligibility,),
-        }
+    forged = RecoveryPlan.from_decision(
+        inputs, decide_recovery(inputs, request, (eligibility,)), (eligibility,)
     )
     with pytest.raises(ProvenanceError, match="eligibility"):
         repo.record_recovery_plan(forged, actor=ACTOR)
@@ -718,15 +725,15 @@ print(plan.strategy.value)
         output, error = child.communicate(timeout=20)
         assert child.returncode == 0, error
         strategies.append(output.strip())
-    assert sorted(strategies) == ["FAIL", "RETRY"]
-    assert len(repo.recovery_plans.for_experiment(str(first.context.experiment_id))) == 2
+    assert sorted(strategies) == ["RETRY", "RETRY"]
+    assert len(repo.recovery_plans.for_experiment(str(first.context.experiment_id))) == 1
 
 
 def test_reconciliation_never_resolves_configuration_for_recorded_plans(connection, seeded):
     repo = ControlPlaneRepository(connection)
     observed = incident(repo, seeded["attempt"])
     coordinator = RecoveryCoordinator(repo)
-    original = asyncio.run(coordinator.plan(str(observed.id)))
+    original = asyncio.run(coordinator.plan(str(observed.id), RecoveryRequest()))
 
     def unavailable_configuration(_):
         pytest.fail("recorded decisions must not require current consumer configuration")
@@ -742,11 +749,11 @@ def test_reconciliation_never_resolves_configuration_for_recorded_plans(connecti
 def test_plan_id_cannot_be_reused_for_another_incident(connection, seeded):
     repo = ControlPlaneRepository(connection)
     first = incident(repo, seeded["attempt"])
-    original = asyncio.run(RecoveryCoordinator(repo).plan(str(first.id)))
+    original = asyncio.run(RecoveryCoordinator(repo).plan(str(first.id), RecoveryRequest()))
     second = incident(repo, seeded["attempt"], sequence=10)
     next_plan = draft(repo, second, RecoveryRequest()).model_copy(update={"id": original.id})
     with pytest.raises(IdempotencyConflictError):
-        repo.record_recovery_plan(next_plan, actor=ACTOR)
+        record_plan(repo, next_plan, actor=ACTOR)
 
 
 def test_coordinator_returns_winning_request_at_the_recording_race(connection, seeded, monkeypatch):
@@ -756,7 +763,7 @@ def test_coordinator_returns_winning_request_at_the_recording_race(connection, s
     record_plan = repo.record_recovery_plan
 
     def competing_record(plan, **kwargs):
-        record_plan(competitor, actor=ACTOR)
+        record_plan(competitor, actor=ACTOR, episode=_EPISODES[str(competitor.episode_id)])
         return record_plan(plan, **kwargs)
 
     monkeypatch.setattr(repo, "record_recovery_plan", competing_record)
@@ -838,3 +845,126 @@ def test_unexpected_codec_programmer_errors_propagate_without_recording_a_plan(
         == 0
     )
     assert codec.decodes == 0
+
+
+@pytest.mark.parametrize("resolver_unavailable", [False, True])
+def test_missing_resume_plan_requires_explicit_restart_inputs_and_can_be_repaired(
+    connection, seeded, tmp_path, resolver_unavailable
+):
+    repo, attempt, report, request, coordinator = prepare(connection, seeded, tmp_path)
+    coordinator.destinations = ("audit",)
+    observed = incident(repo, attempt)
+    experiment_id = str(observed.context.experiment_id)
+    arguments = {"request_for_incident": lambda _: None} if resolver_unavailable else {}
+    with pytest.raises(RecoveryRequestUnavailableError, match="explicit RecoveryRequest") as raised:
+        asyncio.run(coordinator.reconcile(experiment_id, **arguments))
+    assert raised.value.incident_id == str(observed.id)
+    assert repo.recovery_plans.for_incident(str(observed.id)) is None
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'RecoveryPlanned'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert connection.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
+    plans = asyncio.run(
+        coordinator.reconcile(experiment_id, request_for_incident=lambda _: request)
+    )
+    assert len(plans) == 1
+    assert plans[0].strategy is RecoveryStrategy.RESUME
+    assert plans[0].checkpoint_ref == report.payload.checkpoint_ref
+    assert repo.recovery_episodes.get(str(plans[0].episode_id)).request == request
+    # Recorded decisions require neither consumer configuration nor codec.
+    assert asyncio.run(RecoveryCoordinator(repo).reconcile(experiment_id)) == plans
+
+
+def test_mixed_reconciliation_preserves_existing_plan_and_leaves_unresolved_gap_unwritten(
+    connection, seeded, tmp_path
+):
+    repo, attempt, _, request, coordinator = prepare(connection, seeded, tmp_path)
+    coordinator.destinations = ("audit",)
+    first = incident(repo, attempt)
+    recorded = asyncio.run(coordinator.plan(str(first.id), request))
+    other_run = make_run(seeded["node"])
+    repo.create_run(other_run, actor=ACTOR)
+    other_attempt = make_attempt(other_run)
+    with write_transaction(connection):
+        repo.aggregates._insert_attempt(other_attempt)
+    missing = incident(repo, other_attempt)
+    experiment_id = str(first.context.experiment_id)
+    with pytest.raises(RecoveryRequestUnavailableError):
+        asyncio.run(RecoveryCoordinator(repo).reconcile(experiment_id))
+    assert repo.recovery_plans.for_incident(str(first.id)) == recorded
+    assert repo.recovery_plans.for_incident(str(missing.id)) is None
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'RecoveryPlanned'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert connection.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 1
+
+    def resolve_only_missing(observed):
+        assert observed.id == missing.id
+        return request
+
+    repaired = asyncio.run(
+        coordinator.reconcile(experiment_id, request_for_incident=resolve_only_missing)
+    )
+    assert repaired[0] == recorded
+    assert repaired[1].strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
+
+
+@pytest.mark.parametrize("record_first", [False, True])
+def test_plan_without_request_only_replays_an_existing_decision(
+    connection, seeded, tmp_path, record_first
+):
+    repo, attempt, _, request, coordinator = prepare(connection, seeded, tmp_path)
+    coordinator.destinations = ("audit",)
+    observed = incident(repo, attempt)
+    if record_first:
+        recorded = asyncio.run(coordinator.plan(str(observed.id), request))
+        replay = asyncio.run(RecoveryCoordinator(repo).plan(str(observed.id)))
+        assert replay == recorded
+        assert replay.id == recorded.id
+        assert replay.created_at == recorded.created_at
+    else:
+        with pytest.raises(RecoveryRequestUnavailableError, match="new recovery episode"):
+            asyncio.run(coordinator.plan(str(observed.id)))
+        assert repo.recovery_plans.for_incident(str(observed.id)) is None
+    expected = int(record_first)
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'RecoveryPlanned'"
+        ).fetchone()[0]
+        == expected
+    )
+    assert connection.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == expected
+
+
+def test_reconciliation_stops_before_resolving_later_incidents(connection, seeded):
+    repo = ControlPlaneRepository(connection)
+    first = incident(repo, seeded["attempt"])
+    later = incident(repo, seeded["attempt"], sequence=10)
+    calls = []
+
+    def resolve(observed):
+        calls.append(observed.id)
+        return None if observed.id == first.id else RecoveryRequest()
+
+    with pytest.raises(RecoveryRequestUnavailableError):
+        asyncio.run(
+            RecoveryCoordinator(repo, destinations=("audit",)).reconcile(
+                str(first.context.experiment_id), request_for_incident=resolve
+            )
+        )
+    assert calls == [first.id]
+    assert repo.recovery_plans.for_incident(str(first.id)) is None
+    assert repo.recovery_plans.for_incident(str(later.id)) is None
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'RecoveryPlanned'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert connection.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0

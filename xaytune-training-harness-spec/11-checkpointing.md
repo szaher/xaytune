@@ -21,18 +21,20 @@ class CheckpointCodec(Protocol):
 
     def compatibility_key(
         self,
-        context: CheckpointContext,
-    ) -> CheckpointCompatibilityKey: ...
+        context: CheckpointContext | RestoreContext,
+    ) -> str: ...  # canonical compatibility digest
 
     async def encode(
         self,
         state: CheckpointState,
         destination: Path,
+        context: CheckpointContext,
     ) -> CheckpointManifest: ...
 
     async def decode(
         self,
         source: Path,
+        manifest: CheckpointManifest,
         context: RestoreContext,
     ) -> RestoredCheckpoint: ...
 ```
@@ -44,6 +46,73 @@ Possible codecs:
 - TRLCodec
 - TorchFTCodec
 - future FSDP/HSDP-specific codecs
+
+### 2b. Optional validation-only capability (PR-019)
+
+The implemented `xaytune.plugins/v1alpha1` `CheckpointCodec` ABI remains the
+descriptor, compatibility key, encode and decode interface above. Historical
+v1alpha1 codecs were not required to implement `validate`. They retain ordinary
+save, restore and recorded-restore support under the existing provenance and
+compatibility checks. Plugin descriptor version validation still applies.
+
+Recovery eligibility additionally requires an explicit declaration of a separate
+versioned validation contract. Set `PluginDescriptor.metadata` as follows, using
+the publicly exported constant from `xaytune.checkpoints`:
+
+```python
+metadata={"checkpoint_validation_api": CHECKPOINT_VALIDATION_API_VERSION}
+# CHECKPOINT_VALIDATION_API_VERSION = "xaytune.checkpoint-validation/v1alpha1"
+```
+
+The corresponding publicly exported interface is:
+
+```python
+class CheckpointValidationCodec(Protocol):
+    def validate(self, manifest: CheckpointManifest) -> None: ...
+```
+
+The host accepts only the declared validation API version above; absent or
+unsupported declarations raise `CheckpointCompatibilityError` and make the
+checkpoint ineligible. Structural method presence and runtime protocol checks
+do not declare support. A plugin that declares support but omits its implementation
+has a programmer error, which propagates. The host never falls back to decode.
+The extension inspects encoded layout and captured-state declarations, without decoding or
+applying trainer state. `SerializedStateCodec` explicitly declares this extension.
+`CheckpointManager.validate_recorded` checks bytes, report provenance and consumer
+compatibility before invoking it. Ordinary `restore`/`restore_recorded` use the
+original decode path and do not require the extension.
+
+Validation failure contract:
+
+| Failure | Meaning and handling |
+|---|---|
+| `CheckpointCompatibilityError` | Unsupported layout/consumer compatibility, or absent/unsupported validation declaration; checkpoint is ineligible. |
+| `CheckpointCorruptionError` | Malformed or contradictory capture/bytes; checkpoint is ineligible. |
+| `ValueError`, including Pydantic `ValidationError` | Supported malformed-capture convention; the manager normalizes it to `CheckpointCorruptionError`, preserving its cause. |
+| `OSError` from localization or validation | Unavailable checkpoint bytes; the coordinator marks the checkpoint ineligible. |
+| Other exceptions, such as `RuntimeError`, `TypeError` or `KeyError` | Programmer errors propagate; they are not evidence of checkpoint ineligibility and do not produce a new decision revision for that episode. |
+
+The coordinator checks the declaration before catching consumer-compatibility
+failures. `CheckpointEligibility.reason` distinguishes `codec lacks validation capability`,
+`checkpoint incompatible with intended consumer`, and
+`checkpoint bytes/provenance missing or corrupt`; lack of validation support is
+not recorded as consumer incompatibility.
+
+The coordinator records supported failures as eligibility evidence and can
+continue to an older valid checkpoint. Adding this optional extension does not
+change the required v1alpha1 ABI; future incompatible changes to either contract
+must use explicit version negotiation under ADR-008.
+
+Each planning eligibility entry binds the immutable authoritative checkpoint
+report fingerprint and exact reference. The recording transaction rechecks these
+bindings and decision-relevant database state, using inspection evidence supplied
+by the trusted coordinator. It performs no byte I/O and cannot establish current
+byte integrity from an eligible flag or database hash alone. Planning-time
+eligibility grants no execution authority. A future executor MUST revalidate the
+selected checkpoint bytes/provenance and intended-consumer compatibility before
+using it; it must also atomically check episode openness and effective evidence
+coverage before creating a successor. Cheap blocking recovery paths may record
+empty eligibility because checkpoints did not participate in their derivation.
 
 ## 3. CheckpointStore
 

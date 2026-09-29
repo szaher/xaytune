@@ -25,6 +25,7 @@ from xaytune.core.checkpoint import (
     checkpoint_state_refs,
 )
 from xaytune.core.fingerprint import fingerprint
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.resume import CheckpointStateManifest, DataCursor, ResumeGuarantee
 
 
@@ -59,6 +60,25 @@ class CheckpointCodec(Protocol):
     ) -> RestoredCheckpoint: ...
 
 
+CHECKPOINT_VALIDATION_API_VERSION = "xaytune.checkpoint-validation/v1alpha1"
+
+
+class CheckpointValidationCodec(Protocol):
+    """Optional validation-only extension to the unchanged v1alpha1 codec ABI.
+
+    Declare this contract using descriptor.metadata["checkpoint_validation_api"]
+    equal to CHECKPOINT_VALIDATION_API_VERSION. Method presence is not a declaration.
+    Implementations inspect layout/captured-state declarations without decode
+    or state application. Raise CheckpointCompatibilityError for unsupported
+    layouts and CheckpointCorruptionError for malformed/contradictory capture.
+    ValueError (including Pydantic ValidationError) is also a supported malformed
+    capture failure; the manager normalizes it to CheckpointCorruptionError.
+    Other programmer errors propagate, rather than being mistaken for evidence.
+    """
+
+    def validate(self, manifest: CheckpointManifest) -> None: ...
+
+
 class SerializedStateCodec:
     """Versioned encoded-component layout, with exact compatibility only."""
 
@@ -68,6 +88,7 @@ class SerializedStateCodec:
         plugin_version="1",
         provider="xaytune",
         xaytune_version=__version__,
+        metadata=FrozenDict({"checkpoint_validation_api": CHECKPOINT_VALIDATION_API_VERSION}),
     )
 
     def compatibility_key(self, context: CheckpointContext | RestoreContext) -> str:
@@ -78,6 +99,9 @@ class SerializedStateCodec:
                 "compatibility": context.compatibility.model_dump(mode="json"),
             }
         )
+
+    def validate(self, manifest: CheckpointManifest) -> None:
+        self._validate_components(manifest)
 
     async def encode(
         self, state: CheckpointState, destination: Path, context: CheckpointContext

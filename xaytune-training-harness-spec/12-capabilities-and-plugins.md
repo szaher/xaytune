@@ -120,6 +120,16 @@ class PluginDescriptor(BaseModel):
 
 ## 7. Plugin groups
 
+The v1alpha1 checkpoint codec interface retains its original required methods.
+Recovery validation uses the optional, separately versioned `CheckpointValidationCodec`
+extension, explicitly declared through `metadata["checkpoint_validation_api"]`.
+See [Checkpoint Architecture §2b](11-checkpointing.md#2b-optional-validation-only-capability-pr-019).
+A supported plugin API alone does not establish that capability; method presence
+and runtime protocol checks do not declare it. Absent/unsupported validation
+versions fail closed. A codec without it remains usable for ordinary save/restore and fails closed for recovery
+eligibility. Layout validation raises documented compatibility/corruption errors;
+supported `ValueError` failures are normalized and programmer errors propagate.
+
 Keep existing plugin groups and add:
 
 ```text

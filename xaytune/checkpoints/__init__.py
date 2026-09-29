@@ -1,8 +1,10 @@
 """Local checkpoint bundles, independent of trainer and runtime integrations."""
 
 from xaytune.checkpoints.codec import (
+    CHECKPOINT_VALIDATION_API_VERSION,
     CheckpointCodec,
     CheckpointState,
+    CheckpointValidationCodec,
     RestoredCheckpoint,
     SerializedStateCodec,
 )
@@ -20,6 +22,7 @@ from xaytune.checkpoints.store import (
 )
 
 __all__ = [
+    "CHECKPOINT_VALIDATION_API_VERSION",
     "CheckpointCodec",
     "CheckpointCompatibilityError",
     "CheckpointCorruptionError",
@@ -27,6 +30,7 @@ __all__ = [
     "CheckpointManager",
     "CheckpointState",
     "CheckpointStore",
+    "CheckpointValidationCodec",
     "LocalCheckpointStore",
     "LocalizedCheckpoint",
     "RestoredCheckpoint",

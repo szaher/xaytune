@@ -106,6 +106,19 @@ from xaytune.core.domain.policy import (
     PolicyProposer,
     PolicyVerdict,
 )
+from xaytune.core.domain.recovery import (
+    CheckpointEligibility,
+    Recoverability,
+    RecoveryDecision,
+    RecoveryEpisode,
+    RecoveryEpisodeIncident,
+    RecoveryEvidenceDisposition,
+    RecoveryInputsV1,
+    RecoveryLimits,
+    RecoveryPlan,
+    RecoveryRequest,
+    RecoveryStrategy,
+)
 from xaytune.core.domain.run import (
     ExecutionOverride,
     ExecutionOverrideKind,
@@ -116,6 +129,17 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "CheckpointEligibility",
+    "Recoverability",
+    "RecoveryDecision",
+    "RecoveryEpisode",
+    "RecoveryEpisodeIncident",
+    "RecoveryEvidenceDisposition",
+    "RecoveryInputsV1",
+    "RecoveryLimits",
+    "RecoveryPlan",
+    "RecoveryRequest",
+    "RecoveryStrategy",
     "AttemptContext",
     "DetectorProvenance",
     "Incident",

@@ -1019,7 +1019,47 @@ Start local-only.
   requires a trusted filesystem supporting atomic directory rename and fsync.
   File I/O is synchronous within the async local APIs.
 
-### PR-019 — recovery plan + coordinator
+### PR-019 — recovery episodes + decision-only coordinator
+
+**As built:**
+
+- Immutable attempt-scoped `RecoveryEpisode`, `RecoveryEpisodeId`, original explicit
+  `RecoveryRequest`, append-only accepted/late incident membership and `RecoveryPlan`
+  decision revisions. Closure derives from durable successor existence; no mutable
+  episode state/effective pointer. Every accepted evidence extension appends a plan.
+- Canonical versioned `RecoveryInputsV1` replaces aggregate dictionary snapshots.
+  Pure authority-based arbitration considers all retained diagnoses. Fatal evidence
+  fails, specialised/unknown/evaluation paths pause, compatible generic evidence
+  selects validated resume or explicitly permitted retry. No category priority table.
+- Same-run and prior-attempt checkpoint selection preserves FULL + EXACT optimizer
+  boundaries, consumer RestoreContext, deterministic newest-valid fallback and
+  validation-only byte/provenance inspection outside the write lock. The published
+  optional codec validation declaration preserves the historical v1alpha1 ABI.
+  Compatibility/corruption failures become ineligible; programmer errors propagate.
+  Cheap blocking paths do not assess checkpoints or fabricate eligibility entries.
+- Actual-attempt and experiment recovery limits count episode reservations, not
+  observations/revisions. A replacement effective decision releases/replaces its
+  own unit. Repeat limits count distinct prior accepted-signature episodes: limit 2
+  permits prior 0/1/2, refuses 3. Execution identity equality is not a generic loop.
+- Migration 012 contains three append-only tables, sequence/ownership/closure
+  guards and derived effective/closure views. First episode/memberships/decision
+  and each later revision commit atomically with RecoveryPlanned/event outbox.
+  Separate incident membership admission emits RecoveryEvidenceAttached and may
+  intentionally leave a fail-closed uncovered-evidence gap until replanning.
+- Recording rechecks typed database projections/report bindings under the write
+  lock and derives the decision from trusted coordinator eligibility evidence.
+  It cannot prove current checkpoint bytes from a DB row. Future execution MUST
+  revalidate selected checkpoint bytes and atomically guard openness/current
+  revision/coverage before creating a successor and applying governance.
+- Reconciliation processes typed attempt groups, replays without current config,
+  repairs evidence gaps with stored requests, and requires explicit reconstruction
+  only for first episode creation. It stops at the first unresolved request gap
+  because later limits/repeats depend on preceding history; reconstruct and rerun.
+  Superseded targets with no episode remain historical Incident audit only.
+- Future append-only execution receipts can reference episode/plan/outcome/successor
+  without mutating episodes/plans. No receipt behavior, recovery execution, Actions,
+  RuntimeOperations, new attempts/nodes, overrides, scientific mutations, budget
+  ledger reservations, controller auto-execution or harness implementation here.
 
 ### PR-020 — adaptive OOM recovery
 

@@ -33,6 +33,8 @@ The body after the prefix is ULID-shaped: 10 Crockford base32 characters of mill
 | `RunAttemptId` | `attempt_` |
 | `ActionId` | `act_` |
 | `IncidentId` | `inc_` |
+| `RecoveryPlanId` | `recovery_` |
+| `RecoveryEpisodeId` | `episode_` |
 | `EvaluationId` | `eval_` |
 | `EvaluationRunId` | `evalrun_` |
 | `EvaluationAttemptId` | `evalattempt_` |
@@ -176,6 +178,151 @@ ExecutionOverride(
 The `kind` vocabulary is closed. Learning rate, optimizer, LoRA rank, data, scheduler, reward and model revision changes are not override kinds, and the type rejects them. Depending on experimental intent they are either a `TrainingIntervention` or a new `ExperimentNode`.
 
 `TrainingIntervention` itself is not in this package yet — it arrives with the controller work. The rule is recorded here so the distinction is not rediscovered from the older binary model.
+
+## Recovery decisions (PR-019)
+
+`RecoveryEpisode` owns coordination for one failed typed attempt. Its immutable
+`AttemptContext`, attempt number, candidate identity, original `RecoveryRequest`,
+coordinator identity and creation provenance are captured once. Incidents are
+append-only evidence; `RecoveryPlan` is an immutable episode decision revision.
+Planning grants no execution authority and creates no attempt, Action,
+RuntimeOperation, override, scientific mutation or runtime submission.
+
+```python
+from xaytune.core import RecoveryLimits, RecoveryRequest
+from xaytune.resilience.recovery import RecoveryCoordinator
+
+coordinator = RecoveryCoordinator(repository, checkpoint_manager)
+request = RecoveryRequest(
+    limits=RecoveryLimits(max_attempts_per_run=3,
+                          max_recoveries_per_experiment=10,
+                          max_same_incident_repeats=2),
+    restore_context=consumer_restore_context,
+)
+plan = await coordinator.plan(incident_id, request)
+# Complete durable decisions replay without current configuration/files.
+assert await coordinator.plan(incident_id) == plan
+# Resolve original inputs only for attempts that have no episode yet.
+plans = await coordinator.reconcile(
+    experiment_id, request_for_incident=lambda incident: request,
+)
+```
+
+Episode identity is `(target.kind, target.id)`, validated against the durable
+run/workload and attempt number. It has no mutable status, revision, effective
+pointer, closure flag or reservation count. Membership is globally unique per
+incident, sequenced, and immutable. `ACCEPTED_FOR_DECISION` evidence contributes
+to arbitration and repeat signatures. `LATE_AFTER_CLOSURE` evidence remains
+queryable/auditable but contributes to neither decisions nor reservations/repeats.
+
+Closure derives exclusively from a higher-numbered durable attempt on the same
+typed logical run. Successor failure/cancellation never reopens the old episode.
+Existing-episode membership commits in the incident-recording transaction; its
+accepted/late classification is checked under the write lock, without byte I/O.
+Accepted evidence may create an intentional coverage gap until the coordinator
+records a revision. The previous plan then fails closed for future execution.
+
+Every accepted evidence extension appends a `RecoveryPlan`, even with unchanged
+strategy. Revisions have contiguous `sequence`, immediate `supersedes_plan_id`,
+accepted incident IDs, coverage sequence/fingerprint, deduplicated signatures,
+execution-state fingerprint, typed `inputs` and checkpoint evidence. The highest
+sequence is effective. `repository.recovery_plans.is_effective_and_fresh(plan_id)`
+also requires openness and complete accepted membership coverage; it is a freshness
+predicate, not execution authorization. Historical revisions remain queryable via
+`get()` and `revisions_for_episode()`. `for_incident()` resolves episode ownership
+to its current plan; audit-only membership does not imply decision participation.
+
+`RecoveryInputsV1` (`xaytune.recovery-inputs/v1alpha1`) is immutable, canonical and
+serializable. It projects authoritative context/statuses/revisions, candidate and
+execution identities, actual attempt count/successor existence, original request
+and coordinator bindings, accepted diagnosis evidence, predecessor/coverage,
+episode-level usage excluding the target, per-signature prior episode counts,
+and relevant checkpoint report bindings. It contains no full aggregate dumps.
+The pure `decide_recovery(inputs, request, eligibility)` joins all retained detector
+requirements, independent of arrival order: unrecoverable evidence fails;
+specialised/human/unsupported evidence blocks generic autonomy; incompatible
+specialised families pause with a conflict reason; compatible generic evidence
+selects validated resume or explicitly permitted retry. Detector disagreement
+is preserved, including candidates behind an `UNKNOWN` summary.
+
+The intended consumer supplies `RestoreContext`; do not infer it from a checkpoint.
+Generic resume requires same-run `FULL + EXACT` optimizer-boundary capture and a
+data cursor, preceding all accepted failure positions. Prior-attempt checkpoints
+are supported. Selection orders optimizer step, producer attempt number and ID,
+newest first, with deterministic fallback from corrupt/incompatible checkpoints.
+The manager validates bytes/provenance/layout/consumer compatibility outside the
+write lock, without decoding/application.
+
+Validation requires the separately declared optional `CheckpointValidationCodec`
+extension: `descriptor.metadata["checkpoint_validation_api"]` must equal exported
+`CHECKPOINT_VALIDATION_API_VERSION` (`xaytune.checkpoint-validation/v1alpha1`).
+Method presence is insufficient. Historical v1alpha1 codecs retain save/restore
+and recorded-restore; no mandatory method was added. Compatibility/corruption
+errors and unavailable bytes become ineligibility; documented malformed-layout
+`ValueError` is normalized into corruption. Unexpected programmer errors propagate.
+Reasons distinguish missing capability, consumer incompatibility and missing/corrupt
+bytes/provenance. Cheap blocking decisions have `checkpoint_eligibility=()` because
+checkpoints did not participate; generic checkpoint paths assess every relevant
+report once, bound by `report_fingerprint` and exact checkpoint reference.
+
+Recording authoritatively reconstructs and compares database-derived typed inputs
+under the write lock, verifies report/reference/provenance bindings and supplied
+eligibility coverage, and recomputes the deterministic decision using the trusted
+coordinator's inspection evidence. It cannot independently prove current byte
+integrity from `eligible=True` or a database fingerprint. A future executor **MUST
+revalidate the selected checkpoint before using it**, and atomically check open
+episode + highest plan revision + complete accepted coverage before creating a
+successor, alongside applicable limits/governance/capability/budget checks.
+
+One episode contributes one recovery unit iff its effective plan is `RETRY` or
+`RESUME`. Revisions/observations contribute none independently. For generic
+recovery, the planner selects a candidate from checkpoint eligibility and retry
+policy, then sets its proposed reservation to 1 for `RETRY`/`RESUME` or 0 otherwise.
+Only a reserving
+candidate is subject to attempt/experiment admission limits. Attempt admission
+uses actual attempts + other open reservations + proposed target reservation.
+Experiment admission uses other episode recovery units + proposed target unit.
+`RESUME → PAUSE` releases current reservation through the new effective revision;
+old rows remain immutable. Closed reserving episodes retain one historical planned
+unit, and no pending attempt slot. This records conservative planning history,
+not proof of execution consumption.
+
+Repeat limits count distinct earlier episodes on the same typed run whose accepted
+evidence contains a normalized signature. Duplicates, revisions and late evidence
+do not add repeat units. `max_same_incident_repeats=2` allows prior counts 0/1/2 and
+refuses 3; zero allows the initial occurrence and refuses its first repeat.
+Unchanged execution fingerprint never independently blocks generic retry/resume;
+verification of a promised override belongs to later adaptive strategies.
+
+`plan(incident_id, request=None)` replays complete recorded decisions. Uncovered
+accepted evidence reuses the episode's stored request, ignoring new caller policy.
+No episode means explicit request required, otherwise
+`RecoveryRequestUnavailableError` with no recovery writes/event/outbox/reservation.
+First creation commits episode + all known memberships + initial plan +
+`RecoveryPlanned`/outbox atomically. Every revision commits plan/event/outbox atomically.
+Separate membership admission emits `RecoveryEvidenceAttached`; initial membership
+creation is included in `RecoveryPlanned` without duplicate attachment events.
+No aggregate revision changes merely for planning/linkage. Semantic replay returns
+original ID/time; conflicting revision/ID replay is refused.
+
+Reconciliation groups by typed attempt and processes deterministic run/attempt
+order. Complete episodes replay without configuration; uncovered open evidence
+uses stored requests; closed episodes gain only audit linkage. Initial missing
+requests stop at the first unresolved episode gap, preserving earlier commits and
+leaving that gap/later work unwritten. Later decisions depend on preceding
+reservation/repeat history, so skipping could change outcomes. Reconstruct the
+missing request and rerun; no bypass is provided. Superseded targets that never
+had an episode retain historical Incident audit rows without manufactured episodes
+or post-execution decisions.
+
+Unrelated non-reserving revisions elsewhere do not invalidate the typed projection.
+Relevant reservations, evidence, status/identity, successor, attempts, repeat history
+and checkpoint report changes do. Bounded stale retries fail safely.
+
+Future append-only `RecoveryExecutionReceipt` records can reference episode ID,
+plan ID/sequence, outcome (`EXECUTED`, `ABANDONED`, `SUPERSEDED`), optional successor
+and actor/time without mutating these records. PR-019 implements no receipts or
+execution behavior. Controller auto-invocation and H02 remain outside this PR.
 
 ## State machines
 

@@ -131,26 +131,81 @@ NEW_EXPERIMENT_NODE
 PAUSE_FOR_APPROVAL
 ```
 
-## 7. RecoveryPlan
+## 7. RecoveryEpisode and RecoveryPlan (PR-019)
 
-```python
-class RecoveryPlan(BaseModel):
-    id: str
-    incident_id: str
+A failed typed attempt owns one immutable `RecoveryEpisode`, identified by a typed
+ID and unique `(target.kind, target.id)`. It captures authoritative AttemptContext,
+attempt number, candidate fingerprint, original explicit RecoveryRequest, pinned
+coordinator identity and actor/time. It has no mutable state, revision, effective
+pointer, closed flag or reservation counter.
 
-    strategy: RecoveryStrategy
+`RecoveryEpisodeIncident` is append-only, globally unique per Incident and sequenced
+within the episode. Accepted evidence participates in arbitration/signatures;
+late-after-closure evidence is audit-only and cannot change decisions, reservations
+or repeats. Classify membership under the incident-recording write lock using
+successor existence, never incident/telemetry timestamps. Incidents without an
+episode remain independent audit observations until explicit first planning.
 
-    checkpoint_ref: CheckpointRef | None
+An episode closes permanently for execution decisions when a higher-numbered
+attempt exists on the same typed logical run. Successor failure/cancellation does
+not reopen it. A superseded target with no episode remains historical Incident
+only; do not manufacture a request-less episode or post-execution recovery decision.
 
-    execution_overrides: list[ExecutionOverride]
-    scientific_mutations: list[TrainingSpecMutation]
+`RecoveryPlan` is the immutable public conclusion/revision, not an execution
+proposal. It contains episode ID, contiguous sequence, immediate predecessor ID,
+accepted coverage sequence/IDs/fingerprint, deduplicated signatures, execution-state
+fingerprint, typed RecoveryInputsV1, checkpoint eligibility and decision fields.
+The highest sequence is effective. Every accepted evidence extension appends a
+revision, even when strategy is unchanged. Accepted membership admitted before
+replanning makes the old plan non-fresh; future execution must fail closed.
+All original Incident evidence/candidates and previous decision revisions remain
+queryable. New caller policy never silently replaces the episode's stored request.
 
-    reason: str
+RecoveryInputsV1 is a canonical immutable versioned projection of authoritative
+context, typed statuses/revisions, actual attempt count/successor existence,
+candidate/execution identity, original request/coordinator bindings, accepted
+requirements/provenance, predecessor/coverage, other episode reservation usage,
+prior accepted-signature episode counts and relevant checkpoint reports. Do not
+embed full aggregates or every experiment plan. Unrelated non-reserving revisions
+must not stale planning; relevant reservations/evidence/identity/attempts/reports do.
+Optimistic retries are bounded.
 
-    requires_approval: bool
+Pure arbitration joins recovery authority requirements across all accepted detector
+candidates, independent of arrival order. Unrecoverable evidence fails; specialised,
+human/unsupported evidence blocks generic recovery; incompatible specialised
+families escalate; compatible generic new-attempt evidence selects resume or
+explicitly permitted retry. Never implement pairwise incident-category exemptions
+or detector-priority arbitration. Disagreement behind UNKNOWN is retained.
 
-    estimated_budget_impact: BudgetDelta | None
-```
+First creation requires explicit RecoveryRequest and atomically records episode,
+all known memberships, initial plan, RecoveryPlanned and outbox. Later revisions
+also commit plan/event/outbox atomically. Existing episode membership admitted
+separately emits RecoveryEvidenceAttached (including audit-only late evidence).
+No duplicate attachment events for initial membership committed with a plan.
+No aggregate revision changes merely for planning. Replay preserves original ID/time;
+conflicting revision/ID replay is refused.
+
+Checkpoint bytes/provenance are validated outside the database write lock, without
+decode/application. Recording authoritatively rechecks database-derived typed
+inputs and exact report/reference/fingerprint bindings, then recomputes the decision
+from the trusted coordinator's eligibility evidence. Recording does not establish
+cryptographic/current byte truth from eligible=True. A future executor MUST
+revalidate the selected checkpoint before use and atomically verify episode open,
+plan highest/current and all accepted evidence covered before successor creation,
+with applicable Action/policy/capability/budget checks. These guards are future work.
+
+Reconciliation replays complete episodes without configuration/files, repairs open
+evidence gaps using original stored requests, and requires explicit reconstruction
+only for missing episodes. Never invent RecoveryRequest(). Stop at the first
+unresolved request gap: later reservations/repeats depend on preceding history.
+Reconstruct the request and rerun; no skip mechanism.
+
+Future execution can append RecoveryExecutionReceipt with episode ID, plan ID and
+sequence, EXECUTED/ABANDONED/SUPERSEDED outcome, optional successor target and actor/time.
+This adds a new append-only table without mutating episode or plan and leaves
+successor existence authoritative for closure. PR-019 has no such table/behavior,
+execution overrides, scientific mutations, attempts, Actions, runtime operations,
+submissions or checkpoint state application. Sections below describe later work.
 
 ## 8. CUDA OOM policy
 
@@ -266,19 +321,35 @@ class RecoveryLimits(BaseModel):
     max_same_incident_repeats: int = 2
 ```
 
-Repeated identical adaptive failures should escalate rather than loop forever.
+One episode contributes one recovery unit iff its effective decision is RETRY or
+RESUME. Observations and revisions contribute none independently. Attempt admission
+counts actual attempts + other open episode reservations + proposed target unit;
+experiment admission counts other episode units + proposed target unit. For generic
+recovery, checkpoint eligibility and retry policy determine the candidate first:
+`RETRY`/`RESUME` proposes 1, while `PAUSE_FOR_APPROVAL`/`FAIL` proposes 0 and cannot
+be rejected by a reservation limit. Revisions replace the target contribution, so
+RESUME → PAUSE releases current reservation
+without mutating old rows. Closed reserving episodes retain one historical planned
+unit and no pending attempt slot; this is not proof of execution consumption.
+
+For each normalized signature, count distinct earlier episodes on the same typed
+run with that signature in accepted evidence. Count duplicates/revisions once per
+episode and exclude audit-only late evidence. max_same_incident_repeats=2 permits
+prior matching counts 0/1/2 and escalates at 3. Zero permits the initial occurrence
+and refuses its first repeat.
 
 ## 13. Recovery loop protection
 
-Maintain incident signatures.
+Record versioned normalized signatures (category, structured code location,
+resource shape, quantity and candidate fingerprint) and execution-state fingerprints
+(execution fingerprint and existing override values/preservation claims).
+Generic RETRY/RESUME do not promise execution change: unchanged execution identity
+alone is never proof of a failed generic recovery loop. Generic recovery is bounded
+by attempt, experiment and distinct-episode repeat limits.
 
-Example signature:
-
-```text
-category + code-location + resource-shape + spec-fingerprint
-```
-
-If the same signature repeats after the same override, reject another identical recovery plan.
+PR-020+ strategies that promise an override must later verify the promised change
+and escalate when the same failure recurs without it. No adaptive override or
+numerical algorithm is implemented in PR-019.
 
 ## 14. Required failure injection tests
 

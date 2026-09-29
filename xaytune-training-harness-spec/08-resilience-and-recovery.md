@@ -262,6 +262,8 @@ The first PR-020 layer is the pure versioned `OOMRecoveryInputsV1` →
 `OOMResizeProposal | OOMEscalation` contract. It requires a recorded effective
 specialised CUDA-OOM plan, authoritative attempted configuration, and a promise
 check against any preceding executed adaptive resize. The proposal is bound to
+structured strategy/recoverability/accepted-diagnosis authority, never to the
+human-readable `RecoveryPlan.reason` wording. It is also bound to
 the plan revision and input fingerprint; it grants no execution authority. A
 minimum micro-batch, nonintegral or over-limit accumulation, or an unapplied
 previous resize escalates. Autonomous OOM adjustment never changes effective

@@ -15,7 +15,7 @@ from xaytune.core.domain.oom_recovery import (
     OOMResizeProposal,
     PriorOOMResize,
 )
-from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.domain.recovery import Recoverability, RecoveryRequest
 from xaytune.core.ids import ActionId, RunAttemptId, RunId
 from xaytune.resilience.oom import OOMRecoveryPlanner
 from xaytune.storage import ControlPlaneRepository
@@ -163,9 +163,19 @@ def test_input_values_and_proposal_cannot_hide_nonpreservation(oom_inputs):
     _, inputs = oom_inputs
     with pytest.raises(ValidationError):
         inputs.model_copy(update={"current_micro_batch_size": True})
+    reworded = inputs.model_copy(
+        update={
+            "plan": inputs.plan.model_copy(
+                update={"reason": "adaptive execution recovery is required"}
+            )
+        }
+    )
+    assert isinstance(OOMRecoveryPlanner().plan(reworded), OOMResizeProposal)
     with pytest.raises(ValidationError, match="paused training episode decision"):
         inputs.model_copy(
-            update={"plan": inputs.plan.model_copy(update={"reason": "experiment is paused"})}
+            update={
+                "plan": inputs.plan.model_copy(update={"recoverability": Recoverability.UNKNOWN})
+            }
         )
     proposal = OOMRecoveryPlanner().plan(inputs)
     assert isinstance(proposal, OOMResizeProposal)

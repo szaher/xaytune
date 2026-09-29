@@ -335,8 +335,10 @@ limits and checkpoint validity. Receipt rows never mutate episode or plan histor
 `OOMRecoveryPlanner.plan(OOMRecoveryInputsV1)` is pure. Its versioned input binds a
 recorded, effective CUDA-OOM `RecoveryPlan` to the failed attempt's actual resolved
 micro-batch, gradient accumulation, world size, candidate and execution identities,
-minimum micro-batch and optional accumulation ceiling. The caller must derive
-those execution values from the attempted execution spec; a future executor must
+minimum micro-batch and optional accumulation ceiling. OOM authority comes from
+the structured strategy, recoverability, target and accepted diagnoses;
+`RecoveryPlan.reason` is audit text and is never a protocol key. The caller must
+derive execution values from the attempted execution spec; a future executor must
 recheck that binding under its write lock. A previous executed resize supplies
 the promised successor values and prior execution fingerprint. If the current
 attempt did not reflect that promise, planning escalates instead of repeating it.

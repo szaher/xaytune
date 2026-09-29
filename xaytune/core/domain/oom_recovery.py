@@ -75,7 +75,6 @@ class OOMRecoveryInputsV1(FrozenDomainModel):
             plan.strategy is not RecoveryStrategy.PAUSE_FOR_APPROVAL
             or plan.recoverability is not Recoverability.REQUIRES_HUMAN
             or plan.inputs.context.target.kind != "training-attempt"
-            or plan.reason != "specialised recovery required: adaptive-execution"
             or self.run_id != plan.inputs.context.run_id
             or self.candidate_fingerprint != plan.inputs.candidate_fingerprint
             or self.execution_state_fingerprint != plan.execution_state_fingerprint

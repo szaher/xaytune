@@ -504,19 +504,33 @@ def _predecision(inputs: RecoveryInputsV1, request: RecoveryRequest) -> Recovery
         return _pause("evidence requires unsupported or human-governed recovery")
     if inputs.context.target.kind != "training-attempt":
         return _pause("evaluation recovery requires a workload-specific policy")
-    limits = request.limits
-    if inputs.actual_attempt_count + inputs.pending_other_run_reservations + 1 > (
-        limits.max_attempts_per_run
-    ):
-        return _fail("maximum attempts per run reached (including planned recoveries)")
-    if inputs.experiment_recovery_usage_excluding_target + 1 > limits.max_recoveries_per_experiment:
-        return _fail("maximum recoveries per experiment reached")
     if any(
-        count.prior_matching_episodes > limits.max_same_incident_repeats
+        count.prior_matching_episodes > request.limits.max_same_incident_repeats
         for count in inputs.repeat_counts
     ):
         return _pause("repeated incident limit reached")
     return None
+
+
+def _limit_reserving_decision(
+    inputs: RecoveryInputsV1, request: RecoveryRequest, candidate: RecoveryDecision
+) -> RecoveryDecision:
+    """Admit only a proposed recovery reservation; pauses/failures consume none."""
+    proposed_r = int(candidate.reserves_recovery)
+    if not proposed_r:
+        return candidate
+    limits = request.limits
+    if (
+        inputs.actual_attempt_count + inputs.pending_other_run_reservations + proposed_r
+        > limits.max_attempts_per_run
+    ):
+        return _fail("maximum attempts per run reached (including planned recoveries)")
+    if (
+        inputs.experiment_recovery_usage_excluding_target + proposed_r
+        > limits.max_recoveries_per_experiment
+    ):
+        return _fail("maximum recoveries per experiment reached")
+    return candidate
 
 
 def checkpoint_report_problem(
@@ -562,16 +576,20 @@ def decide_recovery(
         return preliminary
     eligible = next((item for item in eligibility if item.eligible), None)
     if eligible is not None:
-        return RecoveryDecision(
+        candidate = RecoveryDecision(
             strategy=RecoveryStrategy.RESUME,
             recoverability=Recoverability.RECOVERABLE_NEW_ATTEMPT,
             checkpoint_ref=eligible.checkpoint_ref,
             reason="latest validated compatible FULL/EXACT optimizer-boundary checkpoint",
         )
-    if request.allow_retry_without_checkpoint:
-        return RecoveryDecision(
+    elif request.allow_retry_without_checkpoint:
+        candidate = RecoveryDecision(
             strategy=RecoveryStrategy.RETRY,
             recoverability=Recoverability.RECOVERABLE_NEW_ATTEMPT,
             reason="explicit policy permits restarting without a checkpoint",
         )
-    return _pause("no eligible checkpoint; restarting without captured state is not permitted")
+    else:
+        candidate = _pause(
+            "no eligible checkpoint; restarting without captured state is not permitted"
+        )
+    return _limit_reserving_decision(inputs, request, candidate)

@@ -292,6 +292,65 @@ def test_limits_refuse_recovery(connection, seeded, limits):
     assert plan.strategy is RecoveryStrategy.FAIL
 
 
+@pytest.mark.parametrize(
+    "limits",
+    [
+        RecoveryLimits(max_attempts_per_run=1),
+        RecoveryLimits(max_recoveries_per_experiment=0),
+    ],
+)
+@pytest.mark.parametrize("allow_retry", [False, True])
+def test_reservation_limits_apply_only_to_a_proposed_retry(connection, seeded, limits, allow_retry):
+    repo = ControlPlaneRepository(connection)
+    observed = incident(repo, seeded["attempt"])
+    plan = asyncio.run(
+        RecoveryCoordinator(repo).plan(
+            str(observed.id),
+            RecoveryRequest(limits=limits, allow_retry_without_checkpoint=allow_retry),
+        )
+    )
+    if allow_retry:
+        assert plan.strategy is RecoveryStrategy.FAIL
+        assert "maximum" in plan.reason
+    else:
+        assert plan.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
+        assert "no eligible checkpoint" in plan.reason
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        RecoveryLimits(max_attempts_per_run=1),
+        RecoveryLimits(max_recoveries_per_experiment=0),
+    ],
+)
+@pytest.mark.parametrize("checkpoint_valid", [False, True])
+def test_reservation_limits_follow_checkpoint_eligibility(
+    connection, seeded, tmp_path, limits, checkpoint_valid
+):
+    repo, attempt, report, request, coordinator = prepare(connection, seeded, tmp_path)
+    if not checkpoint_valid:
+        (
+            tmp_path
+            / "bundles"
+            / "committed"
+            / str(report.payload.checkpoint_ref.id)
+            / "model.json"
+        ).unlink()
+    observed = incident(repo, attempt)
+    plan = asyncio.run(
+        coordinator.plan(str(observed.id), request.model_copy(update={"limits": limits}))
+    )
+    assert len(plan.checkpoint_eligibility) == 1
+    assert plan.checkpoint_eligibility[0].eligible is checkpoint_valid
+    if checkpoint_valid:
+        assert plan.strategy is RecoveryStrategy.FAIL
+        assert "maximum" in plan.reason
+    else:
+        assert plan.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
+        assert "no eligible checkpoint" in plan.reason
+
+
 def test_duplicate_signatures_on_one_attempt_share_recovery(connection, seeded):
     repo = ControlPlaneRepository(connection)
     coordinator = RecoveryCoordinator(repo)

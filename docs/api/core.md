@@ -275,7 +275,11 @@ episode + highest plan revision + complete accepted coverage before creating a
 successor, alongside applicable limits/governance/capability/budget checks.
 
 One episode contributes one recovery unit iff its effective plan is `RETRY` or
-`RESUME`. Revisions/observations contribute none independently. Attempt admission
+`RESUME`. Revisions/observations contribute none independently. For generic
+recovery, the planner selects a candidate from checkpoint eligibility and retry
+policy, then sets its proposed reservation to 1 for `RETRY`/`RESUME` or 0 otherwise.
+Only a reserving
+candidate is subject to attempt/experiment admission limits. Attempt admission
 uses actual attempts + other open reservations + proposed target reservation.
 Experiment admission uses other episode recovery units + proposed target unit.
 `RESUME → PAUSE` releases current reservation through the new effective revision;

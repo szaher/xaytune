@@ -324,8 +324,11 @@ class RecoveryLimits(BaseModel):
 One episode contributes one recovery unit iff its effective decision is RETRY or
 RESUME. Observations and revisions contribute none independently. Attempt admission
 counts actual attempts + other open episode reservations + proposed target unit;
-experiment admission counts other episode units + proposed target unit. Revisions
-replace the target contribution, so RESUME → PAUSE releases current reservation
+experiment admission counts other episode units + proposed target unit. For generic
+recovery, checkpoint eligibility and retry policy determine the candidate first:
+`RETRY`/`RESUME` proposes 1, while `PAUSE_FOR_APPROVAL`/`FAIL` proposes 0 and cannot
+be rejected by a reservation limit. Revisions replace the target contribution, so
+RESUME → PAUSE releases current reservation
 without mutating old rows. Closed reserving episodes retain one historical planned
 unit and no pending attempt slot; this is not proof of execution consumption.
 

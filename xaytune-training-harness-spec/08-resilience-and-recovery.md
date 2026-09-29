@@ -259,10 +259,12 @@ effective_batch = 256
 No new experiment node.
 
 The PR-020 attempt resolver compiles the unchanged candidate first, then applies
-the successor attempt's ordered operational overrides and checkpoint binding.
-The Native and TRL compilation paths share this resolver. The two batch
-overrides must preserve effective batch, and the restore override must identify
-the attempt's recorded checkpoint. Inconsistent lineage fails closed. The
+the successor attempt's ordered cumulative operational overrides and checkpoint binding.
+The Native and TRL compilation paths share this resolver. Each resize is a
+micro-batch override followed by its compensating gradient-accumulation override.
+Every `from` value must match the configuration reached so far, and each pair
+must preserve effective batch. The final restore override must identify the
+attempt's recorded checkpoint. Inconsistent lineage fails closed. The
 resolved checkpoint reference is part of the canonical runtime request, so
 rebuilding a submission after restart yields the same request digest.
 

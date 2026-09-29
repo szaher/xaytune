@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from tests.test_compilation.test_attempt_resolution import _attempt, _candidate, _cumulative_attempt
 from tests.test_storage.test_recovery_episodes import decide, incident, signal
+from xaytune.compilation import CompilationContext
+from xaytune.compilation.attempt_resolution import resolve_training_attempt
+from xaytune.compilation.native import NativeCompiler
 from xaytune.core.domain.action import ActionTarget
 from xaytune.core.domain.actions.builtin import ResizeMicrobatch
 from xaytune.core.domain.oom_recovery import (
@@ -18,7 +22,7 @@ from xaytune.core.domain.oom_recovery import (
 from xaytune.core.domain.recovery import Recoverability, RecoveryRequest
 from xaytune.core.ids import ActionId, RunAttemptId, RunId
 from xaytune.resilience.oom import OOMRecoveryPlanner
-from xaytune.storage import ControlPlaneRepository
+from xaytune.storage import ControlPlaneRepository, write_transaction
 
 
 @pytest.fixture
@@ -87,6 +91,58 @@ def test_halving_and_floor_are_deterministic(
     assert proposal.action_spec.gradient_accumulation == expected_accum
     assert proposal.action_spec.micro_batch_size * expected_accum * configured.world_size == (
         configured.effective_batch_size
+    )
+
+
+def test_two_oom_episodes_plan_the_lineage_that_restart_resolves(oom_inputs, tmp_path):
+    repo, first_inputs = oom_inputs
+    compiler = NativeCompiler()
+    compiled = compiler.compile(
+        _candidate(tmp_path),
+        CompilationContext(run_id="run-contract", seed=7, output_uri=str(tmp_path / "artifacts")),
+    )
+    first_proposal = OOMRecoveryPlanner().plan(first_inputs)
+    assert isinstance(first_proposal, OOMResizeProposal)
+    attempt2 = _attempt(first_inputs.run_id)
+    resolved2 = resolve_training_attempt(compiled, attempt2, "local")
+    assert (
+        resolved2.spec.config["optimization"]["micro_batch_size"],
+        resolved2.spec.config["optimization"]["gradient_accumulation"],
+    ) == (
+        first_proposal.action_spec.micro_batch_size,
+        first_proposal.action_spec.gradient_accumulation,
+    )
+
+    with write_transaction(repo._connection):
+        repo.aggregates._insert_attempt(attempt2)
+    observed2 = incident(repo, attempt2, sequence=10, signal=signal("cuda-oom"))
+    plan2 = decide(repo, observed2, RecoveryRequest())
+    second_inputs = OOMRecoveryInputsV1(
+        plan=plan2,
+        run_id=first_inputs.run_id,
+        candidate_fingerprint=plan2.inputs.candidate_fingerprint,
+        execution_state_fingerprint=plan2.execution_state_fingerprint,
+        current_micro_batch_size=2,
+        current_gradient_accumulation=16,
+        world_size=8,
+        prior_resize=PriorOOMResize(
+            action_id=ActionId.generate(),
+            successor_attempt_id=attempt2.id,
+            prior_execution_state_fingerprint=first_inputs.execution_state_fingerprint,
+            promised_micro_batch_size=2,
+            promised_gradient_accumulation=16,
+        ),
+    )
+    second_proposal = OOMRecoveryPlanner().plan(second_inputs)
+    assert isinstance(second_proposal, OOMResizeProposal)
+    attempt3 = _cumulative_attempt(first_inputs.run_id)
+    resolved3 = resolve_training_attempt(compiled, attempt3, "local")
+    assert (
+        resolved3.spec.config["optimization"]["micro_batch_size"],
+        resolved3.spec.config["optimization"]["gradient_accumulation"],
+    ) == (
+        second_proposal.action_spec.micro_batch_size,
+        second_proposal.action_spec.gradient_accumulation,
     )
 
 

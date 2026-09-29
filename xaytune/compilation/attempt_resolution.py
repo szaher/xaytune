@@ -15,30 +15,46 @@ def resolve_training_attempt(
 ) -> ResolvedExecutionPlan:
     """Apply recorded operational lineage after trainer-neutral compilation.
 
-    No override or checkpoint means the legacy plan is byte-equivalent to the
-    pre-recovery path. Unsupported or inconsistent overrides fail closed rather
-    than quietly recompiling the candidate's original execution settings.
+    Each attempt carries the cumulative lineage from the candidate: ordered
+    micro-batch/accumulation pairs, then its own checkpoint restore binding.
+    Every ``from`` value must match the configuration reached so far, and each
+    pair must preserve effective batch. No overrides means the legacy plan is
+    byte-equivalent to the pre-recovery path. Inconsistent lineage fails closed.
     """
     config: dict[str, Any] = thaw(spec.config)
-    original: dict[str, Any] | None = None
     optimization: dict[str, Any] | None = None
-    seen: set[str] = set()
+    pair_before: tuple[int, int] | None = None
+    resized = False
     restore_id: str | None = None
 
     for override in attempt.execution_overrides:
         if override.kind in ("micro_batch_resize", "gradient_accumulation_adjustment"):
+            if restore_id is not None:
+                raise ValueError("checkpoint restore must follow the complete resize lineage")
             if optimization is None:
                 optimization = config.get("optimization")
                 if not isinstance(optimization, dict):
                     raise ValueError("compiled training spec has no optimization section")
-                original = dict(optimization)
+            micro = optimization.get("micro_batch_size")
+            accumulation = optimization.get("gradient_accumulation")
+            if (
+                type(micro) is not int
+                or micro < 1
+                or type(accumulation) is not int
+                or accumulation < 1
+            ):
+                raise ValueError("compiled training spec has invalid batch configuration")
             key = (
                 "micro_batch_size"
                 if override.kind == "micro_batch_resize"
                 else "gradient_accumulation"
             )
-            if key in seen:
-                raise ValueError(f"attempt repeats the {key} execution override")
+            if key == "micro_batch_size":
+                if pair_before is not None:
+                    raise ValueError("a resize pair must adjust gradient accumulation next")
+                pair_before = (micro, accumulation)
+            elif pair_before is None:
+                raise ValueError("gradient accumulation adjustment requires a preceding resize")
             values = override.values
             before, after = values.get("from"), values.get("to")
             if (
@@ -51,8 +67,15 @@ def resolve_training_attempt(
             ):
                 raise ValueError(f"attempt has invalid {key} override provenance")
             optimization[key] = after
-            seen.add(key)
+            if key == "gradient_accumulation":
+                assert pair_before is not None
+                if pair_before[0] * pair_before[1] != micro * after:
+                    raise ValueError("execution overrides do not preserve effective batch")
+                pair_before = None
+                resized = True
         elif override.kind == "checkpoint_restore":
+            if pair_before is not None:
+                raise ValueError("checkpoint restore cannot interrupt a resize pair")
             if restore_id is not None or set(override.values) != {"checkpoint_id"}:
                 raise ValueError("attempt has ambiguous checkpoint restore override")
             restore_id = override.values["checkpoint_id"]
@@ -61,24 +84,15 @@ def resolve_training_attempt(
         else:
             raise ValueError(f"unsupported training execution override {override.kind}")
 
-    if seen:
-        if seen != {"micro_batch_size", "gradient_accumulation"}:
-            raise ValueError("batch-preserving resize requires both operational overrides")
-        assert original is not None and optimization is not None
-        if (
-            type(original.get("micro_batch_size")) is not int
-            or type(original.get("gradient_accumulation")) is not int
-            or original["micro_batch_size"] * original["gradient_accumulation"]
-            != optimization["micro_batch_size"] * optimization["gradient_accumulation"]
-        ):
-            raise ValueError("execution overrides do not preserve effective batch")
+    if pair_before is not None:
+        raise ValueError("batch-preserving resize requires both operational overrides")
     checkpoint = attempt.checkpoint_ref
     if (checkpoint is None) != (restore_id is None):
         raise ValueError("checkpoint reference and restore override must occur together")
     if checkpoint is not None and restore_id != str(checkpoint.id):
         raise ValueError("checkpoint restore override names another checkpoint")
 
-    resolved_spec = spec if not seen else spec.model_copy(update={"config": FrozenDict(config)})
+    resolved_spec = spec if not resized else spec.model_copy(update={"config": FrozenDict(config)})
     options = (
         FrozenDict()
         if checkpoint is None

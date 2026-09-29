@@ -349,13 +349,16 @@ the promised successor values and prior execution fingerprint. If the current
 attempt did not reflect that promise, planning escalates instead of repeating it.
 
 Training attempt resolution applies recorded `ExecutionOverride`s after the
-compiler produces a `TrainingExecutionSpec`. Native and TRL use the same resolver:
-the two batch overrides must preserve effective batch, and a checkpoint restore
-override must match the attempt's `checkpoint_ref`. The selected checkpoint is
-bound into the resolved plan's `runtime_options`. Rebuilding from the same durable
-attempt after restart produces the same `request_digest`; a missing or inconsistent
-override fails closed. Runtime checkpoint application belongs to the subsequent
-PR-020 execution layer.
+compiler produces a `TrainingExecutionSpec`. Native and TRL use the same resolver.
+Each successor attempt carries the ordered cumulative resize lineage from the
+unchanged candidate: a micro-batch change followed by its compensating gradient
+accumulation change for each OOM recovery. Every `from` value must match the
+configuration reached by preceding overrides, and **each pair** must preserve
+effective batch. The attempt's final checkpoint restore override must match its
+`checkpoint_ref`; the checkpoint is bound into the resolved plan's
+`runtime_options`. Rebuilding from the same durable attempt after restart produces
+the same `request_digest`; a missing or inconsistent override fails closed.
+Runtime checkpoint application belongs to the subsequent PR-020 execution layer.
 
 The planner returns either `OOMResizeProposal` containing **one**
 `ResizeMicrobatch` spec with both `micro_batch_size` and

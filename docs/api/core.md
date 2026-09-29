@@ -214,6 +214,18 @@ incident. It orders checkpoints by optimizer step, producer attempt number, then
 checkpoint ID, newest first. It validates bytes, producer/candidate/execution
 provenance, codec layout, topology, dataset and ordering through
 `CheckpointManager.validate_recorded`, without decoding or applying state.
+This API requires the optional `CheckpointValidationCodec` extension, explicitly
+declared by `descriptor.metadata["checkpoint_validation_api"]` equal to
+`CHECKPOINT_VALIDATION_API_VERSION` (`xaytune.checkpoint-validation/v1alpha1`).
+Both names are exported from `xaytune.checkpoints`. Method presence does not declare
+support; absent/unsupported declarations fail closed. It adds no required method
+to the v1alpha1 `CheckpointCodec` ABI. Legacy codecs retain save, restore and
+recorded-restore support, but are ineligible for validation-only recovery.
+The extension raises `CheckpointCompatibilityError` for unsupported layouts or
+`CheckpointCorruptionError` for malformed capture. The manager also normalizes
+`ValueError` (including Pydantic `ValidationError`) to corruption with its cause
+preserved. Those failures and unavailable bytes (`OSError`) become checkpoint
+ineligibility; unexpected programmer errors propagate without recording a plan.
 Generic resume requires `FULL + EXACT`, an optimizer-step boundary and a data
 cursor. A corrupt or incompatible newest checkpoint can fall back to an older
 eligible checkpoint. Reports from other runs and future training positions are

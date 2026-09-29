@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import cast
 
-from xaytune.checkpoints.codec import CheckpointCodec, CheckpointState, RestoredCheckpoint
+from xaytune.checkpoints.codec import (
+    CHECKPOINT_VALIDATION_API_VERSION,
+    CheckpointCodec,
+    CheckpointState,
+    CheckpointValidationCodec,
+    RestoredCheckpoint,
+)
 from xaytune.checkpoints.errors import CheckpointCompatibilityError, CheckpointCorruptionError
 from xaytune.checkpoints.store import CheckpointStore, LocalizedCheckpoint
 from xaytune.core.capabilities import require_supported_plugin
@@ -52,13 +59,36 @@ class CheckpointManager:
     ) -> RestoredCheckpoint:
         """Bind localized bytes to the durable producer and reported capture."""
         context = RestoreContext.model_validate_json(context.model_dump_json())
-        localized = await self.validate_recorded(record, context)
+        localized = await self._localize_recorded(record, context)
         return await self.codec.decode(localized.directory, localized.manifest, context)
 
     async def validate_recorded(
         self, record: RecordedCheckpoint, context: RestoreContext
     ) -> LocalizedCheckpoint:
-        """Validate eligibility without decoding or applying trainer state."""
+        """Require validation capability; never infer eligibility from v1alpha1.
+
+        Compatibility/corruption failures retain their typed distinction.
+        ValueError from layout validation is normalized to corruption. Programmer
+        errors propagate; absence of this extension never falls back to decode.
+        """
+        validation_api = self.codec.descriptor.metadata.get("checkpoint_validation_api")
+        if validation_api != CHECKPOINT_VALIDATION_API_VERSION:
+            raise CheckpointCompatibilityError(
+                "codec lacks validation-only checkpoint capability at a supported version"
+            )
+        localized = await self._localize_recorded(record, context)
+        try:
+            cast(CheckpointValidationCodec, self.codec).validate(localized.manifest)
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "codec rejected malformed checkpoint capture"
+            ) from error
+        return localized
+
+    async def _localize_recorded(
+        self, record: RecordedCheckpoint, context: RestoreContext
+    ) -> LocalizedCheckpoint:
+        """The v1alpha1 recorded-restore provenance/compatibility checks."""
         record = RecordedCheckpoint.model_validate_json(record.model_dump_json())
         context = RestoreContext.model_validate_json(context.model_dump_json())
         localized = await self.store.get(record.payload.checkpoint_ref)
@@ -74,7 +104,6 @@ class CheckpointManager:
                 "checkpoint bundle disagrees with its durable commit report"
             )
         self._validate_compatibility(localized, context)
-        self.codec.validate(manifest)
         return localized
 
     async def _decode(

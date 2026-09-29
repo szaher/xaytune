@@ -25,6 +25,7 @@ from xaytune.core.checkpoint import (
     checkpoint_state_refs,
 )
 from xaytune.core.fingerprint import fingerprint
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.resume import CheckpointStateManifest, DataCursor, ResumeGuarantee
 
 
@@ -50,10 +51,6 @@ class CheckpointCodec(Protocol):
 
     def compatibility_key(self, context: CheckpointContext | RestoreContext) -> str: ...
 
-    def validate(self, manifest: CheckpointManifest) -> None:
-        """Validate the encoded layout without decoding or applying state."""
-        ...
-
     async def encode(
         self, state: CheckpointState, destination: Path, context: CheckpointContext
     ) -> CheckpointManifest: ...
@@ -61,6 +58,25 @@ class CheckpointCodec(Protocol):
     async def decode(
         self, source: Path, manifest: CheckpointManifest, context: RestoreContext
     ) -> RestoredCheckpoint: ...
+
+
+CHECKPOINT_VALIDATION_API_VERSION = "xaytune.checkpoint-validation/v1alpha1"
+
+
+class CheckpointValidationCodec(Protocol):
+    """Optional validation-only extension to the unchanged v1alpha1 codec ABI.
+
+    Declare this contract using descriptor.metadata["checkpoint_validation_api"]
+    equal to CHECKPOINT_VALIDATION_API_VERSION. Method presence is not a declaration.
+    Implementations inspect layout/captured-state declarations without decode
+    or state application. Raise CheckpointCompatibilityError for unsupported
+    layouts and CheckpointCorruptionError for malformed/contradictory capture.
+    ValueError (including Pydantic ValidationError) is also a supported malformed
+    capture failure; the manager normalizes it to CheckpointCorruptionError.
+    Other programmer errors propagate, rather than being mistaken for evidence.
+    """
+
+    def validate(self, manifest: CheckpointManifest) -> None: ...
 
 
 class SerializedStateCodec:
@@ -72,6 +88,7 @@ class SerializedStateCodec:
         plugin_version="1",
         provider="xaytune",
         xaytune_version=__version__,
+        metadata=FrozenDict({"checkpoint_validation_api": CHECKPOINT_VALIDATION_API_VERSION}),
     )
 
     def compatibility_key(self, context: CheckpointContext | RestoreContext) -> str:

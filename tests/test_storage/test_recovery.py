@@ -11,8 +11,15 @@ import pytest
 from pydantic import ValidationError
 
 from tests.test_checkpoints.helpers import make_bundle
+from tests.test_checkpoints.validation_codecs import LegacyCodec, ValidationCodec
 from tests.test_resilience.test_incidents import classify, envelope
-from xaytune.checkpoints import CheckpointManager, LocalCheckpointStore, SerializedStateCodec
+from xaytune.checkpoints import (
+    CheckpointCompatibilityError,
+    CheckpointCorruptionError,
+    CheckpointManager,
+    LocalCheckpointStore,
+    SerializedStateCodec,
+)
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.domain.recovery import (
     Recoverability,
@@ -760,3 +767,66 @@ def test_coordinator_returns_winning_request_at_the_recording_race(connection, s
     )
     assert winner == competitor
     assert winner.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
+
+
+@pytest.mark.parametrize("validation_capable", [False, True])
+def test_recovery_requires_the_optional_codec_validation_capability(
+    connection, seeded, tmp_path, validation_capable
+):
+    repo, attempt, report, request, coordinator = prepare(connection, seeded, tmp_path)
+    codec = ValidationCodec() if validation_capable else LegacyCodec()
+    coordinator.checkpoint_manager = CheckpointManager(codec, coordinator.checkpoint_manager.store)
+    observed = incident(repo, attempt)
+    plan = asyncio.run(coordinator.plan(str(observed.id), request))
+    assert plan.strategy is (
+        RecoveryStrategy.RESUME if validation_capable else RecoveryStrategy.PAUSE_FOR_APPROVAL
+    )
+    assert plan.checkpoint_eligibility[0].eligible is validation_capable
+    if validation_capable:
+        assert plan.checkpoint_ref == report.payload.checkpoint_ref
+        assert codec.validations == 1
+    assert codec.decodes == 0
+
+
+@pytest.mark.parametrize(
+    "error,reason",
+    [
+        (CheckpointCompatibilityError("unsupported custom layout"), "incompatible"),
+        (CheckpointCorruptionError("contradictory custom capture"), "corrupt"),
+        (ValueError("malformed custom capture"), "corrupt"),
+        (OSError("custom capture unavailable"), "corrupt"),
+    ],
+)
+def test_supported_codec_validation_failures_make_checkpoints_ineligible(
+    connection, seeded, tmp_path, error, reason
+):
+    repo, attempt, _, request, coordinator = prepare(connection, seeded, tmp_path)
+    codec = ValidationCodec(error)
+    coordinator.checkpoint_manager = CheckpointManager(codec, coordinator.checkpoint_manager.store)
+    observed = incident(repo, attempt)
+    plan = asyncio.run(coordinator.plan(str(observed.id), request))
+    assert plan.strategy is RecoveryStrategy.PAUSE_FOR_APPROVAL
+    assert not plan.checkpoint_eligibility[0].eligible
+    assert reason in plan.checkpoint_eligibility[0].reason
+    assert codec.decodes == 0
+
+
+@pytest.mark.parametrize("error", [RuntimeError("bug"), TypeError("bug"), KeyError("bug")])
+def test_unexpected_codec_programmer_errors_propagate_without_recording_a_plan(
+    connection, seeded, tmp_path, error
+):
+    repo, attempt, _, request, coordinator = prepare(connection, seeded, tmp_path)
+    codec = ValidationCodec(error)
+    coordinator.checkpoint_manager = CheckpointManager(codec, coordinator.checkpoint_manager.store)
+    observed = incident(repo, attempt)
+    with pytest.raises(type(error)) as raised:
+        asyncio.run(coordinator.plan(str(observed.id), request))
+    assert raised.value is error
+    assert repo.recovery_plans.for_incident(str(observed.id)) is None
+    assert (
+        connection.execute(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'RecoveryPlanned'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert codec.decodes == 0

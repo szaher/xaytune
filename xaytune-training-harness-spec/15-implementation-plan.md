@@ -1031,6 +1031,11 @@ Start local-only.
   provenance, consumer compatibility and `FULL + EXACT` optimizer-boundary capture
   through the manager's validation-only API. It never decodes or applies state.
   Selection is deterministic and can fall back from a corrupt newest report.
+  The optional `CheckpointValidationCodec` extension uses an explicit versioned
+  descriptor metadata declaration and leaves the mandatory v1alpha1 codec ABI
+  and ordinary save/restore unchanged; absent/unsupported validation declarations are
+  ineligible. Validation uses documented compatibility/corruption errors and
+  normalizes malformed-capture `ValueError`, while programmer errors propagate.
 - Generic infrastructure failures decide resume or explicitly permitted fresh
   retry. CUDA OOM, numerical incidents, evaluation failures and unknown diagnoses
   pause for specialised planning/review. No OOM algorithm or numerical mutation.

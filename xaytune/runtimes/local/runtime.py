@@ -139,7 +139,7 @@ class LocalRuntime:
         """
         return CapabilityDocument(
             distributed=DistributedCapabilities(strategies=(), min_workers=1, max_workers=1),
-            checkpoint=CheckpointCapabilities(atomic_commit=False),
+            checkpoint=CheckpointCapabilities(atomic_commit=False, full_exact_restore=False),
             resilience=ResilienceCapabilities(
                 per_step=False,
                 provider="local-subprocess",

@@ -60,6 +60,7 @@ from xaytune.core.domain.actions import (
     action_descriptor,
     action_from_spec,
     encode_payload,
+    spec_of,
 )
 from xaytune.core.domain.budget import (
     BudgetDimension,
@@ -120,6 +121,10 @@ from xaytune.core.domain.recovery import (
     recovery_requires_checkpoints,
 )
 from xaytune.core.domain.recovery_action import RecoveryActionBinding
+from xaytune.core.domain.recovery_execution import (
+    RecoveryExecutionOutcome,
+    RecoveryExecutionReceipt,
+)
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.fingerprint import fingerprint
@@ -131,6 +136,7 @@ from xaytune.core.ids import (
     ExperimentId,
     ExperimentNodeId,
     OperationId,
+    RecoveryEpisodeId,
     RunAttemptId,
     RunId,
 )
@@ -448,6 +454,52 @@ def _assert_same_attempt(
     )
     if differing:
         raise IdempotencyConflictError(str(existing.id), differing, kind="attempt")
+
+
+def _require_oom_successor_lineage(
+    source: RunAttempt,
+    successor: RunAttempt,
+    proposal: OOMResizeProposal,
+    action_id: ActionId,
+    checkpoint: RecoveryCheckpointReport,
+) -> None:
+    """Bind one governed resize to the successor's complete operational lineage."""
+    prior = source.execution_overrides
+    if prior and prior[-1].kind == "checkpoint_restore":
+        prior = prior[:-1]
+    overrides = successor.execution_overrides
+    if (
+        successor.run_id != source.run_id
+        or successor.attempt_number != source.attempt_number + 1
+        or successor.checkpoint_ref != checkpoint.checkpoint_ref
+        or successor.execution_fingerprint is None
+        or successor.execution_fingerprint == source.execution_fingerprint
+        or len(overrides) != len(prior) + 3
+        or overrides[: len(prior)] != prior
+    ):
+        raise ProvenanceError("OOM successor does not preserve the source attempt lineage")
+    micro, accumulation, restore = overrides[-3:]
+    if (
+        micro.kind != "micro_batch_resize"
+        or micro.values
+        != FrozenDict(
+            {"from": proposal.old_micro_batch_size, "to": proposal.action_spec.micro_batch_size}
+        )
+        or micro.preserves != ("effective_batch_size",)
+        or accumulation.kind != "gradient_accumulation_adjustment"
+        or accumulation.values
+        != FrozenDict(
+            {
+                "from": proposal.old_gradient_accumulation,
+                "to": proposal.action_spec.gradient_accumulation,
+            }
+        )
+        or accumulation.preserves != ("effective_batch_size",)
+        or restore.kind != "checkpoint_restore"
+        or restore.values != FrozenDict({"checkpoint_id": str(checkpoint.checkpoint_ref.id)})
+        or any(item.action_id != action_id for item in (micro, accumulation, restore))
+    ):
+        raise ProvenanceError("OOM successor overrides disagree with the governed Action")
 
 
 def _require_run_of_cycle(run: EvaluationRun, node: ExperimentNode) -> None:
@@ -2315,6 +2367,339 @@ class ControlPlaneRepository:
         ):
             raise StaleRecoveryContextError("OOM source execution changed before Action proposal")
 
+    def _record_oom_recovery_execution(
+        self,
+        action_id: ActionId,
+        successor: RunAttempt,
+        checkpoint: RecoveryCheckpointReport,
+        *,
+        request_digest: str,
+        actor: Actor,
+        capabilities: CapabilityDocument | None = None,
+        operation_id: OperationId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[RunAttempt, RuntimeOperation, RecoveryExecutionReceipt]:
+        """Commit one governed OOM successor, submit intent and receipt atomically.
+
+        A trusted executor must validate checkpoint bytes and resolve the
+        source/successor training plans before this call. Under the write lock,
+        this method rechecks database authority and the validated report's
+        identity. It performs no checkpoint or runtime I/O.
+        """
+        _require_pristine(successor, RunAttemptStatus.CREATED)
+        operation = RuntimeOperation(
+            id=operation_id or OperationId.generate(),
+            target=RuntimeOperationTarget(kind="training-attempt", id=str(successor.id)),
+            type="submit",
+            request_digest=request_digest,
+            caused_by_action_id=action_id,
+        )
+        with write_transaction(self._connection):
+            binding = self.recovery_action_bindings.for_action(str(action_id))
+            if binding is None:
+                raise ProvenanceError("OOM Action has no recovery decision binding")
+            prior_receipt = self.recovery_execution_receipts.executed_for_episode(
+                str(binding.episode_id)
+            )
+            if prior_receipt is not None:
+                if (
+                    prior_receipt.action_id != action_id
+                    or prior_receipt.successor_attempt_id != successor.id
+                    or prior_receipt.runtime_operation_id != operation.id
+                    or prior_receipt.checkpoint_ref != checkpoint.checkpoint_ref
+                ):
+                    raise IdempotencyConflictError(
+                        str(binding.episode_id), ("successor execution",), kind="recovery episode"
+                    )
+                recorded_attempt = self.aggregates.load_attempt(str(successor.id))
+                recorded_operation = self.operations.get(str(operation.id))
+                assert recorded_operation is not None
+                self.operations._assert_same_request(recorded_operation, operation)
+                _assert_same_attempt(recorded_attempt, successor)
+                return recorded_attempt, recorded_operation, prior_receipt
+
+            episode = self.recovery_episodes.get(str(binding.episode_id))
+            plan = self.recovery_plans.get(str(binding.plan_id))
+            if (
+                episode is None
+                or plan is None
+                or plan.episode_id != episode.id
+                or plan.sequence != binding.plan_sequence
+                or not self.recovery_plans.is_effective_and_fresh(str(plan.id))
+            ):
+                raise StaleRecoveryContextError("OOM recovery decision is no longer open and fresh")
+            action = self.actions.get(str(action_id))
+            decision = self.policy.for_action(str(action_id))
+            if (
+                action is None
+                or decision is None
+                or spec_of(action) != binding.proposal.action_spec
+                or action.experiment_id != episode.context.experiment_id
+                or action.target.kind != "run"
+                or action.target.id != episode.context.run_id
+                or not (
+                    (
+                        decision.verdict is PolicyVerdict.ALLOW
+                        and action.status is ActionStatus.VALIDATED
+                    )
+                    or (
+                        decision.verdict is PolicyVerdict.REQUIRE_APPROVAL
+                        and action.status is ActionStatus.APPROVED
+                    )
+                )
+            ):
+                raise ProvenanceError("OOM Action is not authorized for its bound recovery plan")
+            current_policy_context = self.policy_context(
+                binding.proposal.action_spec,
+                experiment_id=episode.context.experiment_id,
+                proposed_by=action.proposed_by,
+                capabilities=capabilities,
+            )
+            if capabilities != decision.context.capabilities or applicability_problems(
+                binding.proposal.action_spec, current_policy_context
+            ):
+                raise StalePolicyContextError("OOM Action capabilities or applicability changed")
+            inputs = self._recovery_snapshot(episode)
+            source = self.aggregates.load_attempt(episode.context.target.id)
+            run = self.aggregates.load_run(episode.context.run_id)
+            if (
+                inputs.successor_exists
+                or run.status is not RunStatus.ACTIVE
+                or source.status not in (RunAttemptStatus.FAILED, RunAttemptStatus.PREEMPTED)
+                or inputs.execution_state_fingerprint != binding.source_execution_state_fingerprint
+                or inputs.candidate_fingerprint != binding.proposal.candidate_fingerprint
+            ):
+                raise StaleRecoveryContextError(
+                    "OOM source attempt or Run changed before execution"
+                )
+            limits = episode.request.limits
+            if (
+                inputs.actual_attempt_count + inputs.pending_other_run_reservations + 1
+                > limits.max_attempts_per_run
+                or inputs.experiment_recovery_usage_excluding_target + 1
+                > limits.max_recoveries_per_experiment
+            ):
+                raise StaleRecoveryContextError("OOM recovery limits no longer admit a successor")
+            record = self.checkpoints.get(str(checkpoint.checkpoint_ref.id))
+            producer = (
+                None if record is None else self.aggregates.load_attempt(record.context.target.id)
+            )
+            if (
+                record is None
+                or producer is None
+                or checkpoint
+                != RecoveryCheckpointReport.from_record(record, producer.attempt_number)
+                or checkpoint_report_problem(checkpoint, inputs) is not None
+            ):
+                raise StaleRecoveryContextError("validated OOM checkpoint report changed")
+            _require_oom_successor_lineage(
+                source, successor, binding.proposal, action_id, checkpoint
+            )
+            experiment_id = str(episode.context.experiment_id)
+            self._require_budget(experiment_id, new_run=False)
+            self._require_capacity(experiment_id)
+            self.aggregates._insert_attempt(successor)
+            stored_operation = self.operations._insert(operation)
+            self._emit(successor, "RunAttemptCreated", experiment_id, actor, destinations)
+            self._ledger(
+                experiment_id,
+                BudgetDimension.PARALLEL_RUNS,
+                LedgerEntryKind.RESERVE,
+                Decimal(1),
+                BudgetSubjectKind.TRAINING_ATTEMPT,
+                str(successor.id),
+                actor,
+                destinations,
+            )
+            self._emit_operation(
+                stored_operation, "RuntimeOperationIntended", experiment_id, actor, destinations
+            )
+            executing = action.with_status(ActionStatus.EXECUTING)
+            self.actions._update(executing)
+            self._emit_action(executing, "ActionExecuting", actor, destinations)
+            receipt = RecoveryExecutionReceipt(
+                episode_id=episode.id,
+                plan_id=plan.id,
+                plan_sequence=plan.sequence,
+                action_id=action_id,
+                outcome=RecoveryExecutionOutcome.EXECUTED,
+                successor_attempt_id=successor.id,
+                runtime_operation_id=stored_operation.id,
+                checkpoint_ref=checkpoint.checkpoint_ref,
+                created_by=actor,
+            )
+            self.recovery_execution_receipts._insert(receipt)
+            self._emit(
+                source,
+                "RecoveryExecutionRecorded",
+                experiment_id,
+                actor,
+                destinations,
+                extra={
+                    "episode_id": str(episode.id),
+                    "plan_id": str(plan.id),
+                    "plan_sequence": plan.sequence,
+                    "action_id": str(action_id),
+                    "successor_attempt_id": str(successor.id),
+                    "runtime_operation_id": str(stored_operation.id),
+                    "checkpoint_id": str(checkpoint.checkpoint_ref.id),
+                },
+            )
+            return successor, stored_operation, receipt
+
+    def abandon_oom_recovery_action(
+        self,
+        action_id: ActionId,
+        *,
+        actor: Actor,
+        reason: str,
+        destinations: tuple[str, ...] = (),
+    ) -> RecoveryExecutionReceipt:
+        """Record a definitive refusal and fail the unresolved Run atomically.
+
+        A stale plan cannot terminalize a Run whose current episode decision
+        may already have changed. This path creates no successor or operation.
+        """
+        with write_transaction(self._connection):
+            binding = self.recovery_action_bindings.for_action(str(action_id))
+            if binding is None:
+                raise ProvenanceError("OOM Action has no recovery decision binding")
+            existing = self.recovery_execution_receipts.for_episode(str(binding.episode_id))
+            same_action = next(
+                (receipt for receipt in existing if receipt.action_id == action_id), None
+            )
+            if same_action is not None:
+                if same_action.outcome is RecoveryExecutionOutcome.ABANDONED:
+                    return same_action
+                raise IdempotencyConflictError(
+                    str(binding.episode_id), ("recovery execution",), kind="recovery episode"
+                )
+            if any(receipt.outcome is RecoveryExecutionOutcome.EXECUTED for receipt in existing):
+                raise IdempotencyConflictError(
+                    str(binding.episode_id), ("recovery execution",), kind="recovery episode"
+                )
+            episode = self.recovery_episodes.get(str(binding.episode_id))
+            plan = self.recovery_plans.get(str(binding.plan_id))
+            action = self.actions.get(str(action_id))
+            if (
+                episode is None
+                or plan is None
+                or plan.sequence != binding.plan_sequence
+                or not self.recovery_plans.is_effective_and_fresh(str(plan.id))
+                or action is None
+                or action.status
+                not in (
+                    ActionStatus.VALIDATED,
+                    ActionStatus.APPROVAL_PENDING,
+                    ActionStatus.APPROVED,
+                    ActionStatus.REJECTED,
+                )
+            ):
+                raise StaleRecoveryContextError("OOM Action no longer governs the open episode")
+            run = self.aggregates.load_run(episode.context.run_id)
+            if run.status is not RunStatus.ACTIVE:
+                raise StaleRecoveryContextError("OOM Run has already settled")
+            if action.status is not ActionStatus.REJECTED:
+                rejected = action.with_status(ActionStatus.REJECTED)
+                self.actions._update(rejected)
+                self._emit_action(rejected, "ActionRejected", actor, destinations)
+            receipt = RecoveryExecutionReceipt(
+                episode_id=episode.id,
+                plan_id=plan.id,
+                plan_sequence=plan.sequence,
+                action_id=action_id,
+                outcome=RecoveryExecutionOutcome.ABANDONED,
+                created_by=actor,
+            )
+            self.recovery_execution_receipts._insert(receipt)
+            failed = run.with_status(RunStatus.FAILED)
+            self.aggregates._update_run(failed)
+            self._settle_budget(failed, actor, destinations)
+            self._emit(
+                failed,
+                "RunStatusChanged",
+                str(episode.context.experiment_id),
+                actor,
+                destinations,
+            )
+            self._emit(
+                self.aggregates.load_attempt(episode.context.target.id),
+                "RecoveryExecutionRecorded",
+                str(episode.context.experiment_id),
+                actor,
+                destinations,
+                extra={
+                    "episode_id": str(episode.id),
+                    "plan_id": str(plan.id),
+                    "plan_sequence": plan.sequence,
+                    "action_id": str(action_id),
+                    "outcome": "ABANDONED",
+                    "reason": reason,
+                },
+            )
+            return receipt
+
+    def supersede_stale_oom_actions(
+        self,
+        episode_id: RecoveryEpisodeId,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[RecoveryExecutionReceipt, ...]:
+        """Retire unconsumed Actions bound to obsolete episode revisions."""
+        with write_transaction(self._connection):
+            current = self.recovery_plans.effective_for_episode(str(episode_id))
+            if current is None or not self.recovery_plans.is_effective_and_fresh(str(current.id)):
+                raise StaleRecoveryContextError("OOM episode has no fresh effective decision")
+            episode = self.recovery_episodes.get(str(episode_id))
+            assert episode is not None
+            recorded: list[RecoveryExecutionReceipt] = []
+            for binding in self.recovery_action_bindings.for_episode(str(episode_id)):
+                if binding.plan_id == current.id:
+                    continue
+                prior = self.recovery_execution_receipts.for_episode(str(episode_id))
+                if any(receipt.action_id == binding.action_id for receipt in prior):
+                    continue
+                action = self.actions.get(str(binding.action_id))
+                assert action is not None
+                if action.status in (
+                    ActionStatus.VALIDATED,
+                    ActionStatus.APPROVAL_PENDING,
+                    ActionStatus.APPROVED,
+                ):
+                    rejected = action.with_status(ActionStatus.REJECTED)
+                    self.actions._update(rejected)
+                    self._emit_action(rejected, "ActionSuperseded", actor, destinations)
+                elif action.status is not ActionStatus.REJECTED:
+                    raise StaleRecoveryContextError(
+                        "an executing OOM Action cannot be superseded by a new plan"
+                    )
+                receipt = RecoveryExecutionReceipt(
+                    episode_id=episode.id,
+                    plan_id=binding.plan_id,
+                    plan_sequence=binding.plan_sequence,
+                    action_id=binding.action_id,
+                    outcome=RecoveryExecutionOutcome.SUPERSEDED,
+                    created_by=actor,
+                )
+                self.recovery_execution_receipts._insert(receipt)
+                self._emit(
+                    self.aggregates.load_attempt(episode.context.target.id),
+                    "RecoveryExecutionRecorded",
+                    str(episode.context.experiment_id),
+                    actor,
+                    destinations,
+                    extra={
+                        "episode_id": str(episode.id),
+                        "plan_id": str(binding.plan_id),
+                        "plan_sequence": binding.plan_sequence,
+                        "action_id": str(binding.action_id),
+                        "outcome": "SUPERSEDED",
+                    },
+                )
+                recorded.append(receipt)
+            return tuple(recorded)
+
     def governed_action(self, action_id: ActionId | str) -> GovernedAction:
         """An action as governance left it: its decision, or why validation refused it.
 
@@ -3553,6 +3938,26 @@ class ControlPlaneRepository:
                 actor,
                 destinations,
             )
+            if moved.type == "submit" and moved.caused_by_action_id is not None:
+                binding = self.recovery_action_bindings.for_action(str(moved.caused_by_action_id))
+                if binding is not None and state in ("confirmed", "failed"):
+                    action = self.actions.get(str(moved.caused_by_action_id))
+                    assert action is not None
+                    if action.status is ActionStatus.EXECUTING:
+                        settled = (
+                            action.with_status(
+                                ActionStatus.SUCCEEDED, outcome=ActionOutcome.APPLIED
+                            )
+                            if state == "confirmed"
+                            else action.with_status(ActionStatus.FAILED)
+                        )
+                        self.actions._update(settled)
+                        self._emit_action(
+                            settled,
+                            "ActionApplied" if state == "confirmed" else "ActionFailed",
+                            actor,
+                            destinations,
+                        )
         return moved
 
     def _require_consistent_run(self, run: Run) -> None:

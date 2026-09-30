@@ -111,9 +111,12 @@ WHEN NEW.outcome = 'EXECUTED' AND NOT EXISTS (
     AND operation.target_id = successor.id AND operation.type = 'submit'
     AND operation.state = 'intended'
     AND operation.caused_by_action_id = NEW.action_id
-    AND (NEW.checkpoint_id IS NULL OR EXISTS (
+    AND (NEW.checkpoint_id IS NULL OR (
+      json_extract(successor.payload_json, '$.checkpoint_ref.id') = NEW.checkpoint_id
+      AND EXISTS (
       SELECT 1 FROM checkpoints checkpoint
       WHERE checkpoint.id = NEW.checkpoint_id AND checkpoint.run_id = e.run_id
+      )
     ))
 )
 BEGIN SELECT RAISE(ABORT, 'executed receipt lacks current decision or bound effect'); END;

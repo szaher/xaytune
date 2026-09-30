@@ -74,7 +74,9 @@ class RecoveryEpisodeStore:
             self._connection.execute(
                 "SELECT COUNT(*) FROM recovery_episodes e JOIN recovery_effective_plans p "
                 "ON p.episode_id = e.id WHERE e.experiment_id = ? AND e.id != ? "
-                "AND p.strategy IN ('RETRY', 'RESUME')",
+                "AND (p.strategy IN ('RETRY', 'RESUME') OR EXISTS ("
+                "SELECT 1 FROM recovery_execution_receipts receipt "
+                "WHERE receipt.episode_id = e.id AND receipt.outcome = 'EXECUTED'))",
                 (experiment_id, episode_id),
             ).fetchone()[0]
         )

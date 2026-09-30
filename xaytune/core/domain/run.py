@@ -22,6 +22,7 @@ from pydantic import AliasChoices, Field
 from xaytune.core.clock import utc_now
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import (
+    ActionId,
     ExperimentId,
     ExperimentNodeId,
     IncidentId,
@@ -78,6 +79,7 @@ class ExecutionOverride(FrozenDomainModel):
     values: FrozenDict = Field(default_factory=FrozenDict)
     preserves: tuple[str, ...] = Field(default_factory=tuple)
     incident_id: IncidentId | None = None
+    action_id: ActionId | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

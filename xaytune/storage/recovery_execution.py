@@ -44,6 +44,18 @@ class RecoveryExecutionReceiptStore:
             else RecoveryExecutionReceipt.model_validate_json(row["payload_json"])
         )
 
+    def for_successor(self, attempt_id: str) -> RecoveryExecutionReceipt | None:
+        row = self._connection.execute(
+            "SELECT payload_json FROM recovery_execution_receipts "
+            "WHERE successor_attempt_id = ? AND outcome = 'EXECUTED'",
+            (attempt_id,),
+        ).fetchone()
+        return (
+            None
+            if row is None
+            else RecoveryExecutionReceipt.model_validate_json(row["payload_json"])
+        )
+
     def _insert(self, receipt: RecoveryExecutionReceipt) -> None:
         """Called only by a higher-level writer that also commits the effects."""
         _require_transaction(self._connection, "recovery execution receipts")

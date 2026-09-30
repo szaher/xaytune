@@ -9,11 +9,14 @@ import pytest
 from tests.test_experiment.test_host_behaviour import _spec
 from tests.training_fixtures import sft_candidate
 from xaytune.compilation import CompilationContext
-from xaytune.compilation.attempt_resolution import resolve_training_attempt
+from xaytune.compilation.attempt_resolution import (
+    resolve_training_attempt,
+    training_execution_fingerprint,
+)
 from xaytune.compilation.native import NativeCompiler
 from xaytune.compilation.trl import TRLCompiler
 from xaytune.core.domain.run import ExecutionOverride, RunAttempt
-from xaytune.core.ids import CheckpointId, RunAttemptId, RunId
+from xaytune.core.ids import ActionId, CheckpointId, RunAttemptId, RunId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, CheckpointRef
 from xaytune.experiment import CompilerSpec, EmbeddedControllerHost
@@ -211,6 +214,72 @@ def test_each_resize_pair_must_preserve_batch_even_if_final_product_matches(tmp_
     # to 1×32. A final-only product check would incorrectly accept this.
     with pytest.raises(ValueError, match="preserve effective batch"):
         resolve_training_attempt(compiled, _with_overrides(attempt, tuple(overrides)), "local")
+
+
+def test_resize_pair_must_share_one_governing_action(tmp_path):
+    compiled = NativeCompiler().compile(
+        _candidate(tmp_path),
+        CompilationContext(run_id="run-contract", seed=7, output_uri=str(tmp_path / "artifacts")),
+    )
+    attempt = _attempt(RunId.generate())
+    first, second, restore = attempt.execution_overrides
+    action_id = ActionId.generate()
+    valid = _with_overrides(
+        attempt,
+        (
+            first.model_copy(update={"action_id": action_id}),
+            second.model_copy(update={"action_id": action_id}),
+            restore.model_copy(update={"action_id": action_id}),
+        ),
+    )
+    assert (
+        resolve_training_attempt(compiled, valid, "local").spec.config["optimization"][
+            "micro_batch_size"
+        ]
+        == 2
+    )
+    broken = _with_overrides(
+        attempt,
+        (
+            first.model_copy(update={"action_id": action_id}),
+            second.model_copy(update={"action_id": ActionId.generate()}),
+            restore,
+        ),
+    )
+    with pytest.raises(ValueError, match="one governing Action"):
+        resolve_training_attempt(compiled, broken, "local")
+    wrong_restore = _with_overrides(
+        attempt,
+        (
+            first.model_copy(update={"action_id": action_id}),
+            second.model_copy(update={"action_id": action_id}),
+            restore.model_copy(update={"action_id": ActionId.generate()}),
+        ),
+    )
+    with pytest.raises(ValueError, match="checkpoint restore belongs to another"):
+        resolve_training_attempt(compiled, wrong_restore, "local")
+
+
+@pytest.mark.parametrize("compiler", [NativeCompiler(), TRLCompiler()])
+def test_execution_identity_changes_with_resized_configuration_not_checkpoint(compiler, tmp_path):
+    compiled = compiler.compile(
+        _candidate(tmp_path),
+        CompilationContext(run_id="run-contract", seed=7, output_uri=str(tmp_path / "artifacts")),
+    )
+    run_id = RunId.generate()
+    initial = RunAttempt(id=RunAttemptId.generate(), run_id=run_id, attempt_number=1)
+    resized = _attempt(run_id)
+    first_plan = resolve_training_attempt(compiled, initial, "local")
+    resized_plan = resolve_training_attempt(compiled, resized, "local")
+    assert training_execution_fingerprint(first_plan) != training_execution_fingerprint(
+        resized_plan
+    )
+    assert training_execution_fingerprint(resized_plan) == training_execution_fingerprint(
+        resolve_training_attempt(compiled, _attempt(run_id), "local")
+    )
+    assert resized_plan.request_digest("submit") != resolve_training_attempt(
+        compiled, _attempt(run_id), "local"
+    ).request_digest("submit")
 
 
 @pytest.mark.parametrize("compiler_name", ["native", "trl"])

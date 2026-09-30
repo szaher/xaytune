@@ -7,7 +7,30 @@ from typing import Any
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.domain.run import RunAttempt
 from xaytune.core.execution import ResolvedExecutionPlan, TrainingExecutionSpec
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, thaw
+
+
+def training_execution_fingerprint(plan: ResolvedExecutionPlan) -> str:
+    """Identity of the resolved training configuration, excluding attempt and restore target.
+
+    A checkpoint changes where this execution starts, not the configuration it
+    runs with. The submit request digest separately binds the exact attempt,
+    checkpoint and runtime request.
+    """
+    if not isinstance(plan.spec, TrainingExecutionSpec):
+        raise ValueError("training execution identity requires a training plan")
+    options = thaw(plan.runtime_options)
+    options.pop("checkpoint_restore", None)
+    return fingerprint(
+        {
+            "kind": "training-execution/v1",
+            "spec": plan.spec,
+            "runtime": plan.runtime,
+            "resolved_capabilities": plan.resolved_capabilities,
+            "runtime_options": options,
+        }
+    )
 
 
 def resolve_training_attempt(
@@ -24,6 +47,8 @@ def resolve_training_attempt(
     config: dict[str, Any] = thaw(spec.config)
     optimization: dict[str, Any] | None = None
     pair_before: tuple[int, int] | None = None
+    pair_action_id: str | None = None
+    latest_resize_action_id: str | None = None
     resized = False
     restore_id: str | None = None
 
@@ -53,8 +78,11 @@ def resolve_training_attempt(
                 if pair_before is not None:
                     raise ValueError("a resize pair must adjust gradient accumulation next")
                 pair_before = (micro, accumulation)
+                pair_action_id = override.action_id
             elif pair_before is None:
                 raise ValueError("gradient accumulation adjustment requires a preceding resize")
+            elif override.action_id != pair_action_id:
+                raise ValueError("resize pair must share one governing Action")
             values = override.values
             before, after = values.get("from"), values.get("to")
             if (
@@ -72,6 +100,8 @@ def resolve_training_attempt(
                 if pair_before[0] * pair_before[1] != micro * after:
                     raise ValueError("execution overrides do not preserve effective batch")
                 pair_before = None
+                latest_resize_action_id = override.action_id
+                pair_action_id = None
                 resized = True
         elif override.kind == "checkpoint_restore":
             if pair_before is not None:
@@ -81,6 +111,8 @@ def resolve_training_attempt(
             restore_id = override.values["checkpoint_id"]
             if not isinstance(restore_id, str):
                 raise ValueError("checkpoint restore override requires a checkpoint id")
+            if override.action_id is not None and override.action_id != latest_resize_action_id:
+                raise ValueError("checkpoint restore belongs to another governing Action")
         else:
             raise ValueError(f"unsupported training execution override {override.kind}")
 

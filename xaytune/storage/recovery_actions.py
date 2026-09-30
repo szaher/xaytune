@@ -28,6 +28,14 @@ class RecoveryActionBindingStore:
             None if row is None else RecoveryActionBinding.model_validate_json(row["payload_json"])
         )
 
+    def for_episode(self, episode_id: str) -> tuple[RecoveryActionBinding, ...]:
+        rows = self._connection.execute(
+            "SELECT payload_json FROM recovery_action_bindings WHERE episode_id = ? "
+            "ORDER BY plan_sequence, action_id",
+            (episode_id,),
+        ).fetchall()
+        return tuple(RecoveryActionBinding.model_validate_json(row["payload_json"]) for row in rows)
+
     def _insert(self, binding: RecoveryActionBinding) -> None:
         _require_transaction(self._connection, "recovery Action bindings")
         self._connection.execute(

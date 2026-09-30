@@ -49,12 +49,14 @@ class InjectedOOMRuntime:
         assert base.checkpoint is not None
         return base.model_copy(
             update={
+                "extensions": {},
                 "checkpoint": base.checkpoint.model_copy(
                     update={
                         "atomic_commit": True,
                         "full_exact_restore": self.restore_supported,
+                        "formats": (),
                     }
-                )
+                ),
             }
         )
 

@@ -292,11 +292,13 @@ Run it: `python examples/control_plane/05_train_and_evaluate.py ... --target 2.5
 ## What is not supported yet
 
 Both compilers run **full-parameter SFT on one worker** from local files.
-They refuse, with reasons: adapters (LoRA/QLoRA), checkpoint intent,
+They refuse, with reasons: adapters (LoRA/QLoRA), unsupported checkpoint intent,
 algorithm variants, rewards, hub model names, and any training-relevant
-value left undeclared. The TRL compiler also refuses data formats other than
-`text`, and packing. The legacy trainer API still does all of these, outside
-the control plane.
+value left undeclared. Native supports managed periodic optimizer-boundary
+checkpoint intent on one worker with an indexed local dataset and full
+optimizer windows; TRL still refuses checkpoint intent. The TRL compiler also
+refuses data formats other than `text`, and packing. The legacy trainer API
+still provides its separate checkpoint path outside the control plane.
 
 The `native` evaluator, likewise, reads only local plain text and evaluates in
 `fp32`. It refuses slices, a dataset revision or split, and dataset

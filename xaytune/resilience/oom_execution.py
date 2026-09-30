@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from xaytune.checkpoints import (
     CheckpointCompatibilityError,
     CheckpointCorruptionError,
     CheckpointManager,
+    LocalCheckpointStore,
 )
 from xaytune.compilation.attempt_resolution import training_execution_fingerprint
 from xaytune.core.capabilities import CapabilityDocument
@@ -19,7 +21,11 @@ from xaytune.core.domain.recovery import (
 )
 from xaytune.core.domain.recovery_execution import RecoveryExecutionReceipt
 from xaytune.core.domain.run import ExecutionOverride, RunAttempt
-from xaytune.core.execution import ResolvedExecutionPlan, TrainingExecutionSpec
+from xaytune.core.execution import (
+    PythonModuleEntrypoint,
+    ResolvedExecutionPlan,
+    TrainingExecutionSpec,
+)
 from xaytune.core.ids import ActionId, OperationId, RunAttemptId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor
@@ -95,6 +101,28 @@ class OOMRecoveryExecutor:
             raise OOMCheckpointUnavailableError(
                 "runtime has not declared FULL+EXACT checkpoint application"
             )
+        supported_entrypoints = self.capabilities.extensions.get(
+            "checkpoint_restore_entrypoints", ()
+        )
+        if supported_entrypoints and (
+            not isinstance(source_plan.spec.entrypoint, PythonModuleEntrypoint)
+            or source_plan.spec.entrypoint.module not in supported_entrypoints
+        ):
+            raise OOMCheckpointUnavailableError(
+                "runtime has not declared FULL+EXACT restore for this worker"
+            )
+        if supported_entrypoints:
+            store_uri = source_plan.spec.checkpoint.store_uri
+            store = self.checkpoint_manager.store
+            if (
+                source_plan.spec.checkpoint.format != "native-torch/v1"
+                or store_uri is None
+                or not isinstance(store, LocalCheckpointStore)
+                or store.root != Path(store_uri).resolve()
+            ):
+                raise OOMCheckpointUnavailableError(
+                    "managed worker and checkpoint manager do not share the declared store"
+                )
         optimization = source_plan.spec.config.get("optimization")
         workers = source_plan.spec.resources.workers or 1
         if (

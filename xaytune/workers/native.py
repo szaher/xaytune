@@ -21,9 +21,10 @@ checked that the default cannot matter.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from xaytune.config.schema import (
     DataConfig,
@@ -35,7 +36,9 @@ from xaytune.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from xaytune.core.immutable import FrozenDict
+from xaytune.core.execution import ResolvedExecutionPlan, TrainingExecutionSpec
+from xaytune.core.immutable import FrozenDict, thaw
+from xaytune.core.refs import CheckpointRef
 from xaytune.core.telemetry import (
     NumericalInstabilityObserved,
     TrainingCompletedPayload,
@@ -69,7 +72,9 @@ __all__ = [
 ]
 
 
-def train_config_from(config: Mapping[str, Any]) -> TrainConfig:
+def train_config_from(
+    config: Mapping[str, Any], *, managed_checkpoints: bool = False
+) -> TrainConfig:
     """Build the native trainer's configuration from a compiled config.
 
     Validates against :class:`NativeSftConfig` first, so a config from a
@@ -133,7 +138,9 @@ def train_config_from(config: Mapping[str, Any]) -> TrainConfig:
             weight_decay=optimization.weight_decay,
             max_grad_norm=optimization.max_grad_norm,
             seed=realization.seed,
-            checkpoint_every_n_steps=realization.checkpoint_every_optimizer_steps,
+            checkpoint_every_n_steps=(
+                0 if managed_checkpoints else realization.checkpoint_every_optimizer_steps
+            ),
             # The run's output is the model published after training, written
             # deliberately. A raw state_dict checkpoint at the end is a
             # different artifact with different meaning, and it should not
@@ -329,7 +336,26 @@ def main(*_arguments: str) -> int:
     writer.verify()
 
     worker_config = NativeSftConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
-    train_config = train_config_from(worker_config.model_dump(mode="json"))
+    from xaytune.runtimes.worker import WORKER_PLAN_PATH_ENV
+
+    plan_path = os.environ.get(WORKER_PLAN_PATH_ENV)
+    plan = (
+        ResolvedExecutionPlan.model_validate_json(Path(plan_path).read_text(encoding="utf-8"))
+        if plan_path is not None
+        else None
+    )
+    managed = (
+        plan is not None
+        and isinstance(plan.spec, TrainingExecutionSpec)
+        and plan.spec.checkpoint.store_uri is not None
+        and (
+            worker_config.realization.checkpoint_every_optimizer_steps > 0
+            or "checkpoint_restore" in plan.runtime_options
+        )
+    )
+    train_config = train_config_from(
+        worker_config.model_dump(mode="json"), managed_checkpoints=managed
+    )
 
     # Heavy imports here, so the translator above stays importable -- and
     # testable -- without the training stack.
@@ -348,10 +374,47 @@ def main(*_arguments: str) -> int:
         # After the model is placed, because only then is the device known,
         # and before train(), which would otherwise degrade silently.
         require_honourable_precision(components.model, worker_config.optimization.mixed_precision)
+        adapter = None
+        loader = components.train_dataloader
+        restore_training_state = None
+        scheduler_batches_per_epoch = None
+        if managed:
+            from xaytune.workers.native_checkpoint import NativeCheckpointAdapter
+
+            assert plan is not None
+            if components.distributed_ctx.is_distributed:
+                raise ValueError("Native managed restore supports only one worker")
+            adapter = NativeCheckpointAdapter(
+                plan,
+                Path(worker_config.data.path),
+                seed=worker_config.realization.seed,
+                dataset_size=len(cast(Any, loader.dataset)),
+                micro_batch_size=worker_config.optimization.micro_batch_size,
+                gradient_accumulation=worker_config.optimization.gradient_accumulation,
+                writer=writer,
+            )
+            loader = adapter.loader(loader, worker_config.optimization.micro_batch_size)
+            scheduler_batches_per_epoch = (
+                len(cast(Any, loader.dataset)) + worker_config.optimization.micro_batch_size - 1
+            ) // worker_config.optimization.micro_batch_size
+            adapter.register_capture(
+                callbacks,
+                trainer=components.trainer,
+                model=components.model,
+                batch_size=worker_config.optimization.micro_batch_size,
+                every_steps=worker_config.realization.checkpoint_every_optimizer_steps,
+            )
+            restore_payload = plan.runtime_options.get("checkpoint_restore")
+            if restore_payload is not None:
+                restore_training_state = adapter.bind_restore(
+                    CheckpointRef.model_validate(thaw(restore_payload))
+                )
         components.trainer.train(
             model=components.model,
-            train_dataloader=components.train_dataloader,
-            resume_state=components.resume_state,
+            train_dataloader=loader,
+            resume_state=components.resume_state if not managed else None,
+            restore_training_state=restore_training_state,
+            scheduler_batches_per_epoch=scheduler_batches_per_epoch,
         )
     except Exception as exc:
         # The trainer fires no event on an exception, so this boundary is the

@@ -315,9 +315,12 @@ If new accepted incident evidence revises the effective plan before execution,
 an older bound Action is rejected with a SUPERSEDED receipt; the new plan gets
 its own governed Action. Approving the old Action after evidence arrives cannot
 execute the obsolete plan.
-The built-in local subprocess runtime does not claim FULL+EXACT checkpoint
-application, so it cannot consume autonomous OOM recovery; an adapter that does
-claim it must apply the bound checkpoint, not merely accept its reference.
+The built-in local subprocess runtime claims FULL+EXACT application only for
+the managed Native worker entrypoint. The worker verifies and materializes the
+bound bundle through `CheckpointManager`, then applies model, optimizer,
+scheduler, scaler applicability, RNG and the indexed data cursor before
+continuing training. TRL and unsupported Native data layouts fail closed;
+accepting a checkpoint reference alone never establishes a restore.
 
 ## 9. Numerical failure policy
 

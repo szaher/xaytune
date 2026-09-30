@@ -140,9 +140,9 @@ class NativeCompiler:
         model_path = local_path(candidate.model.model.uri)
         assert model_path is not None
 
-        # Always 0 while supports() refuses checkpoint intent; kept in the wire
-        # schema so TASK-029 changes the refusal, not the contract.
-        every_steps = 0
+        every_steps = candidate.training.checkpoint.every_optimizer_steps or 0
+        if every_steps and context.checkpoint_store_uri is None:
+            raise ValueError("managed Native checkpoints require checkpoint_store_uri")
 
         config = NativeSftConfig(
             model=NativeModel(uri=model_path),
@@ -185,12 +185,10 @@ class NativeCompiler:
             resources=ResourceRequirements(workers=1),
             checkpoint=CheckpointExecutionContract(
                 store_uri=context.checkpoint_store_uri,
+                format="native-torch/v1" if every_steps else None,
                 every_optimizer_steps=every_steps or None,
                 boundary="optimizer-step",
-                # The native trainer does not commit checkpoints atomically, so
-                # requiring it would be a claim the worker cannot keep. Atomic
-                # checkpoint commit is TASK-029.
-                require_atomic_commit=False,
+                require_atomic_commit=bool(every_steps),
             ),
             telemetry=TelemetryContract(protocol_version="xaytune.telemetry/v1alpha2"),
         )
@@ -198,7 +196,9 @@ class NativeCompiler:
 
 def _refusals(candidate: CandidateSpec) -> Iterator[str]:
     """Every reason this compiler cannot run *candidate* as declared."""
-    yield from sft_refusals(candidate, trainer="the native trainer")
+    yield from sft_refusals(
+        candidate, trainer="the native trainer", managed_checkpoint_reporting=True
+    )
 
     optimization = candidate.training.optimization
     prefix = "training.optimization"

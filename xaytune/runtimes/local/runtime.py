@@ -40,8 +40,13 @@ from xaytune.core.capabilities import (
 )
 from xaytune.core.clock import utc_now
 from xaytune.core.errors import IncompatiblePluginError
-from xaytune.core.execution import ResolvedExecutionPlan
+from xaytune.core.execution import (
+    PythonModuleEntrypoint,
+    ResolvedExecutionPlan,
+    TrainingExecutionSpec,
+)
 from xaytune.core.ids import OperationId
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import RuntimeRef
 from xaytune.core.telemetry import TELEMETRY_V1ALPHA2, TELEMETRY_V1ALPHA3
 from xaytune.runtimes import (
@@ -79,7 +84,7 @@ possible."""
 
 _ENVELOPE: TypeAdapter[RuntimeEventEnvelope] = TypeAdapter(RuntimeEventEnvelope)
 
-_RUNTIME_OPTIONS = frozenset({"working_directory"})
+_RUNTIME_OPTIONS = frozenset({"working_directory", "checkpoint_restore"})
 """Every runtime option this backend implements.
 
 Checked as a closed set rather than read opportunistically. An unknown
@@ -139,7 +144,12 @@ class LocalRuntime:
         """
         return CapabilityDocument(
             distributed=DistributedCapabilities(strategies=(), min_workers=1, max_workers=1),
-            checkpoint=CheckpointCapabilities(atomic_commit=False, full_exact_restore=False),
+            checkpoint=CheckpointCapabilities(
+                formats=("native-torch/v1",),
+                atomic_commit=False,
+                full_exact_restore=True,
+            ),
+            extensions=FrozenDict({"checkpoint_restore_entrypoints": ("xaytune.workers.native",)}),
             resilience=ResilienceCapabilities(
                 per_step=False,
                 provider="local-subprocess",
@@ -551,6 +561,15 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"They are part of the request, so honouring some and ignoring the "
             f"rest would run something other than what was asked for"
         )
+
+    if "checkpoint_restore" in plan.runtime_options and (
+        not isinstance(plan.spec, TrainingExecutionSpec)
+        or not isinstance(plan.spec.entrypoint, PythonModuleEntrypoint)
+        or plan.spec.entrypoint.module != "xaytune.workers.native"
+        or plan.spec.checkpoint.format != "native-torch/v1"
+        or plan.spec.checkpoint.store_uri is None
+    ):
+        return "local FULL+EXACT restore is supported only by the managed Native worker"
 
     # Whichever plugin produced the spec -- a compiler or an evaluator -- is
     # checked the same way; the runtime does not ask which it was.

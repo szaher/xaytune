@@ -361,7 +361,19 @@ effective batch. The attempt's final checkpoint restore override must match its
 `checkpoint_ref`; the checkpoint is bound into the resolved plan's
 `runtime_options`. Rebuilding from the same durable attempt after restart produces
 the same `request_digest`; a missing or inconsistent override fails closed.
-Runtime checkpoint application belongs to the subsequent PR-020 execution layer.
+For the built-in local runtime, only the managed Native worker currently
+applies FULL+EXACT checkpoint state. It receives the resolved plan, verifies
+the bound bundle with `CheckpointManager`, and restores trainer state before
+iterating the exact remaining indexed sample stream. TRL has no managed restore
+adapter yet; its restore-bound plans are refused. Planning-time eligibility
+and the durable execution receipt do not assert that restore succeeded: the
+worker outcome and continuation telemetry establish that.
+For this local path, the host's `CheckpointManager` must use
+`LocalCheckpointStore(Path(artifact_root) / "checkpoints")`, matching the
+durable compilation context. A first episode still needs an explicit
+`RecoveryRequest` whose `RestoreContext` is derived from the intended Native
+consumer, not copied from a producer manifest. The executor refuses a store
+or format mismatch before recording a successor.
 
 The planner returns either `OOMResizeProposal` containing **one**
 `ResizeMicrobatch` spec with both `micro_batch_size` and

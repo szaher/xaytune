@@ -23,6 +23,7 @@ __all__ = [
     "OBSERVATIONS_PATH_ENV",
     "TOPOLOGY_VARIABLES",
     "WORKER_CONFIG_PATH_ENV",
+    "WORKER_PLAN_PATH_ENV",
     "ObservationWriter",
     "WorkerObservationRecord",
 ]
@@ -36,6 +37,9 @@ A path rather than the config itself, and set by the runtime rather than the
 plan: *which file* is a delivery detail of one backend, while the config's
 contents are the plan, and are already part of its request digest.
 """
+
+WORKER_PLAN_PATH_ENV = "XAYTUNE_WORKER_PLAN_PATH"
+"""Path to the complete resolved plan for workers that implement managed restore."""
 
 OBSERVATIONS_PATH_ENV = "XAYTUNE_OBSERVATIONS_PATH"
 """Where the worker appends what it observes.

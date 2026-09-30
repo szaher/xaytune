@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -65,6 +66,8 @@ class Trainer:
         loss_fn: Any | None = None,
         resume_state: TrainState | None = None,
         resume_checkpoint_dir: str | None = None,
+        restore_training_state: Callable[[Any, Any, Any, Any], TrainState] | None = None,
+        scheduler_batches_per_epoch: int | None = None,
     ) -> TrainState:
         self._is_ds = self._is_deepspeed_engine(model)
 
@@ -130,9 +133,13 @@ class Trainer:
                 num_batches = len(train_dataloader)
             except TypeError:
                 num_batches = self.config.max_steps if self.config.max_steps > 0 else 1000
-            steps_per_epoch = num_batches
+            steps_per_epoch = (
+                scheduler_batches_per_epoch
+                if scheduler_batches_per_epoch is not None
+                else num_batches
+            )
             if self.config.gradient_accumulation > 1:
-                steps_per_epoch = num_batches // self.config.gradient_accumulation
+                steps_per_epoch //= self.config.gradient_accumulation
             total_steps = steps_per_epoch * self.config.num_epochs
             if self.config.max_steps > 0:
                 total_steps = min(total_steps, self.config.max_steps)
@@ -143,6 +150,13 @@ class Trainer:
             )
             scheduler = create_scheduler(optimizer, self.config.scheduler, total_steps, warmup)
         self._scheduler = scheduler
+
+        if restore_training_state is not None:
+            if resume_checkpoint_dir is not None or resume_state is not None or self._is_ds:
+                raise ValueError(
+                    "managed restore cannot be combined with legacy or DeepSpeed resume"
+                )
+            resume_state = restore_training_state(model, optimizer, scheduler, self._scaler)
 
         # Resume optimizer/scaler/scheduler state from checkpoint
         if resume_checkpoint_dir:
@@ -200,6 +214,7 @@ class Trainer:
         resumed_step = resume_state.step if resume_state is not None else -1
 
         self._accum_count = 0
+        self._last_optimizer_step_applied = False
 
         self.callback_manager.fire("train_start", state)
 
@@ -303,17 +318,20 @@ class Trainer:
         self._accum_count += 1
         if self._accum_count % self.config.gradient_accumulation == 0:
             if self._scaler is not None:
+                scale_before = self._scaler.get_scale()
                 if self.config.max_grad_norm > 0:
                     self._scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
                 self._scaler.step(optimizer)
                 self._scaler.update()
+                self._last_optimizer_step_applied = self._scaler.get_scale() >= scale_before
             else:
                 if self.config.max_grad_norm > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
                 optimizer.step()
+                self._last_optimizer_step_applied = True
             optimizer.zero_grad()
-            if self._scheduler is not None:
+            if self._scheduler is not None and self._last_optimizer_step_applied:
                 self._scheduler.step()
                 last_lr = self._scheduler.get_last_lr()
                 if last_lr:

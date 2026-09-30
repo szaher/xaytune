@@ -965,6 +965,7 @@ class EmbeddedControllerHost:
                 run_id=str(run.id),
                 seed=run.seed,
                 output_uri=str(Path(experiment.artifact_root) / str(run.id)),
+                checkpoint_store_uri=str(Path(experiment.artifact_root) / "checkpoints"),
             ),
         )
         return resolve_training_attempt(spec, attempt, experiment.runtime.kind)

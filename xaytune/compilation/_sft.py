@@ -13,7 +13,8 @@ and would be wrong to decide twice:
 - a location that is not an absolute local path, which the worker would
   resolve against whatever it happened to be given;
 - non-zero weight decay, whose parameter policy the candidate cannot express;
-- checkpoint intent, which no worker yet reports (TASK-029).
+- unsupported checkpoint intent; the Native worker reports managed periodic
+  checkpoints, while TRL still has no capture adapter.
 
 Kept here so the two compilers cannot drift on them: a rule one compiler
 enforced and the other forgot would make "supported" mean something different
@@ -59,7 +60,9 @@ def local_path(uri: str) -> str | None:
     return location if os.path.isabs(location) else None
 
 
-def sft_refusals(candidate: CandidateSpec, *, trainer: str) -> Iterator[str]:
+def sft_refusals(
+    candidate: CandidateSpec, *, trainer: str, managed_checkpoint_reporting: bool = False
+) -> Iterator[str]:
     """Every boundary-level reason *candidate* cannot be run as declared.
 
     *trainer* names the implementation in the reasons ("the native trainer"),
@@ -87,7 +90,9 @@ def sft_refusals(candidate: CandidateSpec, *, trainer: str) -> Iterator[str]:
     yield from _model_refusals(candidate)
     yield from _optimization_refusals(candidate, trainer=trainer)
     yield from _precision_refusals(candidate, trainer=trainer)
-    yield from _checkpoint_refusals(candidate, trainer=trainer)
+    yield from _checkpoint_refusals(
+        candidate, trainer=trainer, managed_checkpoint_reporting=managed_checkpoint_reporting
+    )
 
 
 def _data_refusals(candidate: CandidateSpec) -> Iterator[str]:
@@ -208,22 +213,20 @@ def _precision_refusals(candidate: CandidateSpec, *, trainer: str) -> Iterator[s
         yield f"training.precision.params are declared; {trainer} takes none"
 
 
-def _checkpoint_refusals(candidate: CandidateSpec, *, trainer: str) -> Iterator[str]:
-    """No checkpoint intent is supported yet, so declaring one is refused.
+def _checkpoint_refusals(
+    candidate: CandidateSpec, *, trainer: str, managed_checkpoint_reporting: bool
+) -> Iterator[str]:
+    """Require a reporting adapter for periodic checkpoint intent.
 
-    A trainer may be able to write periodic checkpoints, but no worker emits a
-    ``CheckpointCommitted`` for them -- and the controller learns that a
-    resumable position exists only when a checkpoint is reported (ADR-014).
-    A checkpoint written silently is unusable for recovery and would claim a
-    capability this path does not have. Checkpointing with the telemetry that
-    makes it real is TASK-029, which flips this refusal.
+    Native has one for its supported indexed, single-worker path. TRL still
+    cannot claim capture merely because its underlying trainer writes files.
+    Retention remains unsupported for both workers.
     """
     checkpoint = candidate.training.checkpoint
-    if checkpoint.every_optimizer_steps is not None:
+    if checkpoint.every_optimizer_steps is not None and not managed_checkpoint_reporting:
         yield (
             "training.checkpoint.every_optimizer_steps is declared; the worker does "
-            "not yet report checkpoints, so a resume point it wrote could not be "
-            "found (TASK-029)"
+            "not report managed checkpoints, so a resume point it wrote could not be found"
         )
     if checkpoint.keep_last is not None:
         yield (

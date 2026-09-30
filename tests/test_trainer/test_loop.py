@@ -332,6 +332,25 @@ class TestSchedulerIntegration:
         trainer.train(model=model, train_dataloader=dl, scheduler=mock_scheduler)
         assert mock_scheduler.step.call_count == 4
 
+    def test_managed_restore_uses_full_epoch_for_scheduler(self, monkeypatch):
+        from xaytune.trainer import loop
+
+        created = {}
+
+        def record_scheduler(_optimizer, _name, total_steps, _warmup):
+            created["total_steps"] = total_steps
+            return MagicMock()
+
+        monkeypatch.setattr(loop, "create_scheduler", record_scheduler)
+        trainer = Trainer(config=TrainerConfig(num_epochs=2, batch_size=1, gradient_accumulation=2))
+        model, remaining_batches = self._make_model_and_dataloader(2)
+        trainer.train(
+            model=model,
+            train_dataloader=remaining_batches,
+            scheduler_batches_per_epoch=4,
+        )
+        assert created["total_steps"] == 4
+
 
 class TestCustomLossFn:
     def test_custom_loss_fn_overrides_default(self):

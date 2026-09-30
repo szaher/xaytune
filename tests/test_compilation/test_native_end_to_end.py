@@ -27,6 +27,7 @@ runs is worse than none, because it reports the seam as covered.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from pathlib import Path
@@ -44,6 +45,168 @@ from tests.training_fixtures import (
     tiny_model,
 )
 from xaytune.core.execution import TrainingExecutionSpec
+
+
+def test_native_worker_restores_managed_full_exact_checkpoint_after_resize(tmp_path) -> None:
+    """Real LocalRuntime workers resume at the next sample with a smaller microbatch."""
+    from xaytune.checkpoints import CheckpointManager, LocalCheckpointStore, SerializedStateCodec
+    from xaytune.compilation.attempt_resolution import resolve_training_attempt
+    from xaytune.compilation.native import NativeCompiler
+    from xaytune.core.domain.candidate import CheckpointIntent, LRScheduleSpec
+    from xaytune.core.domain.run import ExecutionOverride, RunAttempt
+    from xaytune.core.ids import ActionId, RunAttemptId, RunId
+    from xaytune.core.immutable import FrozenDict
+
+    model_dir = tiny_model(tmp_path / "tiny-model")
+    dataset = tiny_dataset(tmp_path / "data" / "train.jsonl")
+    candidate = sft_candidate(model_dir, dataset)
+    training = candidate.training.model_copy(
+        update={
+            "optimization": candidate.training.optimization.model_copy(
+                update={"lr_schedule": LRScheduleSpec(name="linear")}
+            )
+        }
+    )
+    candidate = candidate.model_copy(
+        update={
+            "training": training.model_copy(
+                update={"checkpoint": CheckpointIntent(every_optimizer_steps=1)}
+            )
+        }
+    )
+    spec = NativeCompiler().compile(candidate, compilation_context(tmp_path))
+    first_id = RunAttemptId.generate()
+    first = offline_plan(spec, str(first_id))
+    status, events = run_to_completion(tmp_path / "runtime", first)
+    assert status.state == "succeeded", status.detail
+    commits = [
+        event.payload.data for event in events if event.payload.data.type == "CheckpointCommitted"
+    ]
+    assert [commit.optimizer_step for commit in commits] == [1, 2]
+    assert commits[0].resume_guarantee.data.value == "exact"
+    assert commits[0].data_cursor.next_sample_offset == 2
+
+    manager = CheckpointManager(
+        SerializedStateCodec(), LocalCheckpointStore(tmp_path / "checkpoints")
+    )
+    reference = commits[0].checkpoint_ref
+    localized = asyncio.run(manager.store.get(reference))
+    assert localized.manifest.optimizer_step == 1
+    action = ActionId.generate()
+    successor = RunAttempt(
+        id=RunAttemptId.generate(),
+        run_id=RunId.generate(),
+        attempt_number=2,
+        checkpoint_ref=reference,
+        execution_overrides=(
+            ExecutionOverride(
+                id="micro-resize",
+                kind="micro_batch_resize",
+                reason="governed OOM resize",
+                values=FrozenDict({"from": 2, "to": 1}),
+                preserves=("effective_batch_size",),
+                action_id=action,
+            ),
+            ExecutionOverride(
+                id="accum-adjust",
+                kind="gradient_accumulation_adjustment",
+                reason="preserve effective batch",
+                values=FrozenDict({"from": 1, "to": 2}),
+                preserves=("effective_batch_size",),
+                action_id=action,
+            ),
+            ExecutionOverride(
+                id="restore",
+                kind="checkpoint_restore",
+                reason="FULL+EXACT restore",
+                values=FrozenDict({"checkpoint_id": str(reference.id)}),
+                action_id=action,
+            ),
+        ),
+    )
+    resolved = resolve_training_attempt(first.spec, successor, "local")
+    from xaytune.runtimes.worker import ObservationWriter
+    from xaytune.trainer.scheduler import create_scheduler
+    from xaytune.workers.native_checkpoint import NativeCheckpointAdapter
+
+    adapter = NativeCheckpointAdapter(
+        resolved,
+        dataset,
+        seed=7,
+        dataset_size=4,
+        micro_batch_size=1,
+        gradient_accumulation=2,
+        writer=ObservationWriter(tmp_path / "unused-observations.jsonl"),
+    )
+    apply = adapter.bind_restore(reference)
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_pretrained(model_dir, local_files_only=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    scheduler = create_scheduler(optimizer, "linear", 2, 0)
+    restored_state = apply(model, optimizer, scheduler, None)
+    assert restored_state.global_step == 1
+    saved_model = torch.load(
+        localized.directory / "model.pt", weights_only=True, map_location="cpu"
+    )
+    assert all(torch.equal(value, saved_model[name]) for name, value in model.state_dict().items())
+    assert {int(state["step"]) for state in optimizer.state_dict()["state"].values()} == {1}
+    import random
+
+    import numpy as np
+
+    state_manifest = localized.manifest.state_manifest
+    assert state_manifest.rng is not None
+    assert json.loads(json.dumps(random.getstate())) == json.loads(
+        (localized.directory / state_manifest.rng.python.uri).read_text()
+    )
+    saved_numpy = json.loads((localized.directory / state_manifest.rng.numpy.uri).read_text())
+    assert np.random.get_state()[1].tolist() == saved_numpy[1]
+    assert torch.equal(
+        torch.get_rng_state(),
+        torch.load(
+            localized.directory / state_manifest.rng.torch_cpu.uri,
+            weights_only=True,
+            map_location="cpu",
+        ),
+    )
+    resumed = resolved.model_copy(
+        update={"spec": resolved.spec.model_copy(update={"environment": first.spec.environment})}
+    )
+    status, events = run_to_completion(tmp_path / "resumed-runtime", resumed)
+    assert status.state == "succeeded", status.detail
+    metrics = [
+        event.payload.data.optimizer_step
+        for event in events
+        if event.payload.data.type == "TrainingMetricObserved"
+    ]
+    assert metrics == [2]
+    assert resumed.spec.config["optimization"]["micro_batch_size"] == 1
+    assert resumed.spec.config["optimization"]["gradient_accumulation"] == 2
+
+
+def test_native_managed_checkpoint_refuses_partial_optimizer_window(tmp_path) -> None:
+    from xaytune.compilation.native import NativeCompiler
+    from xaytune.core.domain.candidate import CheckpointIntent
+    from xaytune.core.ids import RunAttemptId
+
+    candidate = sft_candidate(tiny_model(tmp_path / "model"), tiny_dataset(tmp_path / "data.jsonl"))
+    training = candidate.training.model_copy(
+        update={
+            "optimization": candidate.training.optimization.model_copy(
+                update={"micro_batch_size": 3, "gradient_accumulation": 1}
+            ),
+            "checkpoint": CheckpointIntent(every_optimizer_steps=1),
+        }
+    )
+    candidate = candidate.model_copy(update={"training": training})
+    spec = NativeCompiler().compile(candidate, compilation_context(tmp_path))
+    status, events = run_to_completion(
+        tmp_path / "runtime", offline_plan(spec, str(RunAttemptId.generate()))
+    )
+    assert status.state == "failed"
+    assert "CheckpointCommitted" not in emitted_types(events)
 
 
 def test_an_sft_candidate_compiles_runs_and_reports(tmp_path) -> None:

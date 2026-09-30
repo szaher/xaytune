@@ -299,7 +299,13 @@ _READABLE = {
     },
     PrecisionCapabilities: {"supported"},
     DistributedCapabilities: {"strategies", "min_workers", "max_workers"},
-    CheckpointCapabilities: {"formats", "asynchronous", "reshardable", "atomic_commit"},
+    CheckpointCapabilities: {
+        "formats",
+        "asynchronous",
+        "reshardable",
+        "atomic_commit",
+        "full_exact_restore",
+    },
     ElasticityCapabilities: {"supported", "min_workers", "max_workers", "membership_change"},
     ResilienceCapabilities: {
         "per_step",

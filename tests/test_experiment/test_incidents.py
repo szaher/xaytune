@@ -1,4 +1,4 @@
-"""The controller records diagnoses, without retrying or proposing any response."""
+"""The controller preserves incident evidence and settles unconfigured OOM recovery."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from tests.test_resilience.test_incidents import envelope
 from tests.test_storage.conftest import make_attempt, make_experiment, make_node, make_run
 from xaytune.core.domain.incident import IncidentCategory
 from xaytune.core.domain.operation import RuntimeOperationTarget
-from xaytune.core.refs import RuntimeRef
+from xaytune.core.refs import Actor, RuntimeRef
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
+from xaytune.core.telemetry import IncidentObservedPayload
 from xaytune.experiment import EmbeddedControllerHost
 from xaytune.runtimes import RuntimeEventEnvelope, RuntimeStatus
 from xaytune.storage import write_transaction
@@ -29,6 +30,12 @@ def _seed(host):
         store._insert_node(node)
         store._insert_run(run)
         store._insert_attempt(attempt)
+    run = host.repository.transition_run(
+        run.id,
+        expected_revision=run.revision,
+        new_status=RunStatus.ACTIVE,
+        actor=Actor(type="system", id="test"),
+    )
     target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id))
     return experiment, run, attempt, host.repository.incident_context(target)
 
@@ -45,7 +52,7 @@ class _ReplayRuntime:
         return RuntimeStatus(state="failed", exit_code=1)
 
 
-def test_a_controller_restart_replays_one_incident_and_performs_no_recovery(tmp_path) -> None:
+def test_a_controller_restart_replays_oom_incident_and_fails_unconfigured_run(tmp_path) -> None:
     async def scenario():
         first = EmbeddedControllerHost(tmp_path / "state.db")
         experiment, run, attempt, owner = _seed(first)
@@ -77,6 +84,34 @@ def test_a_controller_restart_replays_one_incident_and_performs_no_recovery(tmp_
             assert sum(e.event_type == "IncidentRecorded" for e in events) == 1
         finally:
             await second.close()
+
+    asyncio.run(scenario())
+
+
+def test_cuda_oom_without_recovery_consumer_settles_the_logical_run(tmp_path) -> None:
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            experiment, run, attempt, owner = _seed(host)
+            event = envelope(owner, IncidentObservedPayload(reason="cuda-oom"))
+            await host._observe(
+                experiment.id,
+                attempt.id,
+                run.id,
+                _ReplayRuntime(event),
+                RuntimeRef(backend="local", external_id="oom-workload"),
+            )
+            assert (
+                host.repository.aggregates.load_attempt(str(attempt.id)).status
+                is RunAttemptStatus.FAILED
+            )
+            assert host.repository.aggregates.load_run(str(run.id)).status is RunStatus.FAILED
+            assert len(host.repository.incidents.for_attempt(owner.target)) == 1
+            assert host.repository.aggregates.attempts_for_run(str(run.id)) == (
+                host.repository.aggregates.load_attempt(str(attempt.id)),
+            )
+        finally:
+            await host.close()
 
     asyncio.run(scenario())
 

@@ -132,6 +132,36 @@ def test_the_local_runtime_is_a_runtime_backend(runtime: LocalRuntime) -> None:
     assert isinstance(runtime, RuntimeBackend)
 
 
+def test_local_full_exact_restore_is_scoped_to_native_worker(runtime: LocalRuntime) -> None:
+    from xaytune.core.execution import CheckpointExecutionContract
+    from xaytune.core.immutable import FrozenDict
+
+    capabilities = runtime.capabilities()
+    assert capabilities.checkpoint is not None
+    assert capabilities.checkpoint.full_exact_restore is True
+    assert capabilities.extensions["checkpoint_restore_entrypoints"] == ("xaytune.workers.native",)
+    spec = TrainingExecutionSpec(
+        compiler=CompilerIdentity(name="fake", version="0.1.0", descriptor=_DESCRIPTOR),
+        candidate_fingerprint="sha256:" + "0" * 64,
+        entrypoint=PythonModuleEntrypoint(module="xaytune.workers.trl", function="main"),
+        checkpoint=CheckpointExecutionContract(
+            store_uri="/tmp/checkpoints", format="native-torch/v1"
+        ),
+    )
+    plan = ResolvedExecutionPlan(
+        spec=spec,
+        runtime="local",
+        target=RuntimeOperationTarget(kind="training-attempt", id="attempt-test"),
+        runtime_options=FrozenDict({"checkpoint_restore": {"id": "test"}}),
+    )
+
+    async def refuse() -> None:
+        with pytest.raises(UnsupportedPlanError, match="managed Native worker"):
+            await runtime.submit_or_get(OperationId.generate(), plan)
+
+    asyncio.run(refuse())
+
+
 def test_the_local_runtime_never_names_a_candidate() -> None:
     """The execute half must not be able to interpret scientific intent.
 

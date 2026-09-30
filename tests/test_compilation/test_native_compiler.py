@@ -294,10 +294,6 @@ def test_an_undeclared_scientific_value_is_refused(field: str, candidate) -> Non
             lambda: _with_optimization(optimizer=OptimizerSpec(name="adamw", weight_decay=0.1)),
         ),
         (
-            "periodic checkpoints it cannot report",
-            lambda: _with_training(checkpoint=CheckpointIntent(every_optimizer_steps=100)),
-        ),
-        (
             "a retention count it cannot enforce",
             lambda: _with_training(checkpoint=CheckpointIntent(keep_last=3)),
         ),
@@ -342,6 +338,20 @@ def test_what_the_native_loop_cannot_honour_is_refused(label: str, candidate) ->
 
     assert not result, f"{label} should be refused"
     assert result.reasons
+
+
+def test_native_periodic_checkpoint_intent_requires_managed_store() -> None:
+    from xaytune.compilation.native import NativeCompiler
+
+    candidate = _with_training(checkpoint=CheckpointIntent(every_optimizer_steps=2))
+    compiler = NativeCompiler()
+    assert compiler.supports(candidate)
+    with pytest.raises(ValueError, match="checkpoint_store_uri"):
+        compiler.compile(candidate, _context(checkpoint_store_uri=None))
+    spec = compiler.compile(candidate, _context())
+    assert spec.checkpoint.every_optimizer_steps == 2
+    assert spec.checkpoint.require_atomic_commit is True
+    assert spec.config["realization"]["checkpoint_every_optimizer_steps"] == 2
 
 
 def test_default_adamw_betas_are_honourable() -> None:

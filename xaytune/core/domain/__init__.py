@@ -91,6 +91,13 @@ from xaytune.core.domain.objective import (
     Objective,
     ObjectiveMetric,
 )
+from xaytune.core.domain.oom_recovery import (
+    OOMEscalation,
+    OOMEscalationCode,
+    OOMRecoveryInputsV1,
+    OOMResizeProposal,
+    PriorOOMResize,
+)
 from xaytune.core.domain.operation import (
     OperationState,
     OperationTargetKind,
@@ -119,6 +126,11 @@ from xaytune.core.domain.recovery import (
     RecoveryRequest,
     RecoveryStrategy,
 )
+from xaytune.core.domain.recovery_action import RecoveryActionBinding
+from xaytune.core.domain.recovery_execution import (
+    RecoveryExecutionOutcome,
+    RecoveryExecutionReceipt,
+)
 from xaytune.core.domain.run import (
     ExecutionOverride,
     ExecutionOverrideKind,
@@ -129,6 +141,14 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "RecoveryActionBinding",
+    "RecoveryExecutionOutcome",
+    "RecoveryExecutionReceipt",
+    "OOMEscalation",
+    "OOMEscalationCode",
+    "OOMRecoveryInputsV1",
+    "OOMResizeProposal",
+    "PriorOOMResize",
     "CheckpointEligibility",
     "Recoverability",
     "RecoveryDecision",

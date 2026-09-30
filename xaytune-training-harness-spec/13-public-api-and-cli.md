@@ -176,6 +176,17 @@ xaytune action approve act_123
 xaytune action reject act_123 --reason "Do not change dataset."
 ```
 
+For the embedded PR-020 CUDA OOM path, the host needs a checkpoint manager and
+an explicit `RecoveryRequest` resolver for the first episode decision. The
+episode stores that request, so later evidence and restart do not need the
+resolver again. A pending `ResizeMicrobatch` approval leaves the logical Run
+ACTIVE and `wait()` returns a quiescent `action-approval` result; approving it
+resumes execution through the bound recovery Action. The effective plan and
+Action never authorize checkpoint use by themselves. The executor revalidates
+the checkpoint, and the runtime must explicitly declare and honor
+`checkpoint.full_exact_restore`. The built-in local runtime does not yet honor
+that binding and therefore does not run autonomous OOM successors.
+
 ### Reproduction
 
 ```bash

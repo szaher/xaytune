@@ -348,7 +348,13 @@ _CAPABILITY_SECTIONS_V1: dict[str, type[Any]] = {
 _CAPABILITY_FIELDS_V1: dict[str, tuple[str, ...]] = {
     "precision": ("supported",),
     "distributed": ("strategies", "min_workers", "max_workers"),
-    "checkpoint": ("formats", "asynchronous", "reshardable", "atomic_commit"),
+    "checkpoint": (
+        "formats",
+        "asynchronous",
+        "reshardable",
+        "atomic_commit",
+        "full_exact_restore",
+    ),
     "elasticity": ("supported", "min_workers", "max_workers", "membership_change"),
     "resilience": (
         "per_step",

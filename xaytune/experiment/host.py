@@ -64,11 +64,19 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
+from xaytune.checkpoints import CheckpointManager
 from xaytune.compilation import (
     CompilationContext,
     TrainerCompiler,
     UnsupportedCandidateError,
 )
+from xaytune.compilation.attempt_resolution import (
+    resolve_training_attempt,
+    training_execution_fingerprint,
+)
+from xaytune.core.domain.action import ActionStatus
 from xaytune.core.domain.actions import ActionSpec
 from xaytune.core.domain.budget import (
     BudgetExhaustedError,
@@ -91,8 +99,16 @@ from xaytune.core.domain.experiment import (
     Experiment,
     ExperimentNode,
 )
+from xaytune.core.domain.incident import Incident, IncidentCategory
+from xaytune.core.domain.oom_recovery import (
+    OOMEscalation,
+    OOMRecoveryInputsV1,
+    OOMResizeProposal,
+    PriorOOMResize,
+)
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
 from xaytune.core.domain.policy import GovernedAction
+from xaytune.core.domain.recovery import RecoveryRequest
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import XaytuneError
@@ -149,12 +165,19 @@ from xaytune.experiment.handle import (
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.resilience import IncidentClassifier
+from xaytune.resilience.oom import OOMRecoveryPlanner
+from xaytune.resilience.oom_execution import (
+    OOMCheckpointUnavailableError,
+    OOMRecoveryExecutor,
+)
+from xaytune.resilience.recovery import RecoveryCoordinator
 from xaytune.runtimes import RuntimeBackend, RuntimeEventEnvelope, RuntimeStatus, StreamCursor
 from xaytune.storage.control_plane import (
     ControlPlaneRepository,
     EvaluationReconciliation,
     ProvenanceError,
     StalePolicyContextError,
+    StaleRecoveryContextError,
 )
 from xaytune.storage.migrations import migrate
 
@@ -315,6 +338,8 @@ class EmbeddedControllerHost:
         evaluators: Mapping[str, Callable[[], Evaluator]] | None = None,
         decision_engine: DecisionEngine | None = None,
         policy: PolicyEngine | None = None,
+        checkpoint_manager: CheckpointManager | None = None,
+        recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -333,6 +358,8 @@ class EmbeddedControllerHost:
             ThresholdDecisionEngine() if decision_engine is None else decision_engine
         )
         self._policy: PolicyEngine = DenyAllPolicy() if policy is None else policy
+        self._checkpoint_manager = checkpoint_manager
+        self._recovery_request_for_incident = recovery_request_for_incident
         self._runtimes: dict[str, RuntimeBackend] = {}
         # One observer per attempt, keyed by experiment then attempt: an
         # experiment can have several live attempts, and each must stay
@@ -379,8 +406,14 @@ class EmbeddedControllerHost:
         node = self._record_node(experiment, spec)
         try:
             run = self._record_run(node, spec.seed)
-            attempt = RunAttempt(id=RunAttemptId.generate(), run_id=run.id, attempt_number=1)
-            plan = self._plan(experiment, run, attempt.id, compiler)
+            attempt_id = RunAttemptId.generate()
+            plan = self._plan(experiment, run, attempt_id, compiler)
+            attempt = RunAttempt(
+                id=attempt_id,
+                run_id=run.id,
+                attempt_number=1,
+                execution_fingerprint=training_execution_fingerprint(plan),
+            )
             attempt, operation = await self._create_attempt(attempt, plan.request_digest("submit"))
         except BudgetExhaustedError as exhausted:
             self.repository.exhaust_budget(experiment.id, reasons=exhausted.reasons, actor=_ACTOR)
@@ -445,6 +478,15 @@ class EmbeddedControllerHost:
         :meth:`~xaytune.storage.ControlPlaneRepository.approve_action` raises.
         """
         self.repository.approve_action(action_id, approver=approver, reason=reason)
+        binding = self.repository.recovery_action_bindings.for_action(str(action_id))
+        if binding is not None:
+            episode = self.repository.recovery_episodes.get(str(binding.episode_id))
+            assert episode is not None
+            await self._drive_oom_recovery(
+                episode.context.experiment_id,
+                RunId(episode.context.run_id),
+                RunAttemptId(episode.context.target.id),
+            )
         return self.repository.governed_action(action_id)
 
     async def reject_action(
@@ -452,6 +494,20 @@ class EmbeddedControllerHost:
     ) -> GovernedAction:
         """A human refuses an action awaiting approval."""
         self.repository.reject_action(action_id, approver=approver, reason=reason)
+        binding = self.repository.recovery_action_bindings.for_action(str(action_id))
+        if binding is not None:
+            try:
+                self.repository.abandon_oom_recovery_action(
+                    ActionId(str(action_id)), actor=approver, reason=reason
+                )
+            except StaleRecoveryContextError:
+                episode = self.repository.recovery_episodes.get(str(binding.episode_id))
+                assert episode is not None
+                await self._drive_oom_recovery(
+                    episode.context.experiment_id,
+                    RunId(episode.context.run_id),
+                    RunAttemptId(episode.context.target.id),
+                )
         return self.repository.governed_action(action_id)
 
     # ---- governed actions -----------------------------------------------
@@ -529,12 +585,29 @@ class EmbeddedControllerHost:
         nodes: list[NodeOutcome] = []
         settled = True
         trained = deciding = evaluating = False
+        awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
+        approval_targets = set()
+        for action in awaiting_approval:
+            binding = self.repository.recovery_action_bindings.for_action(str(action.id))
+            if binding is not None and self.repository.recovery_plans.is_effective_and_fresh(
+                str(binding.plan_id)
+            ):
+                episode = self.repository.recovery_episodes.get(str(binding.episode_id))
+                if episode is not None:
+                    approval_targets.add(episode.context.target.id)
         for node in aggregates.nodes_for_experiment(str(experiment_id)):
             runs: list[RunOutcome] = []
             for run in aggregates.runs_for_node(str(node.id)):
                 attempts = aggregates.attempts_for_run(str(run.id))
                 final = max(attempts, key=lambda a: a.attempt_number) if attempts else None
-                settled = settled and RUN_MACHINE.is_terminal(run.status)
+                settled = settled and (
+                    RUN_MACHINE.is_terminal(run.status)
+                    or (
+                        final is not None
+                        and final.is_terminal
+                        and str(final.id) in approval_targets
+                    )
+                )
                 trained = trained or (
                     run.status is RunStatus.SUCCEEDED and node.status is ExperimentNodeStatus.ACTIVE
                 )
@@ -579,7 +652,6 @@ class EmbeddedControllerHost:
         operations, actions = self.repository.unsettled_work(str(experiment_id))
         settled = settled and not operations and not actions
 
-        awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
         next_stage: NextStage | None
         if experiment.is_terminal:
             next_stage = None
@@ -680,44 +752,223 @@ class EmbeddedControllerHost:
                 f"({status.detail or status.state}); it is left unsettled rather than guessed"
             )
             return
-        self._settle(attempt_id, run_id, *outcome, status=status)
+        run_outcome: RunStatus | None = outcome[1]
+        oom_observed = False
+        if outcome[0] is RunAttemptStatus.FAILED:
+            target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+            oom_observed = any(
+                IncidentCategory.CUDA_OOM
+                in {candidate.category for candidate in observed.candidates}
+                for observed in self.repository.incidents.for_attempt(target)
+            )
+            if oom_observed and self._checkpoint_manager is not None:
+                # Recovery may still create a successor under this logical Run.
+                # The recovery workflow later decides whether to continue or fail it.
+                run_outcome = None
+        self._settle(attempt_id, run_id, outcome[0], run_outcome, status=status)
         self._reconcile_cancellations(experiment_id)
+        if oom_observed and run_outcome is None:
+            await self._drive_oom_recovery(experiment_id, run_id, attempt_id)
         if outcome[1] is RunStatus.SUCCEEDED:
             run = self.repository.aggregates.load_run(str(run_id))
             await self._continue_to_evaluation(experiment_id, run.node_id)
 
     # ---- issuing and reconciling submissions (ADR-013) -----------------------
 
+    async def _drive_oom_recovery(
+        self, experiment_id: ExperimentId, run_id: RunId, attempt_id: RunAttemptId
+    ) -> None:
+        """Repair, govern and consume one CUDA OOM episode, or settle its Run.
+
+        All checkpoint I/O is in the executor outside SQLite. An approval-pending
+        Action deliberately leaves the Run active; a later approval or attach
+        resumes from the stored episode request and Action binding.
+        """
+        target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+        incidents = self.repository.incidents.for_attempt(target)
+        oom = next(
+            (
+                observed
+                for observed in incidents
+                if any(
+                    candidate.category is IncidentCategory.CUDA_OOM
+                    for candidate in observed.candidates
+                )
+            ),
+            None,
+        )
+        if oom is None:
+            return
+        episode = self.repository.recovery_episodes.for_attempt(target)
+        if self._checkpoint_manager is None:
+            if episode is not None:
+                self._escalations[str(experiment_id)] = (
+                    f"CUDA OOM episode {episode.id} needs its checkpoint manager to resume"
+                )
+            else:
+                self._settle(attempt_id, run_id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            return
+        request = None
+        if episode is None and self._recovery_request_for_incident is not None:
+            request = self._recovery_request_for_incident(oom)
+        if episode is None and request is None:
+            self._escalations[str(experiment_id)] = (
+                f"CUDA OOM attempt {attempt_id} needs an explicit RecoveryRequest "
+                "before its first recovery decision"
+            )
+            return
+        coordinator = RecoveryCoordinator(self.repository, self._checkpoint_manager)
+        plan = await coordinator.plan(str(oom.id), request)
+        if not self.repository.recovery_plans.is_effective_and_fresh(str(plan.id)):
+            self._escalations[str(experiment_id)] = (
+                f"CUDA OOM episode {plan.episode_id} has uncovered or changed evidence"
+            )
+            return
+        self.repository.supersede_stale_oom_actions(plan.episode_id, actor=_ACTOR)
+        experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        run = self.repository.aggregates.load_run(str(run_id))
+        source = self.repository.aggregates.load_attempt(str(attempt_id))
+        assert experiment.compiler is not None
+        compiler = self._compiler(experiment.compiler.name)
+        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
+        runtime = self._recorded_runtime(experiment)
+        capabilities = runtime.capabilities()
+
+        def resolver(candidate_attempt: RunAttempt) -> ResolvedExecutionPlan:
+            return self._plan(experiment, run, candidate_attempt, compiler)
+
+        source_plan = resolver(source)
+        optimization = source_plan.spec.config.get("optimization")
+        if not isinstance(optimization, FrozenDict):
+            raise ProvenanceError("compiled OOM source has no optimization configuration")
+        micro = optimization.get("micro_batch_size")
+        accumulation = optimization.get("gradient_accumulation")
+        if type(micro) is not int or type(accumulation) is not int:
+            raise ProvenanceError("compiled OOM source has invalid batch configuration")
+        prior_receipt = self.repository.recovery_execution_receipts.for_successor(str(attempt_id))
+        prior_resize = None
+        if prior_receipt is not None:
+            prior_binding = self.repository.recovery_action_bindings.for_action(
+                str(prior_receipt.action_id)
+            )
+            assert prior_binding is not None
+            assert prior_binding.proposal.action_spec.gradient_accumulation is not None
+            prior_resize = PriorOOMResize(
+                action_id=prior_receipt.action_id,
+                successor_attempt_id=attempt_id,
+                prior_execution_state_fingerprint=prior_binding.source_execution_state_fingerprint,
+                promised_micro_batch_size=prior_binding.proposal.action_spec.micro_batch_size,
+                promised_gradient_accumulation=prior_binding.proposal.action_spec.gradient_accumulation,
+            )
+        try:
+            inputs = OOMRecoveryInputsV1(
+                plan=plan,
+                run_id=run.id,
+                candidate_fingerprint=run.candidate_fingerprint,
+                execution_state_fingerprint=plan.execution_state_fingerprint,
+                current_micro_batch_size=micro,
+                current_gradient_accumulation=accumulation,
+                world_size=source_plan.spec.resources.workers or 1,
+                prior_resize=prior_resize,
+            )
+        except ValidationError:
+            # Another accepted diagnosis blocks this specialised autonomous
+            # path; no generic resize Action may bypass episode arbitration.
+            self._escalations[str(experiment_id)] = (
+                f"CUDA OOM episode {plan.episode_id} requires non-automatic review"
+            )
+            return
+        existing_binding = self.repository.recovery_action_bindings.for_plan(str(plan.id))
+        if existing_binding is None:
+            proposed = OOMRecoveryPlanner().plan(inputs)
+            if isinstance(proposed, OOMEscalation):
+                self._settle(attempt_id, run_id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+                return
+            assert isinstance(proposed, OOMResizeProposal)
+            governed = self.repository.propose_oom_recovery_action(
+                inputs,
+                proposed,
+                proposed_by=_ACTOR,
+                reason="adaptive CUDA OOM recovery preserving effective batch",
+                policy=self._policy,
+                capabilities=capabilities,
+            )
+        else:
+            governed = self.repository.governed_action(existing_binding.action_id)
+        action = governed.action
+        if action.status is ActionStatus.APPROVAL_PENDING:
+            return
+        if action.status is ActionStatus.REJECTED:
+            self.repository.abandon_oom_recovery_action(
+                action.id, actor=_ACTOR, reason="recovery Action was rejected"
+            )
+            return
+        if action.status not in (ActionStatus.VALIDATED, ActionStatus.APPROVED):
+            # EXECUTING means the durable receipt/operation already exists and
+            # submission reconciliation, not proposal, owns the next step.
+            return
+        executor = OOMRecoveryExecutor(
+            self.repository,
+            self._checkpoint_manager,
+            resolver,
+            capabilities=capabilities,
+        )
+        while True:
+            try:
+                successor, operation, _ = await executor.execute(action.id, actor=_ACTOR)
+                break
+            except CapacityUnavailableError:
+                # Another live attempt may release the slot. Re-entering the
+                # executor also revalidates checkpoint bytes and all guards.
+                await asyncio.sleep(_CAPACITY_POLL_SECONDS)
+            except (OOMCheckpointUnavailableError, BudgetExhaustedError) as error:
+                self.repository.abandon_oom_recovery_action(
+                    action.id, actor=_ACTOR, reason=str(error)
+                )
+                return
+            except (StaleRecoveryContextError, StalePolicyContextError) as error:
+                # Another writer changed the decision or its governed context.
+                # No recovery effect was committed; restart/attach can replan.
+                self._escalations[str(experiment_id)] = str(error)
+                return
+        await self._issue(
+            experiment_id, run_id, successor.id, operation, resolver(successor), runtime
+        )
+
     def _plan(
         self,
         experiment: Experiment,
         run: Run,
-        attempt_id: RunAttemptId,
+        attempt: RunAttempt | RunAttemptId,
         compiler: TrainerCompiler,
     ) -> ResolvedExecutionPlan:
         """The attempt's execution plan, built from the durable record alone.
 
         Submission and reconciliation both use this, so a submission re-issued
-        after a restart is the same request by construction: the same
-        candidate snapshot, seed, output location and target, compiled by the
-        same compiler version. Its digest is still checked against the
-        recorded one before anything is issued.
+        after a restart is the same request by construction: the same candidate
+        snapshot, seed, output location and target, compiled by the same compiler
+        version, then resolved through that attempt's durable overrides and
+        checkpoint binding. Its digest is checked before anything is issued.
         """
         node = self.repository.aggregates.load_node(str(run.node_id))
         assert experiment.runtime is not None and experiment.artifact_root is not None
         assert run.seed is not None
-        return ResolvedExecutionPlan(
-            spec=compiler.compile(
-                node.candidate.candidate,
-                CompilationContext(
-                    run_id=str(run.id),
-                    seed=run.seed,
-                    output_uri=str(Path(experiment.artifact_root) / str(run.id)),
-                ),
+        if isinstance(attempt, RunAttemptId):
+            attempt = self.repository.aggregates.get_attempt(str(attempt)) or RunAttempt(
+                id=attempt, run_id=run.id, attempt_number=1
+            )
+        if attempt.run_id != run.id:
+            raise ValueError("attempt belongs to a different logical run")
+        spec = compiler.compile(
+            node.candidate.candidate,
+            CompilationContext(
+                run_id=str(run.id),
+                seed=run.seed,
+                output_uri=str(Path(experiment.artifact_root) / str(run.id)),
+                checkpoint_store_uri=str(Path(experiment.artifact_root) / "checkpoints"),
             ),
-            runtime=experiment.runtime.kind,
-            target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id)),
         )
+        return resolve_training_attempt(spec, attempt, experiment.runtime.kind)
 
     async def _issue(
         self,
@@ -855,11 +1106,19 @@ class EmbeddedControllerHost:
         aggregates = self.repository.aggregates
         for node in aggregates.nodes_for_experiment(str(experiment.id)):
             for run in aggregates.runs_for_node(str(node.id)):
-                for attempt in aggregates.attempts_for_run(str(run.id)):
+                attempts = aggregates.attempts_for_run(str(run.id))
+                for attempt in attempts:
                     if not attempt.is_terminal:
                         await self._reconcile_submission(
                             "training-attempt", experiment, run.id, attempt.id
                         )
+                latest = max(attempts, key=lambda item: item.attempt_number) if attempts else None
+                if (
+                    run.status is RunStatus.ACTIVE
+                    and latest is not None
+                    and latest.status in (RunAttemptStatus.FAILED, RunAttemptStatus.PREEMPTED)
+                ):
+                    await self._drive_oom_recovery(experiment.id, run.id, latest.id)
             await self._reconcile_evaluation(experiment, node.id)
 
         for action in self.repository.actions.for_target("experiment", str(experiment.id)):
@@ -1009,7 +1268,8 @@ class EmbeddedControllerHost:
             compiler = self._compiler(experiment.compiler.name)
             _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
             run = self.repository.aggregates.load_run(str(run_id))
-            return self._plan(experiment, run, RunAttemptId(attempt_id), compiler)
+            attempt = self.repository.aggregates.load_attempt(str(attempt_id))
+            return self._plan(experiment, run, attempt, compiler)
 
         evaluation_run = self.repository.aggregates.load_evaluation_run(str(run_id))
         evaluator = self._recorded_evaluator(evaluation_run.spec)
@@ -1737,16 +1997,19 @@ class EmbeddedControllerHost:
         attempt_id: RunAttemptId,
         run_id: RunId,
         attempt_status: RunAttemptStatus,
-        run_status: RunStatus,
+        run_status: RunStatus | None,
         *,
         status: RuntimeStatus | None = None,
     ) -> None:
-        """Record how an attempt, and so its run, ended.
+        """Settle one attempt; terminalize its logical Run only when resolved.
 
         A successful attempt passes through ``RUNNING`` if telemetry never
         reported the start: it cannot have succeeded without running, and the
         machine requires the state. A failed or cancelled one goes straight to
-        its outcome from wherever it was.
+        its outcome from wherever it was. ``run_status=None`` leaves a failed
+        attempt under an ACTIVE Run while recovery remains unresolved. A later
+        successor attempt can continue that same Run; only a definitive refusal
+        or exhaustion moves it to FAILED.
         """
         attempt = self.repository.aggregates.load_attempt(str(attempt_id))
         if not attempt.is_terminal:
@@ -1760,7 +2023,7 @@ class EmbeddedControllerHost:
                     actor=_ACTOR,
                 )
         run = self.repository.aggregates.load_run(str(run_id))
-        if not RUN_MACHINE.is_terminal(run.status):
+        if run_status is not None and not RUN_MACHINE.is_terminal(run.status):
             self.repository.transition_run(
                 run.id, expected_revision=run.revision, new_status=run_status, actor=_ACTOR
             )

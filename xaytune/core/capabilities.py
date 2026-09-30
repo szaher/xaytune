@@ -61,6 +61,8 @@ class CheckpointCapabilities(FrozenDomainModel):
     asynchronous: bool | None = None
     reshardable: bool | None = None
     atomic_commit: bool | None = None
+    full_exact_restore: bool | None = None
+    """Runtime/worker applies a FULL+EXACT checkpoint to successor training."""
 
 
 class ElasticityCapabilities(FrozenDomainModel):

@@ -200,12 +200,19 @@ only for missing episodes. Never invent RecoveryRequest(). Stop at the first
 unresolved request gap: later reservations/repeats depend on preceding history.
 Reconstruct the request and rerun; no skip mechanism.
 
-Future execution can append RecoveryExecutionReceipt with episode ID, plan ID and
-sequence, EXECUTED/ABANDONED/SUPERSEDED outcome, optional successor target and actor/time.
-This adds a new append-only table without mutating episode or plan and leaves
-successor existence authoritative for closure. PR-019 has no such table/behavior,
-execution overrides, scientific mutations, attempts, Actions, runtime operations,
-submissions or checkpoint state application. Sections below describe later work.
+PR-020 adds an append-only RecoveryExecutionReceipt keyed to the episode, plan ID
+and sequence, governed Action, outcome (EXECUTED/ABANDONED/SUPERSEDED), actor and
+time. EXECUTED links the successor attempt and INTENDED submit operation, and may
+bind a selected checkpoint. It means durable submit intent, not runtime confirmation
+or training success. At most one EXECUTED receipt is allowed per episode. Other
+outcomes have no successor, operation or checkpoint. The receipt store has no
+standalone public execution writer. The OOM executor validates source resolution
+and checkpoint bytes outside the database lock, then records the successor,
+INTENDED submit operation, Action transition and EXECUTED receipt together after
+rechecking governance, decision freshness, limits, checkpoint report identity,
+budget and capacity under the write lock. This does not prove bytes remain valid
+at runtime submission; the worker/runtime must consume the exact bound checkpoint.
+Episode and plan remain immutable; successor existence remains closure authority.
 
 ## 8. CUDA OOM policy
 
@@ -220,12 +227,15 @@ check configured lower bound
   ↓
 calculate smaller micro batch
   ↓
-if preserve_effective_batch:
-    increase grad accumulation
+calculate integral grad accumulation preserving effective batch
+  ↓
+propose one ResizeMicrobatch action carrying both values
   ↓
 check policy + capability + budget
   ↓
-restore latest committed compatible checkpoint
+require declared FULL+EXACT restore capability
+  ↓
+validate newest eligible FULL+EXACT checkpoint bytes
   ↓
 create new RunAttempt
   ↓
@@ -251,6 +261,66 @@ effective_batch = 256
 ```
 
 No new experiment node.
+
+The PR-020 attempt resolver compiles the unchanged candidate first, then applies
+the successor attempt's ordered cumulative operational overrides and checkpoint binding.
+The Native and TRL compilation paths share this resolver. Each resize is a
+micro-batch override followed by its compensating gradient-accumulation override.
+Every `from` value must match the configuration reached so far, and each pair
+must preserve effective batch. The final restore override must identify the
+attempt's recorded checkpoint. Resize and restore overrides carry the governing
+Action ID. Inconsistent lineage fails closed. The
+resolved checkpoint reference is part of the canonical runtime request, so
+rebuilding a submission after restart yields the same request digest.
+
+An attempt's infrastructure failure and the logical Run's outcome are separate
+transitions. A CUDA OOM settles the attempt as FAILED and releases its live-attempt
+capacity while the Run remains ACTIVE for recovery. The existing Run reservation
+continues; a successor under that Run spends no new run unit. Each failed attempt
+still consumes one failure unit. The Run becomes FAILED only after recovery is
+definitively refused, abandoned or exhausted, and SUCCEEDED only after an attempt
+succeeds. Terminal Run states are never reopened. An approval-pending recovery
+leaves the Run ACTIVE and makes `wait()` return an action-approval resting state.
+Restart reconciliation finds ACTIVE Runs whose latest attempt failed, reuses the
+episode's stored request and bound Action, and continues the same workflow.
+If the first RecoveryRequest is unavailable, it leaves that failed attempt and
+ACTIVE Run intact, writes no episode/decision/Action, and escalates. A later
+attach with an explicit resolver can repair the gap.
+
+The first PR-020 layer is the pure versioned `OOMRecoveryInputsV1` →
+`OOMResizeProposal | OOMEscalation` contract. It requires a recorded effective
+specialised CUDA-OOM plan, authoritative attempted configuration, and a promise
+check against any preceding executed adaptive resize. The proposal is bound to
+structured strategy/recoverability/accepted-diagnosis authority, never to the
+human-readable `RecoveryPlan.reason` wording. It is also bound to
+the plan revision and input fingerprint; it grants no execution authority. A
+minimum micro-batch, nonintegral or over-limit accumulation, or an unapplied
+previous resize escalates. Autonomous OOM adjustment never changes effective
+batch. The one governed `ResizeMicrobatch` intent can carry both new knobs;
+the successor attempt later records their separate `ExecutionOverride` lineage.
+
+The governed proposal records an immutable `RecoveryActionBinding` at Action
+creation time. It identifies the exact episode and plan revision, stores the
+full OOM proposal plus its input/proposal/source-execution fingerprints, and is
+committed with the Action, any policy decision, events and outbox. One plan revision
+cannot mint two independently governed resize Actions. A stale or uncovered
+plan cannot mint a new binding; replay of an existing identical proposal returns
+its original Action without consulting current policy. The binding grants no
+execution authority. An `EXECUTED` recovery receipt must reference an Action
+bound to the same episode, plan and revision. The OOM executor rechecks approval,
+resolved source configuration, declared restore capability, checkpoint bytes,
+limits and freshness before creating a successor. A definitive refusal records
+an ABANDONED receipt, rejects an unexecuted Action and fails the unresolved Run.
+If new accepted incident evidence revises the effective plan before execution,
+an older bound Action is rejected with a SUPERSEDED receipt; the new plan gets
+its own governed Action. Approving the old Action after evidence arrives cannot
+execute the obsolete plan.
+The built-in local subprocess runtime claims FULL+EXACT application only for
+the managed Native worker entrypoint. The worker verifies and materializes the
+bound bundle through `CheckpointManager`, then applies model, optimizer,
+scheduler, scaler applicability, RNG and the indexed data cursor before
+continuing training. TRL and unsupported Native data layouts fail closed;
+accepting a checkpoint reference alone never establishes a restore.
 
 ## 9. Numerical failure policy
 

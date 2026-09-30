@@ -241,7 +241,22 @@ store = s3
 async = true
 reshardable = true
 atomic_commit = true
+full_exact_restore = true
 ```
+
+`full_exact_restore` is a separate affirmative runtime/worker claim. Atomic
+checkpoint publication does not prove the worker can apply the captured state.
+Autonomous CUDA OOM recovery requires this claim, a validation-capable codec,
+consumer `RestoreContext`, and a current FULL+EXACT optimizer-boundary report.
+The executor revalidates checkpoint bytes before recording submit intent; the
+runtime/worker must apply the bound checkpoint before training continues. The
+built-in local subprocess runtime declares this capability for the managed
+Native worker entrypoint only. That adapter captures model, optimizer,
+scheduler, scaler applicability, Python/NumPy/Torch RNG and an indexed sample
+cursor at an optimizer boundary. The manager verifies and materializes the
+bundle; the worker applies state before the next training batch. The first
+implementation requires one worker, an indexed local dataset and full
+optimizer windows. TRL does not yet implement managed FULL+EXACT restore.
 
 ## 8. Cross-runtime recovery
 

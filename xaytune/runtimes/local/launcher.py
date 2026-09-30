@@ -56,6 +56,7 @@ from xaytune.runtimes.worker import (
     OBSERVATIONS_PATH_ENV,
     TOPOLOGY_VARIABLES,
     WORKER_CONFIG_PATH_ENV,
+    WORKER_PLAN_PATH_ENV,
     WorkerObservationRecord,
 )
 
@@ -115,6 +116,7 @@ def _environment(plan: ResolvedExecutionPlan, paths: WorkloadPaths) -> dict[str,
     # Set after the plan's own environment, so a plan cannot redirect them:
     # where the config and observations live is this runtime's decision.
     environment[WORKER_CONFIG_PATH_ENV] = str(paths.worker_config)
+    environment[WORKER_PLAN_PATH_ENV] = str(paths.plan)
     environment[OBSERVATIONS_PATH_ENV] = str(paths.observations)
     return environment
 

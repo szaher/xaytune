@@ -35,6 +35,7 @@ The body after the prefix is ULID-shaped: 10 Crockford base32 characters of mill
 | `IncidentId` | `inc_` |
 | `RecoveryPlanId` | `recovery_` |
 | `RecoveryEpisodeId` | `episode_` |
+| `RecoveryExecutionReceiptId` | `recovery_receipt_` |
 | `EvaluationId` | `eval_` |
 | `EvaluationRunId` | `evalrun_` |
 | `EvaluationAttemptId` | `evalattempt_` |
@@ -144,6 +145,11 @@ Lineage has four levels:
 | `RunAttempt` | One infrastructure execution attempt |
 
 An **operational** event — worker restart, preemption, checkpoint restore — creates a new `RunAttempt` under the same `Run`, and never branches the graph.
+When an attempt fails with CUDA OOM, its `Run` can remain `ACTIVE` while recovery
+is pending. The failed attempt releases parallel capacity and consumes a failure
+unit; the Run keeps its existing run reservation for a possible successor.
+Definitive refusal or exhaustion ends the Run as `FAILED`. No terminal Run state
+is reopened.
 
 **Comparability** decides between a node and an intervention:
 
@@ -319,10 +325,78 @@ Unrelated non-reserving revisions elsewhere do not invalidate the typed projecti
 Relevant reservations, evidence, status/identity, successor, attempts, repeat history
 and checkpoint report changes do. Bounded stale retries fail safely.
 
-Future append-only `RecoveryExecutionReceipt` records can reference episode ID,
-plan ID/sequence, outcome (`EXECUTED`, `ABANDONED`, `SUPERSEDED`), optional successor
-and actor/time without mutating these records. PR-019 implements no receipts or
-execution behavior. Controller auto-invocation and H02 remain outside this PR.
+`RecoveryExecutionReceipt` is an append-only PR-020 record of a governed Action's
+resolution against one episode and plan revision. `EXECUTED` requires a successor
+training attempt and INTENDED submit operation; it means durable submit intent,
+not runtime confirmation or training success. `ABANDONED` and `SUPERSEDED` have no
+successor, operation or checkpoint. A single episode may have multiple non-executed
+action receipts but at most one `EXECUTED` receipt. Receipt insertion is deliberately
+transaction-internal: the future executor must commit it together with the
+successor and operation after rechecking episode/plan freshness, Action governance,
+limits and checkpoint validity. Receipt rows never mutate episode or plan history.
+The receipt schema also requires an immutable `RecoveryActionBinding` from its
+Action to that exact episode, plan ID and revision. Same-run/action-type matching
+alone is insufficient to authorize a recovery effect.
+
+## CUDA OOM resize proposal (PR-020)
+
+`OOMRecoveryPlanner.plan(OOMRecoveryInputsV1)` is pure. Its versioned input binds a
+recorded, effective CUDA-OOM `RecoveryPlan` to the failed attempt's actual resolved
+micro-batch, gradient accumulation, world size, candidate and execution identities,
+minimum micro-batch and optional accumulation ceiling. OOM authority comes from
+the structured strategy, recoverability, target and accepted diagnoses;
+`RecoveryPlan.reason` is audit text and is never a protocol key. The caller must
+derive execution values from the attempted execution spec; a future executor must
+recheck that binding under its write lock. A previous executed resize supplies
+the promised successor values and prior execution fingerprint. If the current
+attempt did not reflect that promise, planning escalates instead of repeating it.
+
+Training attempt resolution applies recorded `ExecutionOverride`s after the
+compiler produces a `TrainingExecutionSpec`. Native and TRL use the same resolver.
+Each successor attempt carries the ordered cumulative resize lineage from the
+unchanged candidate: a micro-batch change followed by its compensating gradient
+accumulation change for each OOM recovery. Every `from` value must match the
+configuration reached by preceding overrides, and **each pair** must preserve
+effective batch. The attempt's final checkpoint restore override must match its
+`checkpoint_ref`; the checkpoint is bound into the resolved plan's
+`runtime_options`. Rebuilding from the same durable attempt after restart produces
+the same `request_digest`; a missing or inconsistent override fails closed.
+For the built-in local runtime, only the managed Native worker currently
+applies FULL+EXACT checkpoint state. It receives the resolved plan, verifies
+the bound bundle with `CheckpointManager`, and restores trainer state before
+iterating the exact remaining indexed sample stream. TRL has no managed restore
+adapter yet; its restore-bound plans are refused. Planning-time eligibility
+and the durable execution receipt do not assert that restore succeeded: the
+worker outcome and continuation telemetry establish that.
+For this local path, the host's `CheckpointManager` must use
+`LocalCheckpointStore(Path(artifact_root) / "checkpoints")`, matching the
+durable compilation context. A first episode still needs an explicit
+`RecoveryRequest` whose `RestoreContext` is derived from the intended Native
+consumer, not copied from a producer manifest. The executor refuses a store
+or format mismatch before recording a successor.
+
+The planner returns either `OOMResizeProposal` containing **one**
+`ResizeMicrobatch` spec with both `micro_batch_size` and
+`gradient_accumulation`, or a reason-coded `OOMEscalation`. It halves the current
+micro-batch with a configured floor, then calculates the exact integral
+accumulation needed to preserve `micro_batch × accumulation × world_size`.
+Hitting the floor, requiring fractional/over-limit accumulation, or disabling
+preservation escalates without an autonomous proposal. A proposal includes the
+plan ID/sequence and input fingerprint as freshness bindings. It creates no
+Action, override, successor attempt or runtime operation, and grants no execution
+authority.
+
+`propose_oom_recovery_action(inputs, proposal, ...)` records one
+`RecoveryActionBinding` with the full proposal, proposal/input fingerprints and
+source execution-state fingerprint. The binding commits in the same transaction
+as the Action, its policy decision when applicable, events and outbox. A new
+proposal requires an open episode and an effective, fully covered plan. The
+failed attempt's durable execution identity must also match. Identical replay returns
+the original governed Action without current policy; a changed proposal for the
+same plan is refused. Approval may happen later, but the Action's recovery origin
+is already durable. This is governance provenance, not successor authority:
+the executor must still verify the failed attempt's resolved configuration,
+checkpoint bytes, limits and plan freshness before any successor write.
 
 ## State machines
 

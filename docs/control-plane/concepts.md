@@ -462,9 +462,11 @@ evidence without advancing the attempt revision or setting a second checkpoint
 output list on it. A report alone does not establish byte integrity or resume
 eligibility; a future recovery coordinator must verify it through the manager.
 
-Live trainer capture/application, retention and audited deletion, remote stores,
-recovery plans and automatic resume remain later work. Existing compilers still
-refuse checkpoint intent until their worker adapters implement capture.
+The managed Native worker captures and applies FULL+EXACT optimizer-boundary
+checkpoints for one worker with an indexed local dataset and complete optimizer
+windows. `LocalRuntime` transports the resolved plan without deserializing
+PyTorch state. TRL still refuses checkpoint intent and restore binding.
+Retention, audited deletion and remote stores remain later work.
 
 ## Not yet
 
@@ -473,5 +475,5 @@ implemented**: decisions that compare candidates (promotion, noise-aware
 comparison across replicates), lm-eval generation tasks, reusing earlier
 evaluation results, carrying out a proposed action (other than
 cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
-live checkpoint capture/application and semantic recovery,
+TRL managed checkpoint capture/application,
 planners and branching, daemon hosting, and runtimes other than local.

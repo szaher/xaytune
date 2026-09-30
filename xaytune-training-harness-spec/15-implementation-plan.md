@@ -1063,11 +1063,17 @@ Start local-only.
 
 ### PR-020 — adaptive OOM recovery
 
-Implement execution override:
+Implement in reviewable layers:
 
-- lower microbatch
-- optionally preserve effective batch
-- resume checkpoint
+- pure deterministic OOM planner with a versioned failed-execution input and one
+  `ResizeMicrobatch` action spec carrying both micro-batch and accumulation;
+  autonomous proposals preserve effective batch exactly;
+- append-only `RecoveryExecutionReceipt` linked to episode, decision revision,
+  governed action and successor/operation where executed;
+- governed execution with checkpoint and effective-plan revalidation, then atomic
+  successor attempt/override/runtime-operation intent recording;
+- compilation/runtime resolution of durable successor overrides and injected
+  OOM → resumed continuation validation.
 
 ### PR-021 — numerical recovery
 

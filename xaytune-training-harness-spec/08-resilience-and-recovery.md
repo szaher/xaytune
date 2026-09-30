@@ -206,11 +206,13 @@ time. EXECUTED links the successor attempt and INTENDED submit operation, and ma
 bind a selected checkpoint. It means durable submit intent, not runtime confirmation
 or training success. At most one EXECUTED receipt is allowed per episode. Other
 outcomes have no successor, operation or checkpoint. The receipt store has no
-standalone public execution writer: a future executor must revalidate governance,
-decision freshness, limits and checkpoint before inserting it atomically with the
-successor and operation. Episode and plan remain immutable; successor existence
-remains closure authority. Receipt schema alone does not create Actions, attempts,
-operations, submissions or apply checkpoint state.
+standalone public execution writer. The OOM executor validates source resolution
+and checkpoint bytes outside the database lock, then records the successor,
+INTENDED submit operation, Action transition and EXECUTED receipt together after
+rechecking governance, decision freshness, limits, checkpoint report identity,
+budget and capacity under the write lock. This does not prove bytes remain valid
+at runtime submission; the worker/runtime must consume the exact bound checkpoint.
+Episode and plan remain immutable; successor existence remains closure authority.
 
 ## 8. CUDA OOM policy
 
@@ -231,7 +233,9 @@ propose one ResizeMicrobatch action carrying both values
   ↓
 check policy + capability + budget
   ↓
-restore latest committed compatible checkpoint
+require declared FULL+EXACT restore capability
+  ↓
+validate newest eligible FULL+EXACT checkpoint bytes
   ↓
 create new RunAttempt
   ↓
@@ -264,7 +268,8 @@ The Native and TRL compilation paths share this resolver. Each resize is a
 micro-batch override followed by its compensating gradient-accumulation override.
 Every `from` value must match the configuration reached so far, and each pair
 must preserve effective batch. The final restore override must identify the
-attempt's recorded checkpoint. Inconsistent lineage fails closed. The
+attempt's recorded checkpoint. Resize and restore overrides carry the governing
+Action ID. Inconsistent lineage fails closed. The
 resolved checkpoint reference is part of the canonical runtime request, so
 rebuilding a submission after restart yields the same request digest.
 
@@ -274,8 +279,13 @@ capacity while the Run remains ACTIVE for recovery. The existing Run reservation
 continues; a successor under that Run spends no new run unit. Each failed attempt
 still consumes one failure unit. The Run becomes FAILED only after recovery is
 definitively refused, abandoned or exhausted, and SUCCEEDED only after an attempt
-succeeds. Terminal Run states are never reopened. Until the PR-020 executor is
-wired, this pending recovery state has no automatic successor submission.
+succeeds. Terminal Run states are never reopened. An approval-pending recovery
+leaves the Run ACTIVE and makes `wait()` return an action-approval resting state.
+Restart reconciliation finds ACTIVE Runs whose latest attempt failed, reuses the
+episode's stored request and bound Action, and continues the same workflow.
+If the first RecoveryRequest is unavailable, it leaves that failed attempt and
+ACTIVE Run intact, writes no episode/decision/Action, and escalates. A later
+attach with an explicit resolver can repair the gap.
 
 The first PR-020 layer is the pure versioned `OOMRecoveryInputsV1` →
 `OOMResizeProposal | OOMEscalation` contract. It requires a recorded effective
@@ -297,9 +307,17 @@ cannot mint two independently governed resize Actions. A stale or uncovered
 plan cannot mint a new binding; replay of an existing identical proposal returns
 its original Action without consulting current policy. The binding grants no
 execution authority. An `EXECUTED` recovery receipt must reference an Action
-bound to the same episode, plan and revision; the future executor additionally
-rechecks approval, resolved source configuration, checkpoint bytes, limits and
-freshness before creating a successor.
+bound to the same episode, plan and revision. The OOM executor rechecks approval,
+resolved source configuration, declared restore capability, checkpoint bytes,
+limits and freshness before creating a successor. A definitive refusal records
+an ABANDONED receipt, rejects an unexecuted Action and fails the unresolved Run.
+If new accepted incident evidence revises the effective plan before execution,
+an older bound Action is rejected with a SUPERSEDED receipt; the new plan gets
+its own governed Action. Approving the old Action after evidence arrives cannot
+execute the obsolete plan.
+The built-in local subprocess runtime does not claim FULL+EXACT checkpoint
+application, so it cannot consume autonomous OOM recovery; an adapter that does
+claim it must apply the bound checkpoint, not merely accept its reference.
 
 ## 9. Numerical failure policy
 

@@ -1,4 +1,4 @@
-"""The controller records diagnoses, without retrying or proposing any response."""
+"""The controller preserves incident evidence and settles unconfigured OOM recovery."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class _ReplayRuntime:
         return RuntimeStatus(state="failed", exit_code=1)
 
 
-def test_a_controller_restart_replays_oom_incident_without_premature_run_failure(tmp_path) -> None:
+def test_a_controller_restart_replays_oom_incident_and_fails_unconfigured_run(tmp_path) -> None:
     async def scenario():
         first = EmbeddedControllerHost(tmp_path / "state.db")
         experiment, run, attempt, owner = _seed(first)
@@ -74,7 +74,7 @@ def test_a_controller_restart_replays_oom_incident_without_premature_run_failure
                 second.repository.aggregates.load_attempt(str(attempt.id)).status
                 is RunAttemptStatus.FAILED
             )
-            assert second.repository.aggregates.load_run(str(run.id)).status is RunStatus.ACTIVE
+            assert second.repository.aggregates.load_run(str(run.id)).status is RunStatus.FAILED
             connection = second.repository._connection
             assert connection.execute("SELECT COUNT(*) FROM run_attempts").fetchone()[0] == 1
             assert connection.execute("SELECT COUNT(*) FROM experiment_nodes").fetchone()[0] == 1
@@ -88,7 +88,7 @@ def test_a_controller_restart_replays_oom_incident_without_premature_run_failure
     asyncio.run(scenario())
 
 
-def test_cuda_oom_settles_attempt_but_keeps_logical_run_open(tmp_path) -> None:
+def test_cuda_oom_without_recovery_consumer_settles_the_logical_run(tmp_path) -> None:
     async def scenario():
         host = EmbeddedControllerHost(tmp_path / "state.db")
         try:
@@ -105,7 +105,7 @@ def test_cuda_oom_settles_attempt_but_keeps_logical_run_open(tmp_path) -> None:
                 host.repository.aggregates.load_attempt(str(attempt.id)).status
                 is RunAttemptStatus.FAILED
             )
-            assert host.repository.aggregates.load_run(str(run.id)).status is RunStatus.ACTIVE
+            assert host.repository.aggregates.load_run(str(run.id)).status is RunStatus.FAILED
             assert len(host.repository.incidents.for_attempt(owner.target)) == 1
             assert host.repository.aggregates.attempts_for_run(str(run.id)) == (
                 host.repository.aggregates.load_attempt(str(attempt.id)),

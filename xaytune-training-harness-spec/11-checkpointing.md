@@ -241,7 +241,17 @@ store = s3
 async = true
 reshardable = true
 atomic_commit = true
+full_exact_restore = true
 ```
+
+`full_exact_restore` is a separate affirmative runtime/worker claim. Atomic
+checkpoint publication does not prove the worker can apply the captured state.
+Autonomous CUDA OOM recovery requires this claim, a validation-capable codec,
+consumer `RestoreContext`, and a current FULL+EXACT optimizer-boundary report.
+The executor revalidates checkpoint bytes before recording submit intent; the
+runtime/worker must apply the bound checkpoint before training continues. The
+built-in local subprocess runtime currently declares `full_exact_restore = false`
+and refuses autonomous OOM recovery instead of ignoring the restore binding.
 
 ## 8. Cross-runtime recovery
 

@@ -102,7 +102,11 @@ from xaytune.core.domain.experiment import (
 from xaytune.core.domain.incident import Incident, IncidentCategory
 from xaytune.core.domain.intervention import InterventionDirective, TrainingPosition
 from xaytune.core.domain.intervention_replay import InterventionReplayError
-from xaytune.core.domain.numerical_recovery import NONFINITE_CATEGORIES, NumericalEscalation
+from xaytune.core.domain.numerical_recovery import (
+    NONFINITE_CATEGORIES,
+    NumericalEscalation,
+    UnsupportedNumericalRecoveryError,
+)
 from xaytune.core.domain.oom_recovery import (
     OOMEscalation,
     OOMRecoveryInputsV1,
@@ -115,7 +119,8 @@ from xaytune.core.domain.recovery import RecoveryRequest
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import XaytuneError
-from xaytune.core.execution import ResolvedExecutionPlan
+from xaytune.core.execution import PythonModuleEntrypoint, ResolvedExecutionPlan
+from xaytune.core.execution_controls import MANAGED_NUMERICAL_RECOVERY, TRAINING_INTERVENTIONS
 from xaytune.core.ids import (
     ActionId,
     EvaluationAttemptId,
@@ -410,6 +415,10 @@ class EmbeddedControllerHost:
             if refused:
                 raise UnsupportedBudgetError(refused)
         runtime = self._runtime(spec.runtime)
+        if spec.numerical_recovery is not None:
+            refused = self._numerical_recovery_refusals(spec, compiler, runtime)
+            if refused:
+                raise UnsupportedNumericalRecoveryError(refused)
         evaluation = None if spec.evaluation is None else self._bind_evaluation(spec.evaluation)
 
         experiment = self._record_experiment(spec, compiler, runtime, evaluation)
@@ -431,6 +440,47 @@ class EmbeddedControllerHost:
 
         await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
         return ExperimentHandle(experiment.id, self)
+
+    def _numerical_recovery_refusals(
+        self, spec: ExperimentSpec, compiler: TrainerCompiler, runtime: RuntimeBackend
+    ) -> tuple[str, ...]:
+        """Why numerical recovery cannot be armed for *spec* here, before anything is recorded.
+
+        Arming makes a nonfinite loss fail the attempt, so it is refused unless
+        that failure can actually be recovered: a managed-checkpoint Native
+        plan, a runtime that declares the worker requests for that worker, and a
+        host with a checkpoint manager and an explicit first RecoveryRequest.
+        """
+        reasons: list[str] = []
+        if self._checkpoint_manager is None:
+            reasons.append("the host has no checkpoint manager to validate a restore")
+        if self._recovery_request_for_incident is None:
+            reasons.append("the host has no recovery_request_for_incident for the first decision")
+        if spec.candidate.training.optimization.learning_rate is None:
+            reasons.append("the candidate declares no learning rate to reduce")
+        probe = compiler.compile(
+            spec.candidate,
+            CompilationContext(
+                run_id="numerical-recovery-probe",
+                seed=spec.seed,
+                output_uri=str(Path(spec.artifact_root) / "numerical-recovery-probe"),
+                checkpoint_store_uri=str(Path(spec.artifact_root) / "checkpoints"),
+            ),
+        )
+        entrypoint = probe.entrypoint
+        if probe.checkpoint.format != "native-torch/v1" or not isinstance(
+            entrypoint, PythonModuleEntrypoint
+        ):
+            reasons.append("the compiled plan has no managed Native checkpoints")
+        else:
+            declared = runtime.capabilities().extensions.get("worker_requests", {})
+            supported = set(declared.get(entrypoint.module, ()))
+            if not {MANAGED_NUMERICAL_RECOVERY, TRAINING_INTERVENTIONS} <= supported:
+                reasons.append(
+                    f"the runtime does not declare the numerical-recovery worker requests "
+                    f"for {entrypoint.module}"
+                )
+        return tuple(reasons)
 
     async def attach(self, experiment_id: ExperimentId | str) -> ExperimentHandle:
         """A handle to an experiment already in the record, adopting its work.

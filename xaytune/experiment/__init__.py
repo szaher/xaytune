@@ -17,6 +17,10 @@ from xaytune.core.domain.budget import (
     UnsupportedBudgetError,
 )
 from xaytune.core.domain.evaluation import EvaluationSpec, EvaluatorSpec
+from xaytune.core.domain.numerical_recovery import (
+    NumericalRecoveryPolicyV1,
+    UnsupportedNumericalRecoveryError,
+)
 from xaytune.core.domain.objective import BudgetSpec
 from xaytune.core.domain.policy import GovernedAction, PolicyVerdict
 from xaytune.experiment.handle import (
@@ -56,5 +60,7 @@ __all__ = [
     "RunOutcome",
     "RuntimeSpec",
     "UnknownImplementationError",
+    "NumericalRecoveryPolicyV1",
     "UnsupportedBudgetError",
+    "UnsupportedNumericalRecoveryError",
 ]

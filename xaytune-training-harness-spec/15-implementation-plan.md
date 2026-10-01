@@ -1081,6 +1081,20 @@ Recovery that changes LR to stabilise a continuing run records a `TrainingInterv
 on that run through the Action path (ADR-011). It does not create a new node. Forking
 is for alternatives you want to compare.
 
+Implement in reviewable layers:
+
+- pre-executor foundation: immutable `TrainingIntervention` / `InterventionApplication`
+  with typed triggers, explicit replay policy and `LearningRateMutation`; append-only
+  persistence (migration 014); the `RunRealization` projection with history and
+  artifact-lineage fingerprints; a pure `NumericalRecoveryPlanner` driven by an
+  explicit `NumericalRecoveryPolicyV1`; a separate numerical Action binding; and
+  governed `ChangeLearningRate` proposals through the existing policy path;
+- execution, after its own architecture review, using the checkpoint-backed
+  successor model pinned in 08 §9a (no live-worker mutation in v1): validated
+  FULL+EXACT checkpoint → atomic successor creation → restore and apply the
+  intervention → confirmed `InterventionApplication` → Action `SUCCEEDED`, under
+  ADR-013 intent-first rules. The successor closes the numerical episode.
+
 Phase exit:
 
 - injected OOM recovers automatically

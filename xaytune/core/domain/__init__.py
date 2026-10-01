@@ -85,6 +85,30 @@ from xaytune.core.domain.incident import (
     IncidentCategory,
     incident_observation_identity_v1,
 )
+from xaytune.core.domain.intervention import (
+    IncidentTrigger,
+    InterventionApplication,
+    InterventionOrigin,
+    InterventionReplayPolicy,
+    LearningRateMutation,
+    ManualTrigger,
+    MetricTrigger,
+    OptimizerStepTrigger,
+    PolicyTrigger,
+    StepTrigger,
+    TokenCountTrigger,
+    TrainingIntervention,
+    TrainingPosition,
+    TriggerEvaluation,
+)
+from xaytune.core.domain.numerical_recovery import (
+    NumericalEscalation,
+    NumericalEscalationCode,
+    NumericalLRProposal,
+    NumericalRecoveryActionBinding,
+    NumericalRecoveryInputsV1,
+    NumericalRecoveryPolicyV1,
+)
 from xaytune.core.domain.objective import (
     BudgetSpec,
     MetricConstraint,
@@ -113,6 +137,7 @@ from xaytune.core.domain.policy import (
     PolicyProposer,
     PolicyVerdict,
 )
+from xaytune.core.domain.realization import RunRealization
 from xaytune.core.domain.recovery import (
     CheckpointEligibility,
     Recoverability,
@@ -141,6 +166,27 @@ from xaytune.core.domain.run import (
 )
 
 __all__ = [
+    "IncidentTrigger",
+    "InterventionApplication",
+    "InterventionOrigin",
+    "InterventionReplayPolicy",
+    "LearningRateMutation",
+    "ManualTrigger",
+    "MetricTrigger",
+    "NumericalEscalation",
+    "NumericalEscalationCode",
+    "NumericalLRProposal",
+    "NumericalRecoveryActionBinding",
+    "NumericalRecoveryInputsV1",
+    "NumericalRecoveryPolicyV1",
+    "OptimizerStepTrigger",
+    "PolicyTrigger",
+    "RunRealization",
+    "StepTrigger",
+    "TokenCountTrigger",
+    "TrainingIntervention",
+    "TrainingPosition",
+    "TriggerEvaluation",
     "RecoveryActionBinding",
     "RecoveryExecutionOutcome",
     "RecoveryExecutionReceipt",

@@ -76,7 +76,9 @@ class RecoveryEpisodeStore:
                 "ON p.episode_id = e.id WHERE e.experiment_id = ? AND e.id != ? "
                 "AND (p.strategy IN ('RETRY', 'RESUME') OR EXISTS ("
                 "SELECT 1 FROM recovery_execution_receipts receipt "
-                "WHERE receipt.episode_id = e.id AND receipt.outcome = 'EXECUTED'))",
+                "WHERE receipt.episode_id = e.id AND receipt.outcome = 'EXECUTED') "
+                "OR EXISTS (SELECT 1 FROM numerical_recovery_executions numerical "
+                "WHERE numerical.episode_id = e.id AND numerical.outcome = 'EXECUTED'))",
                 (experiment_id, episode_id),
             ).fetchone()[0]
         )

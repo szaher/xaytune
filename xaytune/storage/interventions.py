@@ -204,6 +204,16 @@ class InterventionDirectiveStore:
         ).fetchall()
         return tuple(InterventionDirective.model_validate_json(row["payload_json"]) for row in rows)
 
+    def unconfirmed_for_attempt(self, attempt_id: str) -> tuple[InterventionDirective, ...]:
+        """The attempt's directives no worker-confirmed application answers yet."""
+        rows = self._connection.execute(
+            "SELECT d.payload_json FROM intervention_directives d WHERE d.attempt_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM intervention_applications a "
+            "WHERE a.id = d.application_id) ORDER BY d.ordinal",
+            (attempt_id,),
+        ).fetchall()
+        return tuple(InterventionDirective.model_validate_json(row["payload_json"]) for row in rows)
+
     def _insert(self, directive: InterventionDirective, *, run_id: str) -> None:
         _require_transaction(self._connection, "intervention directives")
         self._connection.execute(

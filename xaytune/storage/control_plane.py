@@ -788,7 +788,18 @@ class ControlPlaneRepository:
         event_type: str | None = None,
         destinations: tuple[str, ...] = (),
     ) -> Run:
-        """Move a run to *new_status*, with its event, atomically."""
+        """Move a run to *new_status*, with its event, atomically.
+
+        Raises:
+            ProvenanceError: *new_status* is ``SUCCEEDED`` while the Run's final
+                attempt carries an intervention directive no worker confirmed.
+                Migration 015 enforces the same rule inside the write.
+        """
+        if new_status is RunStatus.SUCCEEDED and self.unconfirmed_final_directives(str(run_id)):
+            raise ProvenanceError(
+                f"Run {run_id} cannot succeed: its final attempt did not confirm every "
+                f"intervention it was directed to apply"
+            )
         return self._transition(
             "Run",
             str(run_id),
@@ -800,6 +811,14 @@ class ControlPlaneRepository:
             event_type,
             destinations,
         )
+
+    def unconfirmed_final_directives(self, run_id: str) -> tuple[InterventionDirective, ...]:
+        """Directives of the Run's final attempt that no confirmed application answers."""
+        attempts = self.aggregates.attempts_for_run(run_id)
+        if not attempts:
+            return ()
+        final = max(attempts, key=lambda attempt: attempt.attempt_number)
+        return self.intervention_directives.unconfirmed_for_attempt(str(final.id))
 
     def transition_attempt(
         self,
@@ -2909,13 +2928,13 @@ class ControlPlaneRepository:
         actor: Actor,
         trigger_evaluation: TriggerEvaluation | None = None,
         destinations: tuple[str, ...] = (),
+        telemetry_position: tuple[int, int] | None = None,
     ) -> InterventionApplication:
         """Append one confirmed effect of an intervention, ordered by its event sequence.
 
         Only confirmation that the mutation actually took effect may call
         this: approval, an intervention row, or an intended runtime request is
-        not an application. Nothing in this release calls it; the executor
-        that confirms effects is the next review gate.
+        not an application.
 
         Provenance is derived, never trusted. ``previous_value`` is the base
         learning rate on *attempt_id*'s retained trajectory immediately before
@@ -2924,6 +2943,11 @@ class ControlPlaneRepository:
         checkpoint (``None`` for a fresh start), which must be a recorded
         checkpoint of the same run. An identical replay of *application_id*
         returns the original with its original sequence.
+
+        *telemetry_position* is the ``(generation, sequence)`` of the
+        ``InterventionApplied`` event that confirmed the effect. The attempt's
+        cursor advances to it in the same commit -- on an identical replay too,
+        so a confirmation recorded before a crash is not redelivered forever.
 
         Raises:
             ProvenanceError: If the attempt, values or ancestry disagree with
@@ -2952,6 +2976,8 @@ class ControlPlaneRepository:
                     raise IdempotencyConflictError(
                         str(application_id), ("intervention_application",), kind="application"
                     )
+                if telemetry_position is not None:
+                    self.aggregates._advance_telemetry(str(attempt.id), telemetry_position)
                 return existing
             if applied_value != intervention.mutation.learning_rate:
                 raise ProvenanceError("the applied value is not the intervention's decided value")
@@ -3012,6 +3038,8 @@ class ControlPlaneRepository:
                 self._settle_numerical_action_on_effect(
                     intervention, directive, actor, destinations
                 )
+            if telemetry_position is not None:
+                self.aggregates._advance_telemetry(str(attempt.id), telemetry_position)
             return application
 
     # ---- PR-021 executor: successor directives and numerical execution ----------------------

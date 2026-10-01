@@ -412,17 +412,30 @@ Each directive pins the expected previous base rate. The worker replaces the bas
 that the schedule scales, keeping the schedule's position, refuses any mismatch before
 a step runs, and reports `InterventionApplied`. The controller records the
 `InterventionApplication` only from that report, and only for a directive the attempt
-carried. The first confirmed application completes the Action (`SUCCEEDED/APPLIED`). A
-failed submission, or a successor that ends without confirming it, fails the Action,
-while the intervention remains as the immutable decision. A re-application creates a
-new application, never a new Action or intervention. The OOM successor path computes
-the same re-applications.
+carried. The application and the attempt's telemetry cursor commit together, and an
+identical redelivered report still advances the cursor. The first confirmed
+application completes the Action (`SUCCEEDED/APPLIED`). A failed submission, or a
+successor that ends without confirming it, fails the Action, while the intervention
+remains as the immutable decision. A re-application creates a new application, never a
+new Action or intervention. The OOM successor path computes the same re-applications.
+
+A Run succeeds only on a trajectory the control plane can vouch for. If its final
+attempt exits cleanly with any directive unconfirmed, the attempt is `SUCCEEDED`
+(the process outcome is true), the Run is `FAILED`, and nothing is evaluated. The
+repository and the database both refuse `Run → SUCCEEDED` in that state.
+
+An executed numerical recovery is one unit of `max_recoveries_per_experiment`, like
+an executed OOM recovery or a generic RETRY/RESUME. The count is by episode, never by
+receipt.
 
 Every FULL+EXACT capture records the exact `applied_intervention_application_ids` it
 embodies: those inherited from the restored manifest plus those applied in the
-attempt. Lineage that is unknown (a checkpoint that does not say) or ambiguous (one
-naming an application the run never recorded) fails closed: no successor is
-recorded.
+attempt. Lineage that is unknown (a checkpoint that does not say) or ambiguous fails
+closed: no successor is recorded. Ambiguous means the checkpoint names an application
+the run never recorded, or names applications that do not compose, in event order,
+into a trajectory from the declared rate. Each application's previous value must be
+the rate the one before it left, its applied value must be its intervention's, and
+there is at most one application per intervention.
 
 In-place mutation of a running attempt would need several episodes per attempt, an
 episode generation identity, application-based closure, and changes to repeat

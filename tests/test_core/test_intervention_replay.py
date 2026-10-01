@@ -170,3 +170,35 @@ def test_reapplication_order_follows_first_effect_not_recorded_order():
     result = plan([early, late], [a_early, a_late], ())
     assert [d.intervention_id for d in result.directives] == [late.id, early.id]
     assert [d.expected_previous_value for d in result.directives] == [2e-4, 5e-5]
+
+
+def test_known_applications_that_do_not_compose_fail_closed():
+    """A checkpoint naming only A2 claims a rate A2 could never have started from."""
+    first, second = decided(1e-4), decided(5e-5)
+    a1 = applied(first, 10, 2e-4)
+    a2 = applied(second, 20, 1e-4)
+    with pytest.raises(InterventionReplayError, match="do not compose"):
+        plan([first, second], [a1, a2], (str(a2.id),))
+
+
+def test_a_reapplication_from_the_declared_rate_composes():
+    """Historical A1, rollback before it, re-application A2: a checkpoint of A2 is valid."""
+    first = decided(1e-4)
+    a1 = applied(first, 10, 2e-4)
+    a2 = applied(first, 20, 2e-4)
+    result = plan([first], [a1, a2], (str(a2.id),))
+    assert result.directives == () and result.restored_learning_rate == 1e-4
+
+
+def test_an_embodied_application_must_carry_its_interventions_value():
+    first = decided(1e-4)
+    forged = applied(first, 10, 2e-4).model_copy(update={"applied_value": 3e-4})
+    with pytest.raises(InterventionReplayError, match="do not compose"):
+        plan([first], [forged], (str(forged.id),))
+
+
+def test_two_embodied_applications_of_one_intervention_fail_closed():
+    first = decided(1e-4)
+    a1, a2 = applied(first, 10, 2e-4), applied(first, 20, 1e-4)
+    with pytest.raises(InterventionReplayError, match="do not compose"):
+        plan([first], [a1, a2], (str(a1.id), str(a2.id)))

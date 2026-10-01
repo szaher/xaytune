@@ -204,3 +204,19 @@ WHEN (
     AND json_extract(NEW.payload_json, '$.applied_value') = d.applied_value
 )
 BEGIN SELECT RAISE(ABORT, 'application does not match its directive'); END;
+
+-- A Run succeeds only on a trajectory the control plane can vouch for: every
+-- directive its final attempt carried was applied and confirmed by the worker.
+-- A successor that exits cleanly without confirming one followed an unknown
+-- learning-rate trajectory, so its Run cannot become a scientific result.
+CREATE TRIGGER run_success_requires_confirmed_directives
+BEFORE UPDATE OF status ON runs
+WHEN NEW.status = 'succeeded' AND OLD.status != 'succeeded' AND EXISTS (
+  SELECT 1 FROM intervention_directives d
+  WHERE d.attempt_id = (
+      SELECT a.id FROM run_attempts a WHERE a.run_id = NEW.id
+      ORDER BY a.attempt_number DESC LIMIT 1
+    )
+    AND NOT EXISTS (SELECT 1 FROM intervention_applications ia WHERE ia.id = d.application_id)
+)
+BEGIN SELECT RAISE(ABORT, 'run cannot succeed with unconfirmed intervention directives'); END;

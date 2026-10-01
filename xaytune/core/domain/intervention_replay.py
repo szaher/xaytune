@@ -15,8 +15,11 @@ then the new intervention, if any       -> its first application
 ```
 
 Unknown or ambiguous lineage fails closed: a checkpoint that does not say which
-applications it embodies, or names one this run never recorded, cannot
-establish what the restored trajectory already contains.
+applications it embodies, names one this run never recorded, or names
+applications that do not compose, in event order, into a trajectory from the
+declared learning rate (each one's previous value is the rate the one before
+left, at most one per intervention), cannot establish what the restored
+trajectory already contains.
 """
 
 from __future__ import annotations
@@ -131,12 +134,25 @@ def plan_intervention_directives(
         (application for application in applications if str(application.id) in embodied),
         key=lambda application: application.event_sequence,
     )
-    current = retained[-1].applied_value if retained else declared_learning_rate
+    decisions = {intervention.id: intervention for intervention in interventions}
+    current = declared_learning_rate
+    surviving: set[InterventionId] = set()
+    for application in retained:
+        if (
+            application.intervention_id in surviving
+            or application.previous_value != current
+            or application.applied_value
+            != decisions[application.intervention_id].mutation.learning_rate
+        ):
+            raise InterventionReplayError(
+                "the restore checkpoint's applications do not compose into a trajectory "
+                "from the declared learning rate"
+            )
+        surviving.add(application.intervention_id)
+        current = application.applied_value
     restored_rate = current
-    surviving = {application.intervention_id for application in retained}
 
     planned: list[PlannedDirective] = []
-    decisions = {intervention.id: intervention for intervention in interventions}
     for intervention_id in sorted(first_effect, key=first_effect.__getitem__):
         if intervention_id in surviving:
             continue

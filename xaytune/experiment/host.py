@@ -799,7 +799,7 @@ class EmbeddedControllerHost:
             elif isinstance(observation, ArtifactProducedPayload):
                 self._record_artifact(attempt_id, observation.artifact_ref, position)
             elif isinstance(observation, InterventionAppliedPayload):
-                self._record_intervention_applied(experiment_id, attempt_id, observation)
+                self._record_intervention_applied(experiment_id, attempt_id, observation, position)
             elif isinstance(observation, CheckpointCommittedPayload):
                 self.repository.record_checkpoint(
                     attempt_id,
@@ -841,6 +841,21 @@ class EmbeddedControllerHost:
             return
         run_outcome: RunStatus | None = outcome[1]
         oom_observed = numerical_observed = False
+        if run_outcome is RunStatus.SUCCEEDED and (
+            unconfirmed := self.repository.intervention_directives.unconfirmed_for_attempt(
+                str(attempt_id)
+            )
+        ):
+            # The process exited cleanly, but the control plane cannot vouch
+            # for the trajectory it trained: a directed intervention was never
+            # confirmed. The attempt's mechanical outcome stays truthful; the
+            # Run fails and nothing is evaluated.
+            run_outcome = RunStatus.FAILED
+            self._escalations[str(experiment_id)] = (
+                f"attempt {attempt_id} succeeded without confirming intervention "
+                f"application(s) {', '.join(str(d.application_id) for d in unconfirmed)}; "
+                f"its Run failed rather than accept an unknown trajectory"
+            )
         if outcome[0] is RunAttemptStatus.FAILED:
             target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
             oom_observed = any(
@@ -866,7 +881,7 @@ class EmbeddedControllerHost:
             await self._drive_oom_recovery(experiment_id, run_id, attempt_id)
         elif numerical_observed and run_outcome is None:
             await self._drive_numerical_recovery(experiment_id, run_id, attempt_id)
-        if outcome[1] is RunStatus.SUCCEEDED:
+        if run_outcome is RunStatus.SUCCEEDED:
             run = self.repository.aggregates.load_run(str(run_id))
             await self._continue_to_evaluation(experiment_id, run.node_id)
 
@@ -899,8 +914,13 @@ class EmbeddedControllerHost:
         experiment_id: ExperimentId,
         attempt_id: RunAttemptId,
         observation: InterventionAppliedPayload,
+        position: tuple[int, int],
     ) -> None:
-        """Record a worker-confirmed effect, and only for a directive this attempt carried."""
+        """Record a worker-confirmed effect, and only for a directive this attempt carried.
+
+        The application and the telemetry cursor commit together: a crash
+        either loses both, and the event is redelivered, or keeps both.
+        """
         directive = self.repository.intervention_directives.get(observation.application_id)
         if (
             directive is None
@@ -921,6 +941,7 @@ class EmbeddedControllerHost:
                 observed_previous_value=observation.previous_value,
                 applied_value=observation.applied_value,
                 actor=_ACTOR,
+                telemetry_position=position,
             )
         except (ProvenanceError, IdempotencyConflictError) as error:
             self._escalations[str(experiment_id)] = str(error)

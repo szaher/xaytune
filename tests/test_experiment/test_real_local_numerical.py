@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 import torch
 
 from tests.test_experiment.test_host_behaviour import _spec
@@ -32,10 +33,11 @@ from xaytune.core.ids import OperationId
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
 from xaytune.core.telemetry import (
     CheckpointCommittedPayload,
+    InterventionAppliedPayload,
     NumericalInstabilityObserved,
     TrainingFailedPayload,
 )
-from xaytune.experiment import EmbeddedControllerHost
+from xaytune.experiment import EmbeddedControllerHost, ReconciliationEscalatedError
 from xaytune.policy import RulePolicyEngine
 from xaytune.runtimes import RuntimeEventEnvelope, TrainingEventPayload
 from xaytune.runtimes.local import LocalRuntime
@@ -413,3 +415,94 @@ def _check_no_reapply(repository, run, attempts) -> None:
     realization = repository.get_run_realization(run.id)
     assert realization.trajectory is not None
     assert realization.trajectory.application_ids[0] == a1.id
+
+
+class _NaNThenLoseConfirmation(_InjectOneNaN):
+    """As _InjectOneNaN, then drop every InterventionApplied the successor reports.
+
+    The worker really restores and applies the directive and exits cleanly; the
+    control plane simply never receives the confirmation.
+    """
+
+    async def watch(self, reference, cursor=None):
+        async for event in super().watch(reference, cursor):
+            if not isinstance(event.payload.data, InterventionAppliedPayload):
+                yield event
+
+
+def test_a_successor_that_never_confirms_its_intervention_fails_its_run(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        spec = _spec(
+            tmp_path,
+            budget=BudgetSpec(max_runs=1, max_parallel_runs=1, max_failures=2),
+            numerical_recovery=HALVE,
+        )
+        optimization = spec.candidate.training.optimization.model_copy(
+            update={"micro_batch_size": 2, "gradient_accumulation": 1}
+        )
+        training = spec.candidate.training.model_copy(
+            update={
+                "optimization": optimization,
+                "checkpoint": CheckpointIntent(every_optimizer_steps=1),
+            }
+        )
+        spec = spec.model_copy(
+            update={"candidate": spec.candidate.model_copy(update={"training": training})}
+        )
+        manager = CheckpointManager(
+            SerializedStateCodec(), LocalCheckpointStore(tmp_path / "artifacts" / "checkpoints")
+        )
+        runtime = _NaNThenLoseConfirmation(LocalRuntime(tmp_path / "runtime"))
+
+        def request_for_incident(incident) -> RecoveryRequest:
+            experiment = host.repository.aggregates.load_experiment(
+                str(incident.context.experiment_id)
+            )
+            run = host.repository.aggregates.load_run(incident.context.run_id)
+            attempt = host.repository.aggregates.load_attempt(incident.context.target.id)
+            source_plan = host._plan(experiment, run, attempt, NativeCompiler())
+            assert run.seed is not None
+            return RecoveryRequest(
+                restore_context=native_restore_context(
+                    source_plan, Path(source_plan.spec.config["data"]["path"]), seed=run.seed
+                )
+            )
+
+        host = EmbeddedControllerHost(
+            tmp_path / "state.db",
+            runtimes={"local": lambda _config: runtime},
+            policy=RulePolicyEngine(default=PolicyVerdict.ALLOW),
+            checkpoint_manager=manager,
+            recovery_request_for_incident=request_for_incident,
+        )
+        evaluations: list[object] = []
+
+        async def no_evaluation(*args, **kwargs):
+            evaluations.append(args)
+
+        host._continue_to_evaluation = no_evaluation  # type: ignore[method-assign]
+        try:
+            handle = await host.submit(spec)
+            with pytest.raises(ReconciliationEscalatedError, match="without confirming"):
+                await asyncio.wait_for(handle.wait(), timeout=90)
+            repository = host.repository
+            (node,) = repository.aggregates.nodes_for_experiment(str(handle.experiment_id))
+            (run,) = repository.aggregates.runs_for_node(str(node.id))
+            first, second = repository.aggregates.attempts_for_run(str(run.id))
+            assert (first.status, second.status) == (
+                RunAttemptStatus.FAILED,
+                RunAttemptStatus.SUCCEEDED,
+            ), "the process outcome stays truthful"
+            assert run.status is RunStatus.FAILED
+            (intervention,) = repository.training_interventions.for_run(str(run.id))
+            assert repository.actions.get(str(intervention.action_id)).status is (
+                ActionStatus.FAILED
+            )
+            assert repository.intervention_applications.for_run(str(run.id)) == ()
+            assert len(repository.intervention_directives.for_attempt(str(second.id))) == 1
+            assert evaluations == [], "an unconfirmed trajectory is never evaluated"
+            assert repository.aggregates.evaluation_runs_for_node(str(node.id)) == ()
+        finally:
+            await host.close()
+
+    asyncio.run(scenario())

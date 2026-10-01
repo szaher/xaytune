@@ -469,8 +469,11 @@ new application rather than deleting one. Its provenance is derived rather than
 supplied. `previous_value` is the base rate on the applying attempt's retained
 trajectory just before the application, and the effect confirmation's observed
 value must equal it. `checkpoint_ancestor` is that attempt's own restore
-checkpoint, and the database refuses any other. Nothing records an application
-yet: that belongs to the executor, which is the next review gate.
+checkpoint, and the database refuses any other. An intervention bound to a
+numerical recovery decision may be applied only on its episode's checkpoint-backed
+successor (attempt N+1): not on the source attempt, not on a fresh restart, and not
+on a later attempt. Other interventions keep the generic rules. Nothing records an
+application yet: that belongs to the executor, which is the next review gate.
 
 `repository.get_run_realization(run_id)` projects a `RunRealization`, which is
 never stored. `rebuild_run_realization(run, repository.events_for_run(run_id), ...)`

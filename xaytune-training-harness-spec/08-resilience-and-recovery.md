@@ -368,6 +368,14 @@ Consequences, all of which keep PR-019/020 semantics unchanged:
   the base rate on the applying attempt's retained trajectory immediately before the
   application, and `checkpoint_ancestor` is that attempt's own restore checkpoint.
   The database ties the ancestor to the attempt's `checkpoint_ref`.
+- An intervention bound to a numerical recovery decision is applied **only** on its
+  episode's successor: same Run, attempt number N+1, never the source attempt, and
+  with a restore checkpoint. The repository and the database both enforce this.
+  Interventions without a numerical binding, such as a researcher's governed LR change,
+  keep the generic application rules.
+- Re-applying a numerical intervention on a *later* attempt after another rollback
+  (`REAPPLY_AFTER_ROLLBACK` onto N+2) is not permitted yet. Its guard belongs to the
+  executor gate.
 
 In-place mutation of a running attempt would need several episodes per attempt, an
 episode generation identity, application-based closure, and changes to repeat

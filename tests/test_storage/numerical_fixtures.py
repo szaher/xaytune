@@ -16,6 +16,8 @@ from xaytune.core import (
     RunAttempt,
     RunAttemptId,
 )
+from xaytune.core.domain.action import ActionTarget
+from xaytune.core.domain.actions import ChangeLearningRate
 from xaytune.core.domain.candidate import (
     CandidateSpec,
     DataSpec,
@@ -23,6 +25,13 @@ from xaytune.core.domain.candidate import (
     OptimizationSpec,
     TrainingKind,
     TrainingSpec,
+)
+from xaytune.core.domain.intervention import (
+    InterventionOrigin,
+    InterventionReplayPolicy,
+    LearningRateMutation,
+    ManualTrigger,
+    TrainingIntervention,
 )
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.operation import RuntimeOperationTarget
@@ -180,3 +189,29 @@ def restored_successor(repo, run, source, checkpoint, number=2):
     with write_transaction(repo._connection):
         repo.aggregates._insert_attempt(successor)
     return successor
+
+
+def human_intervention(repo, run, learning_rate=5e-5):
+    """A generic, non-numerical intervention: a researcher's governed LR change."""
+    action = repo.propose_action(
+        ChangeLearningRate(
+            target=ActionTarget(kind="run", id=str(run.id)), learning_rate=learning_rate
+        ),
+        experiment_id=run.experiment_id,
+        proposed_by=REVIEWER,
+        reason="researcher lowers LR",
+        policy=ALLOW,
+        capabilities=None,
+    ).action
+    return repo.record_training_intervention(
+        TrainingIntervention(
+            run_id=run.id,
+            action_id=action.id,
+            origin=InterventionOrigin.REACTIVE_HUMAN,
+            trigger=ManualTrigger(actor=REVIEWER),
+            replay_policy=InterventionReplayPolicy.APPLY_ONCE,
+            mutation=LearningRateMutation(learning_rate=learning_rate),
+            rationale="researcher judgement",
+        ),
+        actor=ACTOR,
+    )

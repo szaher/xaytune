@@ -206,6 +206,31 @@ WHEN NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'application lacks its intervention, attempt, run, event or ancestor'); END;
 
+-- Numerical recovery v1 (spec 08 §9a): an intervention bound to a numerical
+-- recovery decision applies only on its episode's checkpoint-backed successor,
+-- attempt N+1. Other interventions keep the generic rules above.
+CREATE TRIGGER numerical_intervention_application_successor
+BEFORE INSERT ON intervention_applications
+WHEN EXISTS (
+  SELECT 1 FROM training_interventions t
+  JOIN numerical_recovery_action_bindings b ON b.action_id = t.action_id
+  WHERE t.id = NEW.intervention_id
+) AND NOT EXISTS (
+  SELECT 1 FROM training_interventions t
+  JOIN numerical_recovery_action_bindings b ON b.action_id = t.action_id
+  JOIN recovery_episodes e ON e.id = b.episode_id
+  JOIN run_attempts a ON a.id = NEW.attempt_id
+  WHERE t.id = NEW.intervention_id
+    AND e.target_kind = 'training-attempt'
+    AND a.run_id = e.run_id
+    AND a.attempt_number = e.attempt_number + 1
+    AND a.id <> e.target_id
+    AND json_extract(a.payload_json, '$.checkpoint_ref.id') IS NOT NULL
+)
+BEGIN
+  SELECT RAISE(ABORT, 'numerical intervention applies only on its checkpoint-backed successor');
+END;
+
 CREATE TRIGGER intervention_applications_immutable
 BEFORE UPDATE ON intervention_applications
 BEGIN SELECT RAISE(ABORT, 'intervention applications are append-only'); END;

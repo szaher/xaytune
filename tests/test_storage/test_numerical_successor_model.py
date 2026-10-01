@@ -6,8 +6,10 @@ attempt 1 ── NaN ── episode E1 ── ChangeLearningRate ── Training
                          └─ E1 closed by the successor; a later NaN opens E2
 ```
 
-Application provenance is derived from durable state: a caller can manufacture
-neither the previous learning rate nor the checkpoint ancestor.
+A numerical-recovery intervention applies only on that successor, and
+application provenance is derived from durable state: a caller can manufacture
+neither the previous learning rate nor the checkpoint ancestor. Generic
+interventions keep the generic application rules.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from tests.test_storage.numerical_fixtures import (
     ALLOW,
     HALVE,
     checkpointed_lr_run,
+    human_intervention,
     nonfinite_plan,
     restored_successor,
 )
@@ -132,10 +135,89 @@ def test_true_restore_ancestor_is_derived_and_projected(world):
     assert realization.trajectory.application_ids == (applied.id,)
 
 
-def test_fresh_start_has_no_checkpoint_ancestor(world):
+@pytest.mark.parametrize("where", ["source", "fresh-successor", "skipped-successor"])
+def test_numerical_application_only_on_the_checkpoint_backed_successor(world, where):
+    """Spec 08 §9a: never on the failed source, a fresh restart, or attempt N+2."""
     repo, w = world
-    successor = restored_successor(repo, w["run"], w["attempt"], None)
-    assert apply(repo, w["intervention"], successor, observed=2e-4).checkpoint_ancestor is None
+    if where == "source":
+        target = w["attempt"]
+    elif where == "fresh-successor":
+        target = restored_successor(repo, w["run"], w["attempt"], None)
+    else:
+        restored_successor(repo, w["run"], w["attempt"], w["c100"])
+        target = restored_successor(repo, w["run"], w["attempt"], w["c100"], number=3)
+    events = count(repo, "events")
+    with pytest.raises(ProvenanceError, match="checkpoint-backed successor"):
+        apply(repo, w["intervention"], target, observed=2e-4)
+    assert count(repo, "intervention_applications") == 0
+    assert count(repo, "events") == events
+
+
+def _forge(repo, w, attempt, ancestor):
+    """Insert an application past every repository check; only the database decides."""
+    application_id = InterventionApplicationId.generate()
+    forged = InterventionApplication(
+        id=application_id,
+        intervention_id=w["intervention"].id,
+        attempt_id=attempt.id,
+        event_sequence=1,
+        position=TrainingPosition(optimizer_step=101),
+        previous_value=2e-4,
+        applied_value=1e-4,
+        checkpoint_ancestor=ancestor,
+    )
+    with write_transaction(repo._connection):
+        sequence = repo._write_sequenced_event(
+            DomainEvent(
+                id=EventId.generate(),
+                experiment_id=str(w["run"].experiment_id),
+                aggregate_type="RunAttempt",
+                aggregate_id=str(attempt.id),
+                aggregate_revision=attempt.revision,
+                event_type="InterventionApplied",
+                actor=ACTOR,
+                payload=FrozenDict({"application_id": str(application_id)}),
+            ),
+            (),
+        )
+        repo.intervention_applications._insert(
+            forged.model_copy(update={"event_sequence": sequence}), run_id=str(w["run"].id)
+        )
+
+
+@pytest.mark.parametrize("where", ["source", "fresh-successor"])
+def test_database_refuses_numerical_application_off_the_successor(world, where):
+    repo, w = world
+    target = (
+        w["attempt"]
+        if where == "source"
+        else restored_successor(repo, w["run"], w["attempt"], None)
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="checkpoint-backed successor"):
+        _forge(repo, w, target, None)
+    assert count(repo, "intervention_applications") == 0
+
+
+def test_database_accepts_the_true_successor_and_ancestor(world):
+    """Positive control for the two forged-insert tests."""
+    repo, w = world
+    successor = restored_successor(repo, w["run"], w["attempt"], w["c100"])
+    _forge(repo, w, successor, w["c100"].payload.checkpoint_ref)
+    assert count(repo, "intervention_applications") == 1
+
+
+@pytest.mark.parametrize("where", ["source", "fresh-successor"])
+def test_generic_interventions_keep_the_generic_rules(world, where):
+    """Only numerical-recovery-bound interventions are restricted to the successor."""
+    repo, w = world
+    human = human_intervention(repo, w["run"], learning_rate=5e-5)
+    target = (
+        w["attempt"]
+        if where == "source"
+        else restored_successor(repo, w["run"], w["attempt"], None)
+    )
+    applied = apply(repo, human, target, observed=2e-4)
+    assert applied.checkpoint_ancestor is None
 
 
 def test_false_previous_value_is_refused(world):
@@ -149,13 +231,19 @@ def test_false_previous_value_is_refused(world):
 
 
 def test_rollback_discards_the_earlier_application_from_the_previous_value(world):
-    """Applied on attempt 1 after C100; attempt 2 restores C100, so it is back at 2e-4."""
+    """A generic intervention applied on attempt 1 after C100; attempt 2 restores C100.
+
+    The rolled-back application stays in history but leaves the retained trajectory,
+    so attempt 2 is back at 2e-4 and a re-application is a new, later record.
+    """
     repo, w = world
-    first = apply(repo, w["intervention"], w["attempt"], observed=2e-4, step=150)
+    human = human_intervention(repo, w["run"], learning_rate=5e-5)
+    first = apply(repo, human, w["attempt"], observed=2e-4, step=150)
     successor = restored_successor(repo, w["run"], w["attempt"], w["c100"])
     with pytest.raises(ProvenanceError, match="retained-trajectory rate"):
-        apply(repo, w["intervention"], successor, observed=1e-4)
-    again = apply(repo, w["intervention"], successor, observed=2e-4, step=100)
+        apply(repo, human, successor, observed=5e-5)
+    again = apply(repo, human, successor, observed=2e-4, step=100)
+    assert again.checkpoint_ancestor == w["c100"].payload.checkpoint_ref
     assert again.event_sequence > first.event_sequence
     assert again.position.optimizer_step < first.position.optimizer_step
     realization = repo.get_run_realization(w["run"].id)
@@ -168,35 +256,8 @@ def test_unrelated_same_run_checkpoint_cannot_be_named_as_ancestor(world):
     """Even past the repository, the database ties the ancestor to the attempt's restore."""
     repo, w = world
     successor = restored_successor(repo, w["run"], w["attempt"], w["c100"])
-    application_id = InterventionApplicationId.generate()
-    forged = InterventionApplication(
-        id=application_id,
-        intervention_id=w["intervention"].id,
-        attempt_id=successor.id,
-        event_sequence=1,
-        position=TrainingPosition(optimizer_step=101),
-        previous_value=2e-4,
-        applied_value=1e-4,
-        checkpoint_ancestor=w["c50"].payload.checkpoint_ref,
-    )
     with pytest.raises(sqlite3.IntegrityError, match="ancestor"):
-        with write_transaction(repo._connection):
-            sequence = repo._write_sequenced_event(
-                DomainEvent(
-                    id=EventId.generate(),
-                    experiment_id=str(w["run"].experiment_id),
-                    aggregate_type="RunAttempt",
-                    aggregate_id=str(successor.id),
-                    aggregate_revision=successor.revision,
-                    event_type="InterventionApplied",
-                    actor=ACTOR,
-                    payload=FrozenDict({"application_id": str(application_id)}),
-                ),
-                (),
-            )
-            repo.intervention_applications._insert(
-                forged.model_copy(update={"event_sequence": sequence}), run_id=str(w["run"].id)
-            )
+        _forge(repo, w, successor, w["c50"].payload.checkpoint_ref)
     assert count(repo, "intervention_applications") == 0
 
 

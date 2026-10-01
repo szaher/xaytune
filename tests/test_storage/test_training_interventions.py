@@ -14,7 +14,10 @@ from tests.test_storage.numerical_fixtures import (
     DENY,
     HALVE,
     REVIEWER,
+    checkpointed_lr_run,
+    human_intervention,
     nonfinite_plan,
+    restored_successor,
     seeded_lr_run,
 )
 from tests.test_storage.test_recovery_episodes import another_run, incident, signal
@@ -56,8 +59,12 @@ def count(repo, table):
     return int(repo._connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
-def prepared(connection, reason="numerical-nan"):
-    repo, world = seeded_lr_run(connection)
+def prepared(connection, reason="numerical-nan", tmp_path=None):
+    """A nonfinite episode on attempt 1; with *tmp_path*, attempt 1 also has checkpoints."""
+    if tmp_path is None:
+        repo, world = seeded_lr_run(connection)
+    else:
+        repo, world = checkpointed_lr_run(connection, tmp_path)
     observed, plan = nonfinite_plan(repo, world["attempt"], reason=reason)
     inputs = repo.numerical_recovery_inputs(str(plan.id), HALVE)
     proposal = NumericalRecoveryPlanner().plan(inputs)
@@ -110,9 +117,12 @@ def realization_matches_rebuild(repo, run_id):
 # ---- governance -------------------------------------------------------------------------
 
 
-def test_adr011_scenario_lr_drop_is_an_intervention_on_the_same_run(connection, db_path):
-    """Candidate LR 2e-4, loss nonfinite, proposal 1e-4, authorized, intervention recorded."""
-    repo, world, observed, inputs, proposal = prepared(connection)
+def test_adr011_scenario_lr_drop_is_an_intervention_on_the_same_run(connection, db_path, tmp_path):
+    """Candidate LR 2e-4, loss nonfinite, proposal 1e-4, authorized, intervention recorded.
+
+    Applied (v1, spec 08 §9a) on the checkpoint-backed successor attempt.
+    """
+    repo, world, observed, inputs, proposal = prepared(connection, tmp_path=tmp_path)
     run, node, attempt = world["run"], world["node"], world["attempt"]
     nodes_before = count(repo, "experiment_nodes")
     before = realization_matches_rebuild(repo, run.id)
@@ -146,7 +156,9 @@ def test_adr011_scenario_lr_drop_is_an_intervention_on_the_same_run(connection, 
     assert decided.interventions == (intervention.id,)
     assert decided.history_fingerprint == before.history_fingerprint
 
-    applied = apply(repo, intervention, attempt)
+    successor = restored_successor(repo, run, attempt, world["c100"])
+    applied = apply(repo, intervention, successor)
+    assert applied.checkpoint_ancestor == world["c100"].payload.checkpoint_ref
     after = realization_matches_rebuild(repo, run.id)
     assert after.candidate_fingerprint == before.candidate_fingerprint == run.candidate_fingerprint
     assert after.history_fingerprint != before.history_fingerprint
@@ -350,9 +362,9 @@ def test_intervention_replay_is_idempotent_and_changes_conflict(connection):
 
 
 def _recorded(connection):
-    repo, world, _, inputs, proposal = prepared(connection)
-    governed = propose(repo, inputs, proposal)
-    return repo, world, record(repo, governed.action.id)
+    """A generic (human) intervention: application mechanics, not the numerical v1 path."""
+    repo, world = seeded_lr_run(connection)
+    return repo, world, human_intervention(repo, world["run"], learning_rate=1e-4)
 
 
 def test_application_is_ordered_by_event_sequence_and_replays(connection):
@@ -432,9 +444,12 @@ def test_failed_intervention_transaction_rolls_back(connection, monkeypatch):
     ["training_interventions", "intervention_applications", "numerical_recovery_action_bindings"],
 )
 @pytest.mark.parametrize("operation", ["UPDATE {t} SET created_at = 'x'", "DELETE FROM {t}"])
-def test_intervention_tables_are_append_only(connection, table, operation):
-    repo, world, intervention = _recorded(connection)
-    apply(repo, intervention, world["attempt"])
+def test_intervention_tables_are_append_only(connection, tmp_path, table, operation):
+    repo, world, _, inputs, proposal = prepared(connection, tmp_path=tmp_path)
+    intervention = record(repo, propose(repo, inputs, proposal).action.id)
+    successor = restored_successor(repo, world["run"], world["attempt"], world["c100"])
+    apply(repo, intervention, successor)
+    assert count(repo, table) >= 1
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         with write_transaction(connection):
             connection.execute(operation.format(t=table))
@@ -457,28 +472,24 @@ def _successor_nan(repo, world, number=2):
     return attempt, plan
 
 
-def test_promised_reduction_absent_from_the_trajectory_escalates(connection):
-    repo, world, intervention = _recorded(connection)
-    apply(repo, intervention, world["attempt"])
-    # Attempt 2 restarted without a checkpoint, so its trajectory is back at 2e-4.
-    successor, plan = _successor_nan(repo, world)
+def test_promised_reduction_absent_from_the_trajectory_escalates(connection, tmp_path):
+    """E1 promised 1e-4, but the successor never confirmed applying it; E2 must not stack."""
+    repo, world, _, inputs, proposal = prepared(connection, tmp_path=tmp_path)
+    intervention = record(repo, propose(repo, inputs, proposal).action.id)
+    successor = restored_successor(repo, world["run"], world["attempt"], world["c100"])
+    successor = repo.transition_attempt(
+        successor.id,
+        expected_revision=successor.revision,
+        new_status=RunAttemptStatus.FAILED,
+        actor=ACTOR,
+    )
+    _, plan = nonfinite_plan(repo, successor, sequence=3)
     inputs = repo.numerical_recovery_inputs(str(plan.id), HALVE)
     assert inputs.current_learning_rate.value == 2e-4
     assert [p.intervention_id for p in inputs.prior_interventions] == [intervention.id]
     result = NumericalRecoveryPlanner().plan(inputs)
     assert isinstance(result, NumericalEscalation)
     assert result.code is NumericalEscalationCode.PRIOR_INTERVENTION_NOT_REFLECTED
-
-
-def test_reflected_reduction_allows_the_next_step_down(connection):
-    repo, world, intervention = _recorded(connection)
-    successor, plan = _successor_nan(repo, world)
-    apply(repo, intervention, successor)
-    inputs = repo.numerical_recovery_inputs(str(plan.id), HALVE)
-    assert inputs.current_learning_rate.intervention_id == intervention.id
-    proposal = NumericalRecoveryPlanner().plan(inputs)
-    assert isinstance(proposal, NumericalLRProposal)
-    assert proposal.action_spec.learning_rate == pytest.approx(5e-5)
 
 
 def test_closed_episode_cannot_record_its_intervention(connection):

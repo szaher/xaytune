@@ -2810,6 +2810,33 @@ class ControlPlaneRepository:
             ):
                 raise ProvenanceError("the triggering incident is not this run's")
 
+    def _require_numerical_successor(
+        self, intervention: TrainingIntervention, attempt: RunAttempt
+    ) -> None:
+        """Numerical recovery v1 applies only on the episode's checkpoint-backed successor.
+
+        Spec 08 §9a: the LR change rides on attempt N+1 restored from a checkpoint,
+        never on the failed source attempt N, a fresh restart or a later attempt.
+        Interventions without a numerical binding keep the generic rules.
+        """
+        binding = self.numerical_recovery_bindings.for_action(str(intervention.action_id))
+        if binding is None:
+            return
+        episode = self.recovery_episodes.get(str(binding.episode_id))
+        assert episode is not None
+        if (
+            str(attempt.run_id) != str(episode.context.run_id)
+            or attempt.attempt_number != episode.attempt_number + 1
+            or str(attempt.id) == episode.context.target.id
+            or attempt.checkpoint_ref is None
+        ):
+            raise ProvenanceError(
+                f"numerical intervention {intervention.id} applies only on episode "
+                f"{episode.id}'s checkpoint-backed successor (attempt "
+                f"{episode.attempt_number + 1}), not attempt {attempt.attempt_number}"
+                + ("" if attempt.checkpoint_ref is not None else " without a restore checkpoint")
+            )
+
     def record_intervention_application(
         self,
         intervention_id: InterventionId | str,
@@ -2868,6 +2895,7 @@ class ControlPlaneRepository:
                 return existing
             if applied_value != intervention.mutation.learning_rate:
                 raise ProvenanceError("the applied value is not the intervention's decided value")
+            self._require_numerical_successor(intervention, attempt)
             run = self.aggregates.load_run(str(intervention.run_id))
             previous = self._effective_learning_rate(run, attempt.id)
             if observed_previous_value != previous.value:

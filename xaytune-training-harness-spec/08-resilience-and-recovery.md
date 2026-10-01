@@ -335,10 +335,43 @@ Examples:
 
 - restore checkpoint only → same node
 - precision mode fallback if declared operationally equivalent by policy → execution override
-- LR reduction → new experiment node
+- LR reduction to stabilise the continuing trajectory → `TrainingIntervention` on the
+  same Run (ADR-011); a new node only when LR values are alternatives to compare
 - optimizer change → new experiment node
 
 Do not silently classify an LR change as operational recovery.
+
+### 9a. Numerical recovery execution model (PR-021, v1)
+
+Numerical recovery uses a **checkpoint-backed successor attempt**, not mutation of a
+live worker:
+
+```text
+attempt N ── NaN/Inf incident ── RecoveryEpisode E (target attempt N)
+  → governed ChangeLearningRate Action → TrainingIntervention
+  → validated FULL+EXACT checkpoint taken before the unsafe state
+  → attempt N retired; successor attempt N+1 restored from that checkpoint
+  → LR applied in attempt N+1 → confirmed InterventionApplication on attempt N+1
+```
+
+Consequences, all of which keep PR-019/020 semantics unchanged:
+
+- Episodes stay one per attempt. The successor attempt **closes** E exactly as it
+  closes an OOM episode; no intervention- or application-based closure exists.
+- Instability observed later on attempt N+1 belongs to a **new** episode E′, which
+  may propose a further reduction once the earlier one is reflected in the trajectory.
+  One episode yields at most one numerical intervention.
+- The node, the `CandidateFingerprint` and the Run are unchanged. The LR change is a
+  `TrainingIntervention`, never an `ExecutionOverride`, even though it rides on a new
+  attempt.
+- `InterventionApplication` provenance is derived, not supplied: `previous_value` is
+  the base rate on the applying attempt's retained trajectory immediately before the
+  application, and `checkpoint_ancestor` is that attempt's own restore checkpoint.
+  The database ties the ancestor to the attempt's `checkpoint_ref`.
+
+In-place mutation of a running attempt would need several episodes per attempt, an
+episode generation identity, application-based closure, and changes to repeat
+accounting, membership routing and episode uniqueness. It is out of scope for v1.
 
 ## 10. TorchFT provider
 

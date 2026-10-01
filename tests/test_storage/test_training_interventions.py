@@ -90,7 +90,7 @@ def apply(repo, intervention, attempt, *, step=14_250, previous=2e-4, applicatio
         application_id=application_id or InterventionApplicationId.generate(),
         attempt_id=attempt.id,
         position=TrainingPosition(optimizer_step=step),
-        previous_value=previous,
+        observed_previous_value=previous,
         applied_value=intervention.mutation.learning_rate,
         actor=ACTOR,
         destinations=("audit",),
@@ -367,7 +367,7 @@ def test_application_is_ordered_by_event_sequence_and_replays(connection):
     with pytest.raises(IdempotencyConflictError):
         apply(repo, intervention, world["attempt"], application_id=application_id, step=1)
     # A rollback's re-application is a *new* record at an earlier position, later in sequence.
-    again = apply(repo, intervention, world["attempt"], step=12_000)
+    again = apply(repo, intervention, world["attempt"], step=12_000, previous=1e-4)
     ordered = repo.intervention_applications.for_intervention(str(intervention.id))
     assert ordered == (first, again)
     assert again.event_sequence > first.event_sequence
@@ -385,7 +385,7 @@ def test_application_rejects_wrong_attempt_value_or_intervention(connection):
             application_id=InterventionApplicationId.generate(),
             attempt_id=world["attempt"].id,
             position=TrainingPosition(optimizer_step=1),
-            previous_value=2e-4,
+            observed_previous_value=2e-4,
             applied_value=3e-5,
             actor=ACTOR,
         )

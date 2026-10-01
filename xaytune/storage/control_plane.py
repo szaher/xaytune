@@ -171,7 +171,7 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import Actor, ArtifactRef, CheckpointRef, RuntimeRef
+from xaytune.core.refs import Actor, ArtifactRef, RuntimeRef
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
     EvaluationRunStatus,
@@ -2817,11 +2817,10 @@ class ControlPlaneRepository:
         application_id: InterventionApplicationId,
         attempt_id: RunAttemptId | str,
         position: TrainingPosition,
-        previous_value: float,
+        observed_previous_value: float,
         applied_value: float,
         actor: Actor,
         trigger_evaluation: TriggerEvaluation | None = None,
-        checkpoint_ancestor: CheckpointRef | None = None,
         destinations: tuple[str, ...] = (),
     ) -> InterventionApplication:
         """Append one confirmed effect of an intervention, ordered by its event sequence.
@@ -2829,8 +2828,20 @@ class ControlPlaneRepository:
         Only confirmation that the mutation actually took effect may call
         this: approval, an intervention row, or an intended runtime request is
         not an application. Nothing in this release calls it; the executor
-        that confirms effects is the next review gate. An identical replay of
-        *application_id* returns the original with its original sequence.
+        that confirms effects is the next review gate.
+
+        Provenance is derived, never trusted. ``previous_value`` is the base
+        learning rate on *attempt_id*'s retained trajectory immediately before
+        this application; the effect confirmation's *observed_previous_value*
+        must equal it. ``checkpoint_ancestor`` is the attempt's own restore
+        checkpoint (``None`` for a fresh start), which must be a recorded
+        checkpoint of the same run. An identical replay of *application_id*
+        returns the original with its original sequence.
+
+        Raises:
+            ProvenanceError: If the attempt, values or ancestry disagree with
+                the durable record, or the trajectory's rate is unknown.
+            IdempotencyConflictError: If *application_id* was recorded differently.
         """
         with write_transaction(self._connection):
             intervention = self.training_interventions.get(str(intervention_id))
@@ -2841,38 +2852,47 @@ class ControlPlaneRepository:
                 raise ProvenanceError(
                     f"attempt {attempt.id} does not belong to run {intervention.run_id}"
                 )
-            draft: dict[str, Any] = {
-                "id": application_id,
-                "intervention_id": intervention.id,
-                "attempt_id": attempt.id,
-                "position": position,
-                "trigger_evaluation": trigger_evaluation,
-                "previous_value": previous_value,
-                "applied_value": applied_value,
-                "checkpoint_ancestor": checkpoint_ancestor,
-            }
             existing = self.intervention_applications.get(str(application_id))
             if existing is not None:
-                requested = InterventionApplication.model_validate(
-                    {
-                        **draft,
-                        "event_sequence": existing.event_sequence,
-                        "created_at": existing.created_at,
-                    }
-                )
-                if requested.semantic_fingerprint() != existing.semantic_fingerprint():
+                if (
+                    existing.intervention_id != intervention.id
+                    or existing.attempt_id != attempt.id
+                    or existing.position != position
+                    or existing.trigger_evaluation != trigger_evaluation
+                    or existing.applied_value != applied_value
+                    or existing.previous_value != observed_previous_value
+                ):
                     raise IdempotencyConflictError(
                         str(application_id), ("intervention_application",), kind="application"
                     )
                 return existing
             if applied_value != intervention.mutation.learning_rate:
                 raise ProvenanceError("the applied value is not the intervention's decided value")
-            if checkpoint_ancestor is not None:
-                record = self.checkpoints.get(str(checkpoint_ancestor.id))
-                if record is None or record.context.run_id != intervention.run_id:
-                    raise ProvenanceError("the checkpoint ancestor is not this run's")
             run = self.aggregates.load_run(str(intervention.run_id))
-            preview = InterventionApplication.model_validate({**draft, "event_sequence": 1})
+            previous = self._effective_learning_rate(run, attempt.id)
+            if observed_previous_value != previous.value:
+                raise ProvenanceError(
+                    f"the confirmed previous learning rate {observed_previous_value!r} is not "
+                    f"attempt {attempt.id}'s retained-trajectory rate {previous.value!r}"
+                )
+            ancestor = attempt.checkpoint_ref
+            if ancestor is not None:
+                record = self.checkpoints.get(str(ancestor.id))
+                if record is None or record.context.run_id != str(run.id):
+                    raise ProvenanceError(
+                        f"attempt {attempt.id} restores from a checkpoint this run never recorded"
+                    )
+            preview = InterventionApplication(
+                id=application_id,
+                intervention_id=intervention.id,
+                attempt_id=attempt.id,
+                event_sequence=1,
+                position=position,
+                trigger_evaluation=trigger_evaluation,
+                previous_value=previous.value,
+                applied_value=applied_value,
+                checkpoint_ancestor=ancestor,
+            )
             sequence = self._write_sequenced_event(
                 DomainEvent(
                     id=EventId.generate(),

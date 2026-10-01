@@ -195,11 +195,16 @@ WHEN NOT EXISTS (
     AND ev.event_type = 'InterventionApplied'
     AND ev.aggregate_type = 'RunAttempt' AND ev.aggregate_id = NEW.attempt_id
     AND json_extract(ev.payload_json, '$.application_id') = NEW.id
+    -- The ancestor is the applying attempt's own restore checkpoint, not any
+    -- checkpoint of the run: a caller cannot name an unrelated one.
+    AND NEW.checkpoint_id IS json_extract(a.payload_json, '$.checkpoint_ref.id')
+    AND json_extract(NEW.payload_json, '$.checkpoint_ancestor.id')
+      IS json_extract(a.payload_json, '$.checkpoint_ref.id')
     AND (NEW.checkpoint_id IS NULL OR EXISTS (
       SELECT 1 FROM checkpoints ck WHERE ck.id = NEW.checkpoint_id AND ck.run_id = NEW.run_id
     ))
 )
-BEGIN SELECT RAISE(ABORT, 'application lacks its intervention, attempt, run or event'); END;
+BEGIN SELECT RAISE(ABORT, 'application lacks its intervention, attempt, run, event or ancestor'); END;
 
 CREATE TRIGGER intervention_applications_immutable
 BEFORE UPDATE ON intervention_applications

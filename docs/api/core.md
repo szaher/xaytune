@@ -413,8 +413,16 @@ NUMERICAL_NAN / NUMERICAL_INF incident
   → ChangeLearningRate Action + NumericalRecoveryActionBinding
   → PolicyEngine: DENY / REQUIRE_APPROVAL / ALLOW
   → TrainingIntervention                       (only for an authorized Action)
-  → InterventionApplication                    (only on confirmed effect; executor gate)
+  → successor attempt restored from a FULL+EXACT checkpoint   (executor gate)
+  → InterventionApplication on the successor  (only on confirmed effect; executor gate)
 ```
+
+**Execution model (v1).** The LR change rides on a checkpoint-backed successor
+attempt, not on a live worker. The successor closes the numerical episode, as it
+closes an OOM episode, so episodes remain one per attempt. Instability on the
+successor opens a new episode, which may reduce again once the earlier reduction is
+reflected. The node, candidate and Run are unchanged, and the change is never an
+`ExecutionOverride`.
 
 `NumericalRecoveryPlanner.plan(NumericalRecoveryInputsV1)` is pure. Its input
 binds the effective plan, run, candidate and source execution identity, the
@@ -457,8 +465,12 @@ an authorized `change-learning-rate` on the same active run.
 `TrainingIntervention` has no status. `InterventionApplication` records one
 confirmed effect at a `TrainingPosition`; its canonical order is the
 `InterventionApplied` event sequence, never the position, and a rollback appends a
-new application rather than deleting one. Nothing records an application yet: that
-belongs to the live-worker executor, which is the next review gate.
+new application rather than deleting one. Its provenance is derived rather than
+supplied. `previous_value` is the base rate on the applying attempt's retained
+trajectory just before the application, and the effect confirmation's observed
+value must equal it. `checkpoint_ancestor` is that attempt's own restore
+checkpoint, and the database refuses any other. Nothing records an application
+yet: that belongs to the executor, which is the next review gate.
 
 `repository.get_run_realization(run_id)` projects a `RunRealization`, which is
 never stored. `rebuild_run_realization(run, repository.events_for_run(run_id), ...)`

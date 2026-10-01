@@ -1089,9 +1089,11 @@ Implement in reviewable layers:
   artifact-lineage fingerprints; a pure `NumericalRecoveryPlanner` driven by an
   explicit `NumericalRecoveryPolicyV1`; a separate numerical Action binding; and
   governed `ChangeLearningRate` proposals through the existing policy path;
-- live-worker execution, after its own architecture review: a versioned,
-  runtime-blind worker-control capability that confirms the effect and records the
-  `InterventionApplication` under ADR-013 intent-first rules.
+- execution, after its own architecture review, using the checkpoint-backed
+  successor model pinned in 08 §9a (no live-worker mutation in v1): validated
+  FULL+EXACT checkpoint → atomic successor creation → restore and apply the
+  intervention → confirmed `InterventionApplication` → Action `SUCCEEDED`, under
+  ADR-013 intent-first rules. The successor closes the numerical episode.
 
 Phase exit:
 

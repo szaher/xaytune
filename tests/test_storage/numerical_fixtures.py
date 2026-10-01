@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
+
+from tests.test_checkpoints.helpers import make_bundle
 from tests.test_storage.conftest import make_attempt, make_experiment, make_run
 from tests.test_storage.test_recovery_episodes import decide, incident, signal
-from xaytune.core import CandidateSpecSnapshot, ExperimentNode, ExperimentNodeId
+from xaytune.checkpoints import CheckpointManager, LocalCheckpointStore, SerializedStateCodec
+from xaytune.core import (
+    CandidateSpecSnapshot,
+    ExperimentNode,
+    ExperimentNodeId,
+    RunAttempt,
+    RunAttemptId,
+)
 from xaytune.core.domain.candidate import (
     CandidateSpec,
     DataSpec,
@@ -14,11 +25,14 @@ from xaytune.core.domain.candidate import (
     TrainingSpec,
 )
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
+from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.domain.policy import PolicyVerdict
 from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, DatasetRef, ModelRef
 from xaytune.core.state.status import ExperimentStatus, RunAttemptStatus, RunStatus
 from xaytune.policy import RulePolicyEngine
+from xaytune.runtimes import RuntimeEventEnvelope, TrainingEventPayload
 from xaytune.storage import ControlPlaneRepository, write_transaction
 
 ACTOR = Actor(type="system", id="numerical-coordinator")
@@ -83,3 +97,86 @@ def seeded_lr_run(connection):
 def nonfinite_plan(repo, attempt, reason="numerical-nan", sequence=9):
     observed = incident(repo, attempt, sequence=sequence, signal=signal(reason))
     return observed, decide(repo, observed, RecoveryRequest())
+
+
+def _record_checkpoint(repo, attempt, tmp_path, name, step, sequence):
+    run = repo.aggregates.load_run(str(attempt.run_id))
+    state, context, _ = make_bundle(
+        tmp_path / name, attempt_id=attempt.id, candidate=run.candidate_fingerprint
+    )
+    manager = CheckpointManager(SerializedStateCodec(), LocalCheckpointStore(tmp_path / "bundles"))
+    ref = asyncio.run(manager.save(replace(state, optimizer_step=step), context))
+    manifest = asyncio.run(manager.store.get(ref)).manifest
+    event = RuntimeEventEnvelope(
+        event_id=name,
+        sequence=sequence,
+        target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id)),
+        payload=TrainingEventPayload(data=manifest.committed_payload(ref)),
+    )
+    return repo.record_checkpoint(
+        attempt.id,
+        event.payload.data,
+        evidence=FrozenDict(event.model_dump(mode="json")),
+        actor=ACTOR,
+    )
+
+
+def checkpointed_lr_run(connection, tmp_path):
+    """As seeded_lr_run, with two committed checkpoints on attempt 1 before it failed.
+
+    ``c100`` (optimizer step 100) and ``c50`` (step 50) both embody no applications.
+    """
+    repo = ControlPlaneRepository(connection)
+    experiment = make_experiment()
+    node = lr_node(experiment)
+    run = make_run(node)
+    attempt = RunAttempt(
+        id=RunAttemptId.generate(),
+        run_id=run.id,
+        attempt_number=1,
+        execution_fingerprint="execution-a",
+    )
+    with write_transaction(connection):
+        repo.aggregates._insert_experiment(experiment)
+        repo.aggregates._insert_node(node)
+        repo.aggregates._insert_run(run)
+        repo.aggregates._insert_attempt(attempt)
+    repo.transition_experiment(
+        experiment.id,
+        expected_revision=experiment.revision,
+        new_status=ExperimentStatus.ACTIVE,
+        actor=ACTOR,
+    )
+    run = repo.transition_run(
+        run.id, expected_revision=run.revision, new_status=RunStatus.ACTIVE, actor=ACTOR
+    )
+    c50 = _record_checkpoint(repo, attempt, tmp_path, "c50", 50, 2)
+    c100 = _record_checkpoint(repo, attempt, tmp_path, "c100", 100, 3)
+    attempt = repo.transition_attempt(
+        attempt.id,
+        expected_revision=repo.aggregates.load_attempt(str(attempt.id)).revision,
+        new_status=RunAttemptStatus.FAILED,
+        actor=ACTOR,
+    )
+    return repo, {
+        "experiment": experiment,
+        "node": node,
+        "run": run,
+        "attempt": attempt,
+        "c50": c50,
+        "c100": c100,
+    }
+
+
+def restored_successor(repo, run, source, checkpoint, number=2):
+    """A successor attempt restored from *checkpoint*, as the executor gate will create it."""
+    successor = RunAttempt(
+        id=RunAttemptId.generate(),
+        run_id=run.id,
+        attempt_number=number,
+        execution_fingerprint=source.execution_fingerprint,
+        checkpoint_ref=None if checkpoint is None else checkpoint.payload.checkpoint_ref,
+    )
+    with write_transaction(repo._connection):
+        repo.aggregates._insert_attempt(successor)
+    return successor

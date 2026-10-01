@@ -1089,7 +1089,7 @@ Implement in reviewable layers:
   artifact-lineage fingerprints; a pure `NumericalRecoveryPlanner` driven by an
   explicit `NumericalRecoveryPolicyV1`; a separate numerical Action binding; and
   governed `ChangeLearningRate` proposals through the existing policy path;
-- execution, after its own architecture review, using the checkpoint-backed
+- execution (PR-021b), after its own architecture review, using the checkpoint-backed
   successor model pinned in 08 §9a (no live-worker mutation in v1): validated
   FULL+EXACT checkpoint → atomic successor creation → restore and apply the
   intervention → confirmed `InterventionApplication` → Action `SUCCEEDED`, under

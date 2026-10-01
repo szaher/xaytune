@@ -271,7 +271,12 @@ immutable JSON metadata. None of these observations changes candidate identity.
 state and must never be reconstructed from an interval metric.
 
 `GradientOverflowObserved`, `OptimizerStepSkipped` and
-`NumericalInstabilityObserved` report evidence without failing an attempt.
+`NumericalInstabilityObserved` report evidence without failing an attempt. The
+observation itself causes no state transition. A managed numerical-recovery execution
+policy, armed explicitly per experiment (08 §9a), may separately terminate the worker
+*after* emitting the observation so that governed recovery can proceed.
+`InterventionApplied` is a worker's confirmation that a directed intervention took
+effect; it is the only source of an `InterventionApplication`.
 Nonfinite evidence is encoded symbolically (`nan`, `positive-infinity`,
 `negative-infinity`), never as a non-JSON number. Incident classification retains
 the taxonomy in the resilience specification; PR-009a adds no policy engine.

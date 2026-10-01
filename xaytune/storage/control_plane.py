@@ -95,12 +95,15 @@ from xaytune.core.domain.incident import AttemptContext, Incident
 from xaytune.core.domain.intervention import (
     IncidentTrigger,
     InterventionApplication,
+    InterventionDirective,
+    InterventionDirectiveKind,
     InterventionOrigin,
     TrainingIntervention,
     TrainingPosition,
     TriggerEvaluation,
     mutation_for_action,
 )
+from xaytune.core.domain.intervention_replay import ReplayPlan, plan_intervention_directives
 from xaytune.core.domain.numerical_recovery import (
     EffectiveLearningRate,
     NumericalLRProposal,
@@ -171,7 +174,7 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import Actor, ArtifactRef, RuntimeRef
+from xaytune.core.refs import Actor, ArtifactRef, CheckpointRef, RuntimeRef
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
     EvaluationRunStatus,
@@ -190,7 +193,9 @@ from xaytune.storage.graph import ExperimentGraph
 from xaytune.storage.incidents import IncidentStore
 from xaytune.storage.interventions import (
     InterventionApplicationStore,
+    InterventionDirectiveStore,
     NumericalRecoveryActionBindingStore,
+    NumericalRecoveryExecutionStore,
     TrainingInterventionStore,
 )
 from xaytune.storage.journal import (
@@ -542,6 +547,39 @@ def _require_oom_successor_lineage(
         raise ProvenanceError("OOM successor overrides disagree with the governed Action")
 
 
+def _require_numerical_successor_lineage(
+    source: RunAttempt,
+    successor: RunAttempt,
+    action_id: ActionId,
+    checkpoint: RecoveryCheckpointReport,
+) -> None:
+    """Bind a numerical successor to its source's operational lineage plus one restore.
+
+    No operational override carries the learning rate: that is the
+    intervention's directive, never an ``ExecutionOverride``.
+    """
+    prior = source.execution_overrides
+    if prior and prior[-1].kind == "checkpoint_restore":
+        prior = prior[:-1]
+    overrides = successor.execution_overrides
+    if (
+        successor.run_id != source.run_id
+        or successor.attempt_number != source.attempt_number + 1
+        or successor.checkpoint_ref != checkpoint.checkpoint_ref
+        or successor.execution_fingerprint is None
+        or len(overrides) != len(prior) + 1
+        or overrides[: len(prior)] != prior
+    ):
+        raise ProvenanceError("numerical successor does not preserve the source attempt lineage")
+    restore = overrides[-1]
+    if (
+        restore.kind != "checkpoint_restore"
+        or restore.values != FrozenDict({"checkpoint_id": str(checkpoint.checkpoint_ref.id)})
+        or restore.action_id != action_id
+    ):
+        raise ProvenanceError("numerical successor restore disagrees with the governed Action")
+
+
 def _require_run_of_cycle(run: EvaluationRun, node: ExperimentNode) -> None:
     """Refuse an evaluation run that does not belong to the node's current cycle.
 
@@ -618,6 +656,8 @@ class ControlPlaneRepository:
         self.numerical_recovery_bindings = NumericalRecoveryActionBindingStore(connection)
         self.training_interventions = TrainingInterventionStore(connection)
         self.intervention_applications = InterventionApplicationStore(connection)
+        self.intervention_directives = InterventionDirectiveStore(connection)
+        self.numerical_recovery_executions = NumericalRecoveryExecutionStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
@@ -748,7 +788,18 @@ class ControlPlaneRepository:
         event_type: str | None = None,
         destinations: tuple[str, ...] = (),
     ) -> Run:
-        """Move a run to *new_status*, with its event, atomically."""
+        """Move a run to *new_status*, with its event, atomically.
+
+        Raises:
+            ProvenanceError: *new_status* is ``SUCCEEDED`` while the Run's final
+                attempt carries an intervention directive no worker confirmed.
+                Migration 015 enforces the same rule inside the write.
+        """
+        if new_status is RunStatus.SUCCEEDED and self.unconfirmed_final_directives(str(run_id)):
+            raise ProvenanceError(
+                f"Run {run_id} cannot succeed: its final attempt did not confirm every "
+                f"intervention it was directed to apply"
+            )
         return self._transition(
             "Run",
             str(run_id),
@@ -760,6 +811,14 @@ class ControlPlaneRepository:
             event_type,
             destinations,
         )
+
+    def unconfirmed_final_directives(self, run_id: str) -> tuple[InterventionDirective, ...]:
+        """Directives of the Run's final attempt that no confirmed application answers."""
+        attempts = self.aggregates.attempts_for_run(run_id)
+        if not attempts:
+            return ()
+        final = max(attempts, key=lambda attempt: attempt.attempt_number)
+        return self.intervention_directives.unconfirmed_for_attempt(str(final.id))
 
     def transition_attempt(
         self,
@@ -789,14 +848,21 @@ class ControlPlaneRepository:
             actor,
             event_type,
             destinations,
-            after_write=(
-                None
-                if telemetry_position is None
-                else lambda moved: self.aggregates._advance_telemetry(
-                    str(moved.id), telemetry_position
-                )
+            after_write=lambda moved: self._after_attempt_transition(
+                moved, telemetry_position, actor, destinations
             ),
         )
+
+    def _after_attempt_transition(
+        self,
+        moved: RunAttempt,
+        telemetry_position: tuple[int, int] | None,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> None:
+        if telemetry_position is not None:
+            self.aggregates._advance_telemetry(str(moved.id), telemetry_position)
+        self._fail_unconfirmed_numerical_action(moved, actor, destinations)
 
     def record_artifact(
         self,
@@ -2810,32 +2876,45 @@ class ControlPlaneRepository:
             ):
                 raise ProvenanceError("the triggering incident is not this run's")
 
-    def _require_numerical_successor(
-        self, intervention: TrainingIntervention, attempt: RunAttempt
-    ) -> None:
-        """Numerical recovery v1 applies only on the episode's checkpoint-backed successor.
+    def _require_directive(
+        self,
+        intervention: TrainingIntervention,
+        attempt: RunAttempt,
+        application_id: InterventionApplicationId,
+        observed_previous_value: float,
+    ) -> InterventionDirective | None:
+        """An application made under a directive must be exactly what was directed.
 
-        Spec 08 §9a: the LR change rides on attempt N+1 restored from a checkpoint,
-        never on the failed source attempt N, a fresh restart or a later attempt.
-        Interventions without a numerical binding keep the generic rules.
+        A numerical-recovery intervention takes effect only through a directive,
+        which pins it to its episode's checkpoint-backed successor (first effect)
+        or to a later restore that dropped every earlier application (replay).
+        Directives apply in ordinal order. Other interventions without a
+        directive keep the generic rules.
         """
-        binding = self.numerical_recovery_bindings.for_action(str(intervention.action_id))
-        if binding is None:
-            return
-        episode = self.recovery_episodes.get(str(binding.episode_id))
-        assert episode is not None
-        if (
-            str(attempt.run_id) != str(episode.context.run_id)
-            or attempt.attempt_number != episode.attempt_number + 1
-            or str(attempt.id) == episode.context.target.id
-            or attempt.checkpoint_ref is None
-        ):
+        directive = self.intervention_directives.get(str(application_id))
+        if directive is None:
+            if self.numerical_recovery_bindings.for_action(str(intervention.action_id)):
+                raise ProvenanceError(
+                    f"numerical intervention {intervention.id} takes effect only through a "
+                    f"directive recorded with its checkpoint-backed successor"
+                )
+            return None
+        if directive.attempt_id != attempt.id or directive.intervention_id != intervention.id:
+            raise ProvenanceError(f"application {application_id} does not match its directive")
+        if observed_previous_value != directive.expected_previous_value:
             raise ProvenanceError(
-                f"numerical intervention {intervention.id} applies only on episode "
-                f"{episode.id}'s checkpoint-backed successor (attempt "
-                f"{episode.attempt_number + 1}), not attempt {attempt.attempt_number}"
-                + ("" if attempt.checkpoint_ref is not None else " without a restore checkpoint")
+                f"the confirmed previous learning rate {observed_previous_value!r} is not the "
+                f"directive's expected {directive.expected_previous_value!r}"
             )
+        earlier = [
+            item
+            for item in self.intervention_directives.for_attempt(str(attempt.id))
+            if item.ordinal < directive.ordinal
+            and self.intervention_applications.get(str(item.application_id)) is None
+        ]
+        if earlier:
+            raise ProvenanceError("directives take effect in their recorded order")
+        return directive
 
     def record_intervention_application(
         self,
@@ -2849,13 +2928,13 @@ class ControlPlaneRepository:
         actor: Actor,
         trigger_evaluation: TriggerEvaluation | None = None,
         destinations: tuple[str, ...] = (),
+        telemetry_position: tuple[int, int] | None = None,
     ) -> InterventionApplication:
         """Append one confirmed effect of an intervention, ordered by its event sequence.
 
         Only confirmation that the mutation actually took effect may call
         this: approval, an intervention row, or an intended runtime request is
-        not an application. Nothing in this release calls it; the executor
-        that confirms effects is the next review gate.
+        not an application.
 
         Provenance is derived, never trusted. ``previous_value`` is the base
         learning rate on *attempt_id*'s retained trajectory immediately before
@@ -2864,6 +2943,11 @@ class ControlPlaneRepository:
         checkpoint (``None`` for a fresh start), which must be a recorded
         checkpoint of the same run. An identical replay of *application_id*
         returns the original with its original sequence.
+
+        *telemetry_position* is the ``(generation, sequence)`` of the
+        ``InterventionApplied`` event that confirmed the effect. The attempt's
+        cursor advances to it in the same commit -- on an identical replay too,
+        so a confirmation recorded before a crash is not redelivered forever.
 
         Raises:
             ProvenanceError: If the attempt, values or ancestry disagree with
@@ -2892,10 +2976,14 @@ class ControlPlaneRepository:
                     raise IdempotencyConflictError(
                         str(application_id), ("intervention_application",), kind="application"
                     )
+                if telemetry_position is not None:
+                    self.aggregates._advance_telemetry(str(attempt.id), telemetry_position)
                 return existing
             if applied_value != intervention.mutation.learning_rate:
                 raise ProvenanceError("the applied value is not the intervention's decided value")
-            self._require_numerical_successor(intervention, attempt)
+            directive = self._require_directive(
+                intervention, attempt, application_id, observed_previous_value
+            )
             run = self.aggregates.load_run(str(intervention.run_id))
             previous = self._effective_learning_rate(run, attempt.id)
             if observed_previous_value != previous.value:
@@ -2946,7 +3034,395 @@ class ControlPlaneRepository:
             )
             application = preview.model_copy(update={"event_sequence": sequence})
             self.intervention_applications._insert(application, run_id=str(run.id))
+            if directive is not None:
+                self._settle_numerical_action_on_effect(
+                    intervention, directive, actor, destinations
+                )
+            if telemetry_position is not None:
+                self.aggregates._advance_telemetry(str(attempt.id), telemetry_position)
             return application
+
+    # ---- PR-021 executor: successor directives and numerical execution ----------------------
+
+    def plan_successor_interventions(
+        self,
+        run_id: RunId | str,
+        restore: CheckpointRef | None,
+        *,
+        initial: TrainingIntervention | None = None,
+    ) -> ReplayPlan:
+        """Plan which interventions a successor restoring *restore* must apply.
+
+        Pure planning (:func:`plan_intervention_directives`) over durable
+        records: every intervention and application on the run, the declared
+        learning rate, and the restore checkpoint's embodied applications.
+
+        Raises:
+            InterventionReplayError: When the restored lineage is unknown or
+                ambiguous, or a replay this release cannot perform is needed.
+            ProvenanceError: If *restore* is not a recorded checkpoint of the run.
+        """
+        run = self.aggregates.load_run(str(run_id))
+        embodied: tuple[str, ...] | None = None
+        if restore is not None:
+            record = self.checkpoints.get(str(restore.id))
+            if record is None or record.context.run_id != str(run.id):
+                raise ProvenanceError(f"checkpoint {restore.id} is not a recorded one of {run.id}")
+            manifest = record.payload.state_manifest
+            embodied = None if manifest is None else manifest.applied_intervention_application_ids
+        node = self.aggregates.load_node(str(run.node_id))
+        declared = node.candidate.candidate.training.optimization.learning_rate
+        interventions = self.training_interventions.for_run(str(run.id))
+        applications = self.intervention_applications.for_run(str(run.id))
+        if declared is None:
+            if interventions or initial is not None:
+                raise ProvenanceError(f"run {run.id}'s candidate declares no learning rate")
+            declared = 1.0  # unused: nothing to plan without interventions
+        return plan_intervention_directives(
+            declared_learning_rate=float(declared),
+            interventions=interventions,
+            applications=applications,
+            restored=restore is not None,
+            embodied_application_ids=embodied,
+            initial=initial,
+        )
+
+    def _require_and_insert_directives(
+        self,
+        successor: RunAttempt,
+        directives: tuple[InterventionDirective, ...],
+        *,
+        initial: TrainingIntervention | None,
+    ) -> None:
+        """Re-derive the successor's replay plan under the lock; refuse any disagreement."""
+        planned = self.plan_successor_interventions(
+            successor.run_id, successor.checkpoint_ref, initial=initial
+        ).directives
+        if len(planned) != len(directives) or any(
+            directive.attempt_id != successor.id
+            or directive.ordinal != ordinal
+            or (
+                directive.intervention_id,
+                directive.kind,
+                directive.mutation,
+                directive.expected_previous_value,
+            )
+            != (plan.intervention_id, plan.kind, plan.mutation, plan.expected_previous_value)
+            for ordinal, (directive, plan) in enumerate(zip(directives, planned, strict=False))
+        ):
+            raise StaleRecoveryContextError(
+                "successor intervention directives disagree with the restored lineage"
+            )
+        for directive in directives:
+            self.intervention_directives._insert(directive, run_id=str(successor.run_id))
+
+    def _record_numerical_recovery_execution(
+        self,
+        action_id: ActionId,
+        successor: RunAttempt,
+        checkpoint: RecoveryCheckpointReport,
+        directives: tuple[InterventionDirective, ...],
+        *,
+        request_digest: str,
+        actor: Actor,
+        capabilities: CapabilityDocument | None = None,
+        operation_id: OperationId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[RunAttempt, RuntimeOperation, RecoveryExecutionReceipt]:
+        """Commit one numerical successor, its directives, submit intent and receipt.
+
+        Like :meth:`_record_oom_recovery_execution`, a trusted executor has
+        already validated checkpoint bytes and resolved the plans; this method
+        rechecks database authority and the restored intervention lineage under
+        the write lock. It performs no checkpoint or runtime I/O. The Action
+        moves to ``EXECUTING``; it succeeds only when the worker confirms the
+        intervention's first application.
+        """
+        _require_pristine(successor, RunAttemptStatus.CREATED)
+        operation = RuntimeOperation(
+            id=operation_id or OperationId.generate(),
+            target=RuntimeOperationTarget(kind="training-attempt", id=str(successor.id)),
+            type="submit",
+            request_digest=request_digest,
+            caused_by_action_id=action_id,
+        )
+        with write_transaction(self._connection):
+            binding = self.numerical_recovery_bindings.for_action(str(action_id))
+            if binding is None:
+                raise ProvenanceError("numerical Action has no recovery decision binding")
+            intervention = self.training_interventions.for_action(str(action_id))
+            if intervention is None:
+                raise ProvenanceError("numerical Action has no recorded TrainingIntervention")
+            prior = self.numerical_recovery_executions.executed_for_episode(str(binding.episode_id))
+            if prior is not None:
+                if (
+                    prior.action_id != action_id
+                    or prior.successor_attempt_id != successor.id
+                    or prior.runtime_operation_id != operation.id
+                    or prior.checkpoint_ref != checkpoint.checkpoint_ref
+                    or self.intervention_directives.for_attempt(str(successor.id)) != directives
+                ):
+                    raise IdempotencyConflictError(
+                        str(binding.episode_id), ("successor execution",), kind="recovery episode"
+                    )
+                recorded_attempt = self.aggregates.load_attempt(str(successor.id))
+                recorded_operation = self.operations.get(str(operation.id))
+                assert recorded_operation is not None
+                self.operations._assert_same_request(recorded_operation, operation)
+                _assert_same_attempt(recorded_attempt, successor)
+                return recorded_attempt, recorded_operation, prior
+
+            self._require_fresh_numerical_decision(binding)
+            episode = self.recovery_episodes.get(str(binding.episode_id))
+            plan = self.recovery_plans.get(str(binding.plan_id))
+            assert episode is not None and plan is not None
+            action = self.actions.get(str(action_id))
+            decision = self.policy.for_action(str(action_id))
+            spec = binding.proposal.action_spec
+            if (
+                action is None
+                or spec_of(action) != spec
+                or not awaits_execution(action, decision)
+                or decision is None
+            ):
+                raise ProvenanceError("numerical Action is not authorized for its bound plan")
+            current_policy_context = self.policy_context(
+                spec,
+                experiment_id=episode.context.experiment_id,
+                proposed_by=action.proposed_by,
+                capabilities=capabilities,
+            )
+            if capabilities != decision.context.capabilities or applicability_problems(
+                spec, current_policy_context
+            ):
+                raise StalePolicyContextError(
+                    "numerical Action capabilities or applicability changed"
+                )
+            inputs = self._recovery_snapshot(episode)
+            source = self.aggregates.load_attempt(episode.context.target.id)
+            if inputs.successor_exists or source.status not in (
+                RunAttemptStatus.FAILED,
+                RunAttemptStatus.PREEMPTED,
+            ):
+                raise StaleRecoveryContextError("numerical source attempt changed before execution")
+            limits = episode.request.limits
+            if (
+                inputs.actual_attempt_count + inputs.pending_other_run_reservations + 1
+                > limits.max_attempts_per_run
+                or inputs.experiment_recovery_usage_excluding_target + 1
+                > limits.max_recoveries_per_experiment
+            ):
+                raise StaleRecoveryContextError(
+                    "numerical recovery limits no longer admit a successor"
+                )
+            record = self.checkpoints.get(str(checkpoint.checkpoint_ref.id))
+            producer = (
+                None if record is None else self.aggregates.load_attempt(record.context.target.id)
+            )
+            if (
+                record is None
+                or producer is None
+                or checkpoint
+                != RecoveryCheckpointReport.from_record(record, producer.attempt_number)
+                or checkpoint_report_problem(checkpoint, inputs) is not None
+            ):
+                raise StaleRecoveryContextError("validated numerical checkpoint report changed")
+            _require_numerical_successor_lineage(source, successor, action_id, checkpoint)
+            experiment_id = str(episode.context.experiment_id)
+            self._require_budget(experiment_id, new_run=False)
+            self._require_capacity(experiment_id)
+            self.aggregates._insert_attempt(successor)
+            self._require_and_insert_directives(successor, directives, initial=intervention)
+            stored_operation = self.operations._insert(operation)
+            self._emit(successor, "RunAttemptCreated", experiment_id, actor, destinations)
+            self._ledger(
+                experiment_id,
+                BudgetDimension.PARALLEL_RUNS,
+                LedgerEntryKind.RESERVE,
+                Decimal(1),
+                BudgetSubjectKind.TRAINING_ATTEMPT,
+                str(successor.id),
+                actor,
+                destinations,
+            )
+            self._emit_operation(
+                stored_operation, "RuntimeOperationIntended", experiment_id, actor, destinations
+            )
+            executing = action.with_status(ActionStatus.EXECUTING)
+            self.actions._update(executing)
+            self._emit_action(executing, "ActionExecuting", actor, destinations)
+            receipt = RecoveryExecutionReceipt(
+                episode_id=episode.id,
+                plan_id=plan.id,
+                plan_sequence=plan.sequence,
+                action_id=action_id,
+                outcome=RecoveryExecutionOutcome.EXECUTED,
+                successor_attempt_id=successor.id,
+                runtime_operation_id=stored_operation.id,
+                checkpoint_ref=checkpoint.checkpoint_ref,
+                created_by=actor,
+            )
+            self.numerical_recovery_executions._insert(
+                receipt, intervention_id=str(intervention.id)
+            )
+            self._emit(
+                source,
+                "RecoveryExecutionRecorded",
+                experiment_id,
+                actor,
+                destinations,
+                extra={
+                    "episode_id": str(episode.id),
+                    "plan_id": str(plan.id),
+                    "plan_sequence": plan.sequence,
+                    "action_id": str(action_id),
+                    "intervention_id": str(intervention.id),
+                    "successor_attempt_id": str(successor.id),
+                    "runtime_operation_id": str(stored_operation.id),
+                    "checkpoint_id": str(checkpoint.checkpoint_ref.id),
+                    "directives": [d.model_dump(mode="json") for d in directives],
+                },
+            )
+            return successor, stored_operation, receipt
+
+    def abandon_numerical_recovery_action(
+        self,
+        action_id: ActionId,
+        *,
+        actor: Actor,
+        reason: str,
+        destinations: tuple[str, ...] = (),
+    ) -> RecoveryExecutionReceipt:
+        """Record a definitive refusal of numerical recovery and fail the Run atomically.
+
+        For a rejected Action, or one no eligible checkpoint can carry. Mirrors
+        :meth:`abandon_oom_recovery_action`. Creates no successor or operation.
+        """
+        with write_transaction(self._connection):
+            binding = self.numerical_recovery_bindings.for_action(str(action_id))
+            if binding is None:
+                raise ProvenanceError("numerical Action has no recovery decision binding")
+            existing = self.numerical_recovery_executions.for_episode(str(binding.episode_id))
+            same = next((r for r in existing if r.action_id == action_id), None)
+            if same is not None:
+                if same.outcome is RecoveryExecutionOutcome.ABANDONED:
+                    return same
+                raise IdempotencyConflictError(
+                    str(binding.episode_id), ("recovery execution",), kind="recovery episode"
+                )
+            if any(r.outcome is RecoveryExecutionOutcome.EXECUTED for r in existing):
+                raise IdempotencyConflictError(
+                    str(binding.episode_id), ("recovery execution",), kind="recovery episode"
+                )
+            episode = self.recovery_episodes.get(str(binding.episode_id))
+            plan = self.recovery_plans.get(str(binding.plan_id))
+            action = self.actions.get(str(action_id))
+            if (
+                episode is None
+                or plan is None
+                or not self.recovery_plans.is_effective_and_fresh(str(plan.id))
+                or action is None
+                or action.status
+                not in (
+                    ActionStatus.VALIDATED,
+                    ActionStatus.APPROVAL_PENDING,
+                    ActionStatus.APPROVED,
+                    ActionStatus.REJECTED,
+                )
+            ):
+                raise StaleRecoveryContextError(
+                    "numerical Action no longer governs the open episode"
+                )
+            run = self.aggregates.load_run(episode.context.run_id)
+            if run.status is not RunStatus.ACTIVE:
+                raise StaleRecoveryContextError("numerical Run has already settled")
+            if action.status is not ActionStatus.REJECTED:
+                rejected = action.with_status(ActionStatus.REJECTED)
+                self.actions._update(rejected)
+                self._emit_action(rejected, "ActionRejected", actor, destinations)
+            receipt = RecoveryExecutionReceipt(
+                episode_id=episode.id,
+                plan_id=plan.id,
+                plan_sequence=plan.sequence,
+                action_id=action_id,
+                outcome=RecoveryExecutionOutcome.ABANDONED,
+                created_by=actor,
+            )
+            self.numerical_recovery_executions._insert(receipt, intervention_id=None)
+            failed = run.with_status(RunStatus.FAILED)
+            self.aggregates._update_run(failed)
+            self._settle_budget(failed, actor, destinations)
+            self._emit(
+                failed, "RunStatusChanged", str(episode.context.experiment_id), actor, destinations
+            )
+            self._emit(
+                self.aggregates.load_attempt(episode.context.target.id),
+                "RecoveryExecutionRecorded",
+                str(episode.context.experiment_id),
+                actor,
+                destinations,
+                extra={
+                    "episode_id": str(episode.id),
+                    "plan_id": str(plan.id),
+                    "plan_sequence": plan.sequence,
+                    "action_id": str(action_id),
+                    "outcome": "ABANDONED",
+                    "reason": reason,
+                },
+            )
+            return receipt
+
+    def _settle_numerical_action_on_effect(
+        self,
+        intervention: TrainingIntervention,
+        directive: InterventionDirective,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> None:
+        """The first confirmed effect completes the governing Action."""
+        if directive.kind is not InterventionDirectiveKind.INITIAL:
+            return
+        action = self.actions.get(str(intervention.action_id))
+        if action is not None and action.status is ActionStatus.EXECUTING:
+            settled = action.with_status(ActionStatus.SUCCEEDED, outcome=ActionOutcome.APPLIED)
+            self.actions._update(settled)
+            self._emit_action(settled, "ActionApplied", actor, destinations)
+
+    def _fail_unconfirmed_numerical_action(
+        self, attempt: RunAttempt, actor: Actor, destinations: tuple[str, ...]
+    ) -> None:
+        """A successor that ended without confirming its first effect fails the Action.
+
+        The intervention stays as the immutable decision; it simply never took
+        effect, so nothing will re-apply it.
+        """
+        if not attempt.is_terminal:
+            return
+        receipt = self.numerical_recovery_executions.for_successor(str(attempt.id))
+        if receipt is None or receipt.outcome is not RecoveryExecutionOutcome.EXECUTED:
+            return
+        action = self.actions.get(str(receipt.action_id))
+        if action is None or action.status is not ActionStatus.EXECUTING:
+            return
+        initial = next(
+            (
+                directive
+                for directive in self.intervention_directives.for_attempt(str(attempt.id))
+                if directive.kind is InterventionDirectiveKind.INITIAL
+            ),
+            None,
+        )
+        if initial is not None and self.intervention_applications.get(str(initial.application_id)):
+            return
+        failed = action.with_status(ActionStatus.FAILED)
+        self.actions._update(failed)
+        self._emit_action(
+            failed,
+            "ActionFailed",
+            actor,
+            destinations,
+            extra={"reason": "successor ended before confirming the intervention's effect"},
+        )
 
     def _record_oom_recovery_execution(
         self,
@@ -2959,8 +3435,13 @@ class ControlPlaneRepository:
         capabilities: CapabilityDocument | None = None,
         operation_id: OperationId | None = None,
         destinations: tuple[str, ...] = (),
+        directives: tuple[InterventionDirective, ...] = (),
     ) -> tuple[RunAttempt, RuntimeOperation, RecoveryExecutionReceipt]:
         """Commit one governed OOM successor, submit intent and receipt atomically.
+
+        *directives* re-apply interventions that the restore dropped from the
+        retained trajectory (ADR-011 ``REAPPLY_AFTER_ROLLBACK``); they are
+        re-derived under the lock. A run without interventions has none.
 
         A trusted executor must validate checkpoint bytes and resolve the
         source/successor training plans before this call. Under the write lock,
@@ -3080,6 +3561,7 @@ class ControlPlaneRepository:
             self._require_budget(experiment_id, new_run=False)
             self._require_capacity(experiment_id)
             self.aggregates._insert_attempt(successor)
+            self._require_and_insert_directives(successor, directives, initial=None)
             stored_operation = self.operations._insert(operation)
             self._emit(successor, "RunAttemptCreated", experiment_id, actor, destinations)
             self._ledger(
@@ -4519,6 +5001,20 @@ class ControlPlaneRepository:
                 actor,
                 destinations,
             )
+            if (
+                moved.type == "submit"
+                and moved.caused_by_action_id is not None
+                and state == "failed"
+                and self.numerical_recovery_executions.for_action(str(moved.caused_by_action_id))
+                is not None
+            ):
+                # A numerical Action succeeds only on confirmed effect, never on
+                # submission; a submission that definitively failed fails it.
+                numerical = self.actions.get(str(moved.caused_by_action_id))
+                if numerical is not None and numerical.status is ActionStatus.EXECUTING:
+                    failed_action = numerical.with_status(ActionStatus.FAILED)
+                    self.actions._update(failed_action)
+                    self._emit_action(failed_action, "ActionFailed", actor, destinations)
             if moved.type == "submit" and moved.caused_by_action_id is not None:
                 binding = self.recovery_action_bindings.for_action(str(moved.caused_by_action_id))
                 if binding is not None and state in ("confirmed", "failed"):

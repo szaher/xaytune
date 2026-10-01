@@ -314,6 +314,23 @@ class NumericalInstabilityObserved(FrozenDomainModel):
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
 
+class InterventionAppliedPayload(FrozenDomainModel):
+    """A worker confirms one directed intervention took effect (ADR-011).
+
+    Reported only for a directive the resolved plan carried, under its
+    pre-assigned application id, after the worker applied it to restored
+    state and read back the value it replaced. The controller records the
+    ``InterventionApplication`` from this, and from nothing else.
+    """
+
+    type: Literal["InterventionApplied"] = "InterventionApplied"
+    application_id: Name
+    intervention_id: Name
+    optimizer_step: Counter
+    previous_value: Positive
+    applied_value: Positive
+
+
 class EvaluationStartedPayload(FrozenDomainModel):
     type: Literal["EvaluationStarted"] = "EvaluationStarted"
 
@@ -381,7 +398,8 @@ TrainingObservation = Annotated[
     | IncidentObservedPayload
     | GradientOverflowObserved
     | OptimizerStepSkipped
-    | NumericalInstabilityObserved,
+    | NumericalInstabilityObserved
+    | InterventionAppliedPayload,
     Field(discriminator="type"),
 ]
 

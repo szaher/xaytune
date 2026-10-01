@@ -3,32 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 
 from xaytune.checkpoints import (
-    CheckpointCompatibilityError,
-    CheckpointCorruptionError,
     CheckpointManager,
-    LocalCheckpointStore,
 )
 from xaytune.compilation.attempt_resolution import training_execution_fingerprint
 from xaytune.core.capabilities import CapabilityDocument
+from xaytune.core.domain.intervention import InterventionDirective
 from xaytune.core.domain.operation import RuntimeOperation
-from xaytune.core.domain.recovery import (
-    RecoveryCheckpointReport,
-    checkpoint_order,
-    checkpoint_report_problem,
-)
 from xaytune.core.domain.recovery_execution import RecoveryExecutionReceipt
 from xaytune.core.domain.run import ExecutionOverride, RunAttempt
 from xaytune.core.execution import (
-    PythonModuleEntrypoint,
     ResolvedExecutionPlan,
     TrainingExecutionSpec,
 )
-from xaytune.core.ids import ActionId, OperationId, RunAttemptId
+from xaytune.core.ids import ActionId, InterventionApplicationId, OperationId, RunAttemptId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor
+from xaytune.resilience.successor import require_managed_restore, select_restore_checkpoint
 from xaytune.storage.control_plane import (
     ControlPlaneRepository,
     ProvenanceError,
@@ -52,7 +44,7 @@ class OOMRecoveryExecutor:
         self,
         repository: ControlPlaneRepository,
         checkpoint_manager: CheckpointManager,
-        resolve_plan: Callable[[RunAttempt], ResolvedExecutionPlan],
+        resolve_plan: Callable[..., ResolvedExecutionPlan],
         *,
         capabilities: CapabilityDocument | None = None,
         destinations: tuple[str, ...] = (),
@@ -93,36 +85,9 @@ class OOMRecoveryExecutor:
         proposal = binding.proposal
         if not isinstance(source_plan.spec, TrainingExecutionSpec):
             raise ProvenanceError("OOM source does not resolve to a training execution")
-        if (
-            self.capabilities is None
-            or self.capabilities.checkpoint is None
-            or self.capabilities.checkpoint.full_exact_restore is not True
-        ):
-            raise OOMCheckpointUnavailableError(
-                "runtime has not declared FULL+EXACT checkpoint application"
-            )
-        supported_entrypoints = self.capabilities.extensions.get(
-            "checkpoint_restore_entrypoints", ()
+        require_managed_restore(
+            self.capabilities, source_plan, self.checkpoint_manager, OOMCheckpointUnavailableError
         )
-        if supported_entrypoints and (
-            not isinstance(source_plan.spec.entrypoint, PythonModuleEntrypoint)
-            or source_plan.spec.entrypoint.module not in supported_entrypoints
-        ):
-            raise OOMCheckpointUnavailableError(
-                "runtime has not declared FULL+EXACT restore for this worker"
-            )
-        if supported_entrypoints:
-            store_uri = source_plan.spec.checkpoint.store_uri
-            store = self.checkpoint_manager.store
-            if (
-                source_plan.spec.checkpoint.format != "native-torch/v1"
-                or store_uri is None
-                or not isinstance(store, LocalCheckpointStore)
-                or store.root != Path(store_uri).resolve()
-            ):
-                raise OOMCheckpointUnavailableError(
-                    "managed worker and checkpoint manager do not share the declared store"
-                )
         optimization = source_plan.spec.config.get("optimization")
         workers = source_plan.spec.resources.workers or 1
         if (
@@ -137,7 +102,9 @@ class OOMRecoveryExecutor:
         ):
             raise StaleRecoveryContextError("OOM proposal no longer describes source execution")
 
-        checkpoint = await self._select_checkpoint(episode)
+        checkpoint = await select_restore_checkpoint(
+            self.repository, self.checkpoint_manager, episode, OOMCheckpointUnavailableError
+        )
         new_id = RunAttemptId.generate()
         operation_id = OperationId.generate()
         prior_overrides = source.execution_overrides
@@ -186,7 +153,29 @@ class OOMRecoveryExecutor:
             execution_overrides=overrides,
             checkpoint_ref=checkpoint.checkpoint_ref,
         )
-        resolved = self.resolve_plan(draft)
+        # A restore that drops an earlier intervention's effect re-applies it
+        # (ADR-011 REAPPLY_AFTER_ROLLBACK); a run without interventions has none,
+        # and its successor resolves exactly as before.
+        replay = self.repository.plan_successor_interventions(
+            source.run_id, checkpoint.checkpoint_ref
+        )
+        directives = tuple(
+            InterventionDirective(
+                application_id=InterventionApplicationId.generate(),
+                intervention_id=planned.intervention_id,
+                attempt_id=draft.id,
+                ordinal=ordinal,
+                kind=planned.kind,
+                mutation=planned.mutation,
+                expected_previous_value=planned.expected_previous_value,
+            )
+            for ordinal, planned in enumerate(replay.directives)
+        )
+        resolved = (
+            self.resolve_plan(draft, directives=directives)
+            if directives
+            else self.resolve_plan(draft)
+        )
         if (
             not isinstance(resolved.spec, TrainingExecutionSpec)
             or resolved.target.kind != "training-attempt"
@@ -213,31 +202,5 @@ class OOMRecoveryExecutor:
             capabilities=self.capabilities,
             operation_id=operation_id,
             destinations=self.destinations,
+            directives=directives,
         )
-
-    async def _select_checkpoint(self, episode) -> RecoveryCheckpointReport:
-        request = episode.request
-        if request.restore_context is None or not self.checkpoint_manager.supports_validation:
-            raise OOMCheckpointUnavailableError(
-                "OOM recovery requires consumer restore context and validation capability"
-            )
-        inputs = self.repository.recovery_snapshot(episode)
-        if inputs.successor_exists:
-            raise StaleRecoveryContextError("OOM episode closed before checkpoint assessment")
-        candidates = []
-        for attempt in self.repository.aggregates.attempts_for_run(episode.context.run_id):
-            if attempt.attempt_number > episode.attempt_number:
-                continue
-            for record in self.repository.checkpoints.for_attempt(str(attempt.id)):
-                report = RecoveryCheckpointReport.from_record(record, attempt.attempt_number)
-                candidates.append((report, record))
-        candidates.sort(key=lambda pair: checkpoint_order(pair[0]), reverse=True)
-        for report, record in candidates:
-            if checkpoint_report_problem(report, inputs) is not None:
-                continue
-            try:
-                await self.checkpoint_manager.validate_recorded(record, request.restore_context)
-            except (CheckpointCompatibilityError, CheckpointCorruptionError, OSError):
-                continue
-            return report
-        raise OOMCheckpointUnavailableError("no validated FULL+EXACT checkpoint is eligible")

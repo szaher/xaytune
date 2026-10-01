@@ -72,7 +72,13 @@ class NumericalRecoveryPlanner:
                 NumericalEscalationCode.CONFLICTING_SPECIALISED_EVIDENCE,
                 "accepted evidence requires another specialised recovery family",
             )
-        if any(r.specialised_family != NUMERICAL_FAMILY for _, _, r in pairs):
+        # The failed worker's exit is transient process evidence (exactly as an OOM
+        # attempt's is); anything else outside the family is not ours to answer.
+        if any(
+            r.specialised_family != NUMERICAL_FAMILY
+            and r.recoverability is not Recoverability.RECOVERABLE_NEW_ATTEMPT
+            for _, _, r in pairs
+        ):
             return escalate(
                 NumericalEscalationCode.UNSUPPORTED_EVIDENCE,
                 "accepted evidence includes diagnoses outside numerical recovery",

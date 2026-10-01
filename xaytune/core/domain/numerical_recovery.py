@@ -52,6 +52,7 @@ __all__ = [
     "NumericalRecoveryPlannerResult",
     "NumericalRecoveryPolicyV1",
     "PriorNumericalIntervention",
+    "UnsupportedNumericalRecoveryError",
 ]
 
 NUMERICAL_FAMILY = "numerical-intervention"
@@ -63,6 +64,14 @@ NONFINITE_CATEGORIES: frozenset[IncidentCategory] = frozenset(
 """The diagnoses the v1 planner can answer with a learning-rate reduction."""
 
 _LearningRate = Annotated[float, Field(gt=0, strict=True, allow_inf_nan=False)]
+
+
+class UnsupportedNumericalRecoveryError(ValueError):
+    """Numerical recovery was armed where it cannot be honoured. Refused at submission."""
+
+    def __init__(self, reasons: tuple[str, ...]) -> None:
+        self.reasons = reasons
+        super().__init__("numerical recovery cannot be armed: " + "; ".join(reasons))
 
 
 class NumericalRecoveryPolicyV1(FrozenDomainModel):

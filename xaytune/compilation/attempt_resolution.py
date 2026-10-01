@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from xaytune.core.domain.intervention import InterventionDirective
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.domain.run import RunAttempt
 from xaytune.core.execution import ResolvedExecutionPlan, TrainingExecutionSpec
+from xaytune.core.execution_controls import (
+    MANAGED_NUMERICAL_RECOVERY,
+    TRAINING_INTERVENTIONS,
+    ManagedNumericalRecoveryControl,
+    TrainingInterventionDirectives,
+)
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, thaw
 
@@ -22,6 +29,7 @@ def training_execution_fingerprint(plan: ResolvedExecutionPlan) -> str:
         raise ValueError("training execution identity requires a training plan")
     options = thaw(plan.runtime_options)
     options.pop("checkpoint_restore", None)
+    options.pop(TRAINING_INTERVENTIONS, None)
     return fingerprint(
         {
             "kind": "training-execution/v1",
@@ -34,7 +42,13 @@ def training_execution_fingerprint(plan: ResolvedExecutionPlan) -> str:
 
 
 def resolve_training_attempt(
-    spec: TrainingExecutionSpec, attempt: RunAttempt, runtime: str
+    spec: TrainingExecutionSpec,
+    attempt: RunAttempt,
+    runtime: str,
+    *,
+    directives: tuple[InterventionDirective, ...] = (),
+    numerical_recovery: bool = False,
+    restore_action_id: str | None = None,
 ) -> ResolvedExecutionPlan:
     """Apply recorded operational lineage after trainer-neutral compilation.
 
@@ -43,6 +57,12 @@ def resolve_training_attempt(
     Every ``from`` value must match the configuration reached so far, and each
     pair must preserve effective batch. No overrides means the legacy plan is
     byte-equivalent to the pre-recovery path. Inconsistent lineage fails closed.
+
+    *directives* are the attempt's durable intervention directives; they ride
+    in ``runtime_options`` and need a restore. *numerical_recovery* adds the
+    managed numerical-recovery execution control. *restore_action_id* names a
+    numerical Action whose successor this is: its restore override is not tied
+    to a resize. With all three at their defaults the plan is unchanged.
     """
     config: dict[str, Any] = thaw(spec.config)
     optimization: dict[str, Any] | None = None
@@ -111,7 +131,10 @@ def resolve_training_attempt(
             restore_id = override.values["checkpoint_id"]
             if not isinstance(restore_id, str):
                 raise ValueError("checkpoint restore override requires a checkpoint id")
-            if override.action_id is not None and override.action_id != latest_resize_action_id:
+            if override.action_id is not None and override.action_id not in (
+                latest_resize_action_id,
+                restore_action_id,
+            ):
                 raise ValueError("checkpoint restore belongs to another governing Action")
         else:
             raise ValueError(f"unsupported training execution override {override.kind}")
@@ -125,11 +148,20 @@ def resolve_training_attempt(
         raise ValueError("checkpoint restore override names another checkpoint")
 
     resolved_spec = spec if not resized else spec.model_copy(update={"config": FrozenDict(config)})
-    options = (
-        FrozenDict()
-        if checkpoint is None
-        else FrozenDict({"checkpoint_restore": checkpoint.model_dump(mode="json")})
-    )
+    if directives and (
+        checkpoint is None or any(directive.attempt_id != attempt.id for directive in directives)
+    ):
+        raise ValueError("intervention directives need this attempt's checkpoint restore")
+    raw: dict[str, Any] = {}
+    if checkpoint is not None:
+        raw["checkpoint_restore"] = checkpoint.model_dump(mode="json")
+    if directives:
+        raw[TRAINING_INTERVENTIONS] = TrainingInterventionDirectives(
+            directives=directives
+        ).model_dump(mode="json")
+    if numerical_recovery:
+        raw[MANAGED_NUMERICAL_RECOVERY] = ManagedNumericalRecoveryControl().model_dump(mode="json")
+    options = FrozenDict(raw)
     return ResolvedExecutionPlan(
         spec=resolved_spec,
         runtime=runtime,

@@ -368,14 +368,74 @@ Consequences, all of which keep PR-019/020 semantics unchanged:
   the base rate on the applying attempt's retained trajectory immediately before the
   application, and `checkpoint_ancestor` is that attempt's own restore checkpoint.
   The database ties the ancestor to the attempt's `checkpoint_ref`.
-- An intervention bound to a numerical recovery decision is applied **only** on its
-  episode's successor: same Run, attempt number N+1, never the source attempt, and
-  with a restore checkpoint. The repository and the database both enforce this.
-  Interventions without a numerical binding, such as a researcher's governed LR change,
-  keep the generic application rules.
-- Re-applying a numerical intervention on a *later* attempt after another rollback
-  (`REAPPLY_AFTER_ROLLBACK` onto N+2) is not permitted yet. Its guard belongs to the
-  executor gate.
+- An intervention bound to a numerical recovery decision takes effect **only** through a
+  durable *directive*, recorded atomically with a checkpoint-backed successor. Its first
+  effect (`initial`) is only on its episode's successor N+1, never the source attempt.
+  The repository and the database both enforce this. Interventions without a numerical
+  binding, such as a researcher's governed LR change, keep the generic application rules.
+
+#### Arming
+
+Numerical recovery is armed per experiment by an explicit, recorded
+`numerical_recovery: NumericalRecoveryPolicyV1`. It is never inferred, and it is
+refused at submission unless the compiled plan has managed Native checkpoints, the
+runtime declares the worker requests for that worker, and the host has a checkpoint
+manager and an explicit first `RecoveryRequest`. Arming adds a versioned
+`managed_numerical_recovery` execution control to every resolved training plan. It is
+part of the execution identity and request digest, and never candidate identity. The
+runtime passes it through opaquely.
+
+When armed, the managed Native worker reports `NumericalInstabilityObserved` first. A
+**separate** guard then fails the attempt with `TrainingFailed(numerical-nan|inf)`. It
+is registered before checkpoint capture, so the unsafe step is never captured. The
+NaN/Inf detector (v2) reads that reason as the same diagnosis, and the worker's
+transient nonzero exit does not block recovery, just as for OOM. Attempt N becomes
+FAILED and the Run stays ACTIVE. Unarmed runs, including runs with managed
+checkpoints, keep report-and-continue.
+
+#### Directives and replay after rollback (ADR-011)
+
+The successor transaction records, under pre-assigned application ids, the directives
+the worker applies on restore in ordinal order:
+
+```text
+restore checkpoint C, which embodies applications E (from its FULL manifest)
+for each intervention that took effect on this run, in first-effect order:
+    some application of it is in E      -> its effect survives; nothing to do
+    APPLY_ONCE                          -> deliberately not re-applied
+    REAPPLY_AFTER_ROLLBACK              -> re-apply the SAME intervention (new application)
+    REARM_TRIGGER                       -> refused: re-arming is not supported yet
+then this episode's intervention        -> its first application
+```
+
+Each directive pins the expected previous base rate. The worker replaces the base rate
+that the schedule scales, keeping the schedule's position, refuses any mismatch before
+a step runs, and reports `InterventionApplied`. The controller records the
+`InterventionApplication` only from that report, and only for a directive the attempt
+carried. The application and the attempt's telemetry cursor commit together, and an
+identical redelivered report still advances the cursor. The first confirmed
+application completes the Action (`SUCCEEDED/APPLIED`). A failed submission, or a
+successor that ends without confirming it, fails the Action, while the intervention
+remains as the immutable decision. A re-application creates a new application, never a
+new Action or intervention. The OOM successor path computes the same re-applications.
+
+A Run succeeds only on a trajectory the control plane can vouch for. If its final
+attempt exits cleanly with any directive unconfirmed, the attempt is `SUCCEEDED`
+(the process outcome is true), the Run is `FAILED`, and nothing is evaluated. The
+repository and the database both refuse `Run → SUCCEEDED` in that state.
+
+An executed numerical recovery is one unit of `max_recoveries_per_experiment`, like
+an executed OOM recovery or a generic RETRY/RESUME. The count is by episode, never by
+receipt.
+
+Every FULL+EXACT capture records the exact `applied_intervention_application_ids` it
+embodies: those inherited from the restored manifest plus those applied in the
+attempt. Lineage that is unknown (a checkpoint that does not say) or ambiguous fails
+closed: no successor is recorded. Ambiguous means the checkpoint names an application
+the run never recorded, or names applications that do not compose, in event order,
+into a trajectory from the declared rate. Each application's previous value must be
+the rate the one before it left, its applied value must be its intervention's, and
+there is at most one application per intervention.
 
 In-place mutation of a running attempt would need several episodes per attempt, an
 episode generation identity, application-based closure, and changes to repeat

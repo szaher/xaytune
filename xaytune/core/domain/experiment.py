@@ -15,6 +15,7 @@ from pydantic import AliasChoices, Field
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
 from xaytune.core.domain.evaluation import EvaluationSpec
+from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import InvalidTransitionError
@@ -71,6 +72,13 @@ class Experiment(AggregateModel):
     objective: Objective
     policy_ref: str | None = None
     budget: BudgetSpec | None = None
+    numerical_recovery: NumericalRecoveryPolicyV1 | None = None
+    """Arms managed numerical recovery, with its explicit algorithm parameters.
+
+    ``None`` -- the default, and every record written before PR-021 -- means
+    numerical recovery is not armed: a nonfinite loss is reported and the
+    worker keeps its report-and-continue behaviour.
+    """
 
     status: ExperimentStatus = ExperimentStatus.CREATED
     active_node_ids: tuple[ExperimentNodeId, ...] = Field(default_factory=tuple)

@@ -118,6 +118,22 @@ async def _await_state(runtime: LocalRuntime, ref: object, state: str) -> None:
     raise AssertionError(f"workload never reached {state!r}")
 
 
+async def _await_events(paths: WorkloadPaths, minimum: int) -> None:
+    """Until the launcher has durably written *minimum* complete telemetry lines.
+
+    ``running`` means the worker exists, not that anything was emitted: the
+    launcher records ``started`` before it writes ``WorkerReady``.
+    """
+    deadline = asyncio.get_running_loop().time() + _SETTLE_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        if paths.events.exists():
+            content = paths.events.read_text(encoding="utf-8")
+            if content.count("\n") >= minimum:
+                return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"the launcher never wrote {minimum} telemetry event(s)")
+
+
 @pytest.fixture
 def runtime(tmp_path: Path) -> LocalRuntime:
     backend = LocalRuntime(tmp_path / "runtime")
@@ -949,7 +965,10 @@ def test_watching_ends_when_the_supervisor_is_gone(runtime: LocalRuntime) -> Non
 
         workload = runtime._registry.workload(ref.external_id)
         assert workload is not None and workload.launcher_pid is not None
-        worker_pid = (read_json(WorkloadPaths(workload.directory).started) or {})["pid"]
+        paths = WorkloadPaths(workload.directory)
+        worker_pid = (read_json(paths.started) or {})["pid"]
+        # Kill only once WorkerReady is durable, so there is history to replay.
+        await _await_events(paths, minimum=1)
         os.kill(workload.launcher_pid, signal.SIGKILL)
         await asyncio.sleep(0.3)
 

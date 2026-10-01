@@ -398,7 +398,7 @@ is already durable. This is governance provenance, not successor authority:
 the executor must still verify the failed attempt's resolved configuration,
 checkpoint bytes, limits and plan freshness before any successor write.
 
-## Numerical recovery and training interventions (PR-021, pre-executor)
+## Numerical recovery and training interventions (PR-021)
 
 A learning-rate drop taken because a continuing run became numerically unstable
 changes training semantics. It is therefore a `TrainingIntervention` on the same
@@ -413,8 +413,8 @@ NUMERICAL_NAN / NUMERICAL_INF incident
   → ChangeLearningRate Action + NumericalRecoveryActionBinding
   → PolicyEngine: DENY / REQUIRE_APPROVAL / ALLOW
   → TrainingIntervention                       (only for an authorized Action)
-  → successor attempt restored from a FULL+EXACT checkpoint   (executor gate)
-  → InterventionApplication on the successor  (only on confirmed effect; executor gate)
+  → successor attempt restored from a FULL+EXACT checkpoint, with directives
+  → worker applies and confirms → InterventionApplication → Action SUCCEEDED
 ```
 
 **Execution model (v1).** The LR change rides on a checkpoint-backed successor
@@ -470,10 +470,31 @@ supplied. `previous_value` is the base rate on the applying attempt's retained
 trajectory just before the application, and the effect confirmation's observed
 value must equal it. `checkpoint_ancestor` is that attempt's own restore
 checkpoint, and the database refuses any other. An intervention bound to a
-numerical recovery decision may be applied only on its episode's checkpoint-backed
-successor (attempt N+1): not on the source attempt, not on a fresh restart, and not
-on a later attempt. Other interventions keep the generic rules. Nothing records an
-application yet: that belongs to the executor, which is the next review gate.
+numerical recovery decision takes effect only through a *directive* recorded with
+a checkpoint-backed successor: its first effect is only on the episode's successor
+(attempt N+1), never on the source attempt or a fresh restart. Other interventions
+keep the generic rules.
+
+**Arming and execution.** Set `ExperimentSpec.numerical_recovery` to a
+`NumericalRecoveryPolicyV1` to arm numerical recovery for an experiment. It is
+recorded with the experiment, and `submit()` refuses it
+(`UnsupportedNumericalRecoveryError`) unless the plan uses managed Native
+checkpoints, the runtime declares the worker requests, and the host has a
+checkpoint manager and `recovery_request_for_incident`.
+
+When armed, a nonfinite loss makes the Native worker report the observation and
+then fail the attempt. The unsafe step is never checkpointed. The host then
+proposes the governed `ChangeLearningRate`, records the `TrainingIntervention`,
+restores the newest validated checkpoint from before the failure into attempt N+1,
+and the worker applies the new base learning rate and confirms it. The Run stays
+active throughout, and succeeds or fails on the successor.
+
+If a later restore drops an earlier intervention's effect (the restored checkpoint's
+manifest does not embody any of its applications), a `REAPPLY_AFTER_ROLLBACK`
+intervention is re-applied: the same decision gets a new application, and no new
+Action is created. `APPLY_ONCE` is not re-applied. A checkpoint whose embodied
+applications are unknown or unrecorded fails closed. Every managed capture records
+the applications it embodies, which is what lets lineage survive a rollback.
 
 `repository.get_run_realization(run_id)` projects a `RunRealization`, which is
 never stored. `rebuild_run_realization(run, repository.events_for_run(run_id), ...)`

@@ -84,7 +84,14 @@ possible."""
 
 _ENVELOPE: TypeAdapter[RuntimeEventEnvelope] = TypeAdapter(RuntimeEventEnvelope)
 
-_RUNTIME_OPTIONS = frozenset({"working_directory", "checkpoint_restore"})
+_WORKER_REQUESTS = frozenset({"managed_numerical_recovery", "training_interventions"})
+"""Opaque, versioned requests for the managed Native worker.
+
+The runtime neither reads nor interprets them: it only refuses them for any
+other worker, which would silently ignore them. Their meaning is the worker's
+(:mod:`xaytune.core.execution_controls`)."""
+
+_RUNTIME_OPTIONS = frozenset({"working_directory", "checkpoint_restore"}) | _WORKER_REQUESTS
 """Every runtime option this backend implements.
 
 Checked as a closed set rather than read opportunistically. An unknown
@@ -149,7 +156,14 @@ class LocalRuntime:
                 atomic_commit=False,
                 full_exact_restore=True,
             ),
-            extensions=FrozenDict({"checkpoint_restore_entrypoints": ("xaytune.workers.native",)}),
+            extensions=FrozenDict(
+                {
+                    "checkpoint_restore_entrypoints": ("xaytune.workers.native",),
+                    "worker_requests": {
+                        "xaytune.workers.native": tuple(sorted(_WORKER_REQUESTS)),
+                    },
+                }
+            ),
             resilience=ResilienceCapabilities(
                 per_step=False,
                 provider="local-subprocess",
@@ -570,6 +584,18 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
         or plan.spec.checkpoint.store_uri is None
     ):
         return "local FULL+EXACT restore is supported only by the managed Native worker"
+
+    requested = sorted(set(plan.runtime_options) & _WORKER_REQUESTS)
+    if requested and (
+        not isinstance(plan.spec, TrainingExecutionSpec)
+        or not isinstance(plan.spec.entrypoint, PythonModuleEntrypoint)
+        or plan.spec.entrypoint.module != "xaytune.workers.native"
+        or plan.spec.checkpoint.format != "native-torch/v1"
+    ):
+        return (
+            f"local worker requests {', '.join(repr(item) for item in requested)} are "
+            f"honoured only by the managed Native worker"
+        )
 
     # Whichever plugin produced the spec -- a compiler or an evaluator -- is
     # checked the same way; the runtime does not ask which it was.

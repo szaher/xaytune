@@ -1891,6 +1891,7 @@ class EmbeddedControllerHost:
             ),
             artifact_root=spec.artifact_root,
             budget=spec.budget,
+            numerical_recovery=spec.numerical_recovery,
             evaluation=evaluation,
         )
         self.repository.create_experiment(experiment, actor=_ACTOR)

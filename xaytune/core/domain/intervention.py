@@ -45,6 +45,8 @@ from xaytune.core.refs import Actor, CheckpointRef
 __all__ = [
     "IncidentTrigger",
     "InterventionApplication",
+    "InterventionDirective",
+    "InterventionDirectiveKind",
     "InterventionOrigin",
     "InterventionReplayPolicy",
     "InterventionTrigger",
@@ -363,3 +365,41 @@ class InterventionApplication(FrozenDomainModel):
     def semantic_fingerprint(self) -> str:
         """Identity for idempotent replay, without the repository's sequence or time."""
         return fingerprint(self.model_dump(mode="json", exclude={"event_sequence", "created_at"}))
+
+
+# ---- directives: durable intent to apply on a successor ----------------------------------
+
+
+class InterventionDirectiveKind(str, Enum):
+    """Why a successor attempt is asked to apply an intervention."""
+
+    INITIAL = "initial"
+    """The intervention's first effect, on its numerical episode's successor."""
+
+    REAPPLY_AFTER_ROLLBACK = "reapply-after-rollback"
+    """A restore dropped every earlier application from the retained trajectory."""
+
+
+class InterventionDirective(FrozenDomainModel):
+    """Durable intent, recorded with the successor, to apply one intervention there.
+
+    Intent, not effect: the application is recorded only when the worker
+    confirms it, under the pre-assigned ``application_id``. The expected
+    previous value is the base rate the restored trajectory reaches just
+    before this directive, so the worker can refuse a state that disagrees.
+    """
+
+    schema_version: Literal["xaytune.intervention-directive/v1alpha1"] = (
+        "xaytune.intervention-directive/v1alpha1"
+    )
+    application_id: InterventionApplicationId
+    intervention_id: InterventionId
+    attempt_id: RunAttemptId
+    ordinal: StrictInt = Field(ge=0)
+    kind: InterventionDirectiveKind
+    mutation: TrainingMutation
+    expected_previous_value: _LearningRate
+
+    @property
+    def applied_value(self) -> float:
+        return self.mutation.learning_rate

@@ -97,7 +97,7 @@ def test_policy_has_no_defaults_and_bounds_the_multiplier():
     "extra,code",
     [
         ("cuda-oom", NumericalEscalationCode.CONFLICTING_SPECIALISED_EVIDENCE),
-        ("process-failure", NumericalEscalationCode.UNSUPPORTED_EVIDENCE),
+        ("checkpoint-write-failure", NumericalEscalationCode.UNSUPPORTED_EVIDENCE),
         ("config-error", NumericalEscalationCode.PLAN_NOT_AWAITING_REVIEW),
     ],
 )
@@ -106,6 +106,14 @@ def test_mixed_evidence_fails_closed(connection, extra, code):
     result = PLANNER.plan(inputs)
     assert isinstance(result, NumericalEscalation)
     assert result.code is code
+
+
+def test_the_failed_workers_transient_exit_does_not_block_recovery(connection):
+    """As for OOM: the nonzero exit that follows the failure is transient evidence."""
+    _, _, observed, inputs = inputs_for(connection, extra="process-failure")
+    proposal = PLANNER.plan(inputs)
+    assert isinstance(proposal, NumericalLRProposal)
+    assert proposal.trigger.incident_id == observed.id
 
 
 def test_numerical_family_without_a_nonfinite_diagnosis_is_unsupported(connection):

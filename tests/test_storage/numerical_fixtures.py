@@ -27,6 +27,7 @@ from xaytune.core.domain.candidate import (
     TrainingSpec,
 )
 from xaytune.core.domain.intervention import (
+    InterventionDirective,
     InterventionOrigin,
     InterventionReplayPolicy,
     LearningRateMutation,
@@ -36,7 +37,10 @@ from xaytune.core.domain.intervention import (
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.domain.policy import PolicyVerdict
-from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.domain.recovery import RecoveryCheckpointReport, RecoveryRequest
+from xaytune.core.domain.run import ExecutionOverride
+from xaytune.core.fingerprint import fingerprint
+from xaytune.core.ids import InterventionApplicationId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, DatasetRef, ModelRef
 from xaytune.core.state.status import ExperimentStatus, RunAttemptStatus, RunStatus
@@ -108,13 +112,18 @@ def nonfinite_plan(repo, attempt, reason="numerical-nan", sequence=9):
     return observed, decide(repo, observed, RecoveryRequest())
 
 
-def _record_checkpoint(repo, attempt, tmp_path, name, step, sequence):
+def _record_checkpoint(repo, attempt, tmp_path, name, step, sequence, embodied=()):
     run = repo.aggregates.load_run(str(attempt.run_id))
     state, context, _ = make_bundle(
         tmp_path / name, attempt_id=attempt.id, candidate=run.candidate_fingerprint
     )
     manager = CheckpointManager(SerializedStateCodec(), LocalCheckpointStore(tmp_path / "bundles"))
-    ref = asyncio.run(manager.save(replace(state, optimizer_step=step), context))
+    manifest = state.state_manifest.model_copy(
+        update={"applied_intervention_application_ids": tuple(str(item) for item in embodied)}
+    )
+    ref = asyncio.run(
+        manager.save(replace(state, optimizer_step=step, state_manifest=manifest), context)
+    )
     manifest = asyncio.run(manager.store.get(ref)).manifest
     event = RuntimeEventEnvelope(
         event_id=name,
@@ -215,3 +224,60 @@ def human_intervention(repo, run, learning_rate=5e-5):
         ),
         actor=ACTOR,
     )
+
+
+record_checkpoint = _record_checkpoint
+
+
+def executed_successor(repo, run, source, action_id, checkpoint):
+    """Commit a numerical successor through the real successor transaction.
+
+    Stands in for the executor's I/O half (byte validation and plan resolution):
+    the directives come from the repository's own replay plan, with fresh
+    application ids, exactly as the executor assigns them.
+    """
+    intervention = repo.training_interventions.for_action(str(action_id))
+    reference = checkpoint.payload.checkpoint_ref
+    prior = source.execution_overrides
+    if prior and prior[-1].kind == "checkpoint_restore":
+        prior = prior[:-1]
+    successor = RunAttempt(
+        id=RunAttemptId.generate(),
+        run_id=run.id,
+        attempt_number=source.attempt_number + 1,
+        execution_fingerprint=source.execution_fingerprint,
+        execution_overrides=(
+            *prior,
+            ExecutionOverride(
+                id=f"{action_id}:checkpoint-restore",
+                kind="checkpoint_restore",
+                reason="restore validated FULL+EXACT checkpoint",
+                values=FrozenDict({"checkpoint_id": str(reference.id)}),
+                action_id=action_id,
+            ),
+        ),
+        checkpoint_ref=reference,
+    )
+    plan = repo.plan_successor_interventions(run.id, reference, initial=intervention)
+    directives = tuple(
+        InterventionDirective(
+            application_id=InterventionApplicationId.generate(),
+            intervention_id=planned.intervention_id,
+            attempt_id=successor.id,
+            ordinal=ordinal,
+            kind=planned.kind,
+            mutation=planned.mutation,
+            expected_previous_value=planned.expected_previous_value,
+        )
+        for ordinal, planned in enumerate(plan.directives)
+    )
+    producer = repo.aggregates.load_attempt(checkpoint.context.target.id)
+    successor, _, receipt = repo._record_numerical_recovery_execution(
+        action_id,
+        successor,
+        RecoveryCheckpointReport.from_record(checkpoint, producer.attempt_number),
+        directives,
+        request_digest=fingerprint({"submit": str(successor.id)}),
+        actor=ACTOR,
+    )
+    return successor, directives, receipt

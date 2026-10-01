@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import sqlite3
 
-from xaytune.core.domain.intervention import InterventionApplication, TrainingIntervention
+from xaytune.core.clock import utc_now
+from xaytune.core.domain.intervention import (
+    InterventionApplication,
+    InterventionDirective,
+    TrainingIntervention,
+)
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryActionBinding
+from xaytune.core.domain.recovery_execution import (
+    RecoveryExecutionOutcome,
+    RecoveryExecutionReceipt,
+)
 from xaytune.storage.journal import _require_transaction
 
 __all__ = [
     "InterventionApplicationStore",
+    "InterventionDirectiveStore",
+    "NumericalRecoveryExecutionStore",
     "NumericalRecoveryActionBindingStore",
     "TrainingInterventionStore",
 ]
@@ -167,5 +178,113 @@ class InterventionApplicationStore:
                 None if checkpoint is None else str(checkpoint.id),
                 application.model_dump_json(),
                 application.created_at.isoformat(),
+            ),
+        )
+
+
+class InterventionDirectiveStore:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def get(self, application_id: str) -> InterventionDirective | None:
+        row = self._connection.execute(
+            "SELECT payload_json FROM intervention_directives WHERE application_id = ?",
+            (application_id,),
+        ).fetchone()
+        return (
+            None if row is None else InterventionDirective.model_validate_json(row["payload_json"])
+        )
+
+    def for_attempt(self, attempt_id: str) -> tuple[InterventionDirective, ...]:
+        """The attempt's directives, in application (ordinal) order."""
+        rows = self._connection.execute(
+            "SELECT payload_json FROM intervention_directives WHERE attempt_id = ? "
+            "ORDER BY ordinal",
+            (attempt_id,),
+        ).fetchall()
+        return tuple(InterventionDirective.model_validate_json(row["payload_json"]) for row in rows)
+
+    def _insert(self, directive: InterventionDirective, *, run_id: str) -> None:
+        _require_transaction(self._connection, "intervention directives")
+        self._connection.execute(
+            "INSERT INTO intervention_directives (application_id, attempt_id, run_id, "
+            "intervention_id, ordinal, kind, expected_previous_value, applied_value, "
+            "payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(directive.application_id),
+                str(directive.attempt_id),
+                run_id,
+                str(directive.intervention_id),
+                directive.ordinal,
+                directive.kind.value,
+                directive.expected_previous_value,
+                directive.applied_value,
+                directive.model_dump_json(),
+                utc_now().isoformat(),
+            ),
+        )
+
+
+class NumericalRecoveryExecutionStore:
+    """Receipts for numerical recovery decisions; ``RecoveryExecutionReceipt`` semantics.
+
+    ``EXECUTED`` means what it means for OOM: a successor attempt and its INTENDED
+    submit operation were committed. The intervention's effect is separate: it is
+    an ``InterventionApplication``, recorded only on the worker's confirmation.
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def _many(self, where: str, value: str) -> tuple[RecoveryExecutionReceipt, ...]:
+        rows = self._connection.execute(
+            f"SELECT payload_json FROM numerical_recovery_executions WHERE {where} = ? "
+            "ORDER BY created_at, id",
+            (value,),
+        ).fetchall()
+        return tuple(
+            RecoveryExecutionReceipt.model_validate_json(row["payload_json"]) for row in rows
+        )
+
+    def for_action(self, action_id: str) -> RecoveryExecutionReceipt | None:
+        found = self._many("action_id", action_id)
+        return found[0] if found else None
+
+    def for_episode(self, episode_id: str) -> tuple[RecoveryExecutionReceipt, ...]:
+        return self._many("episode_id", episode_id)
+
+    def for_successor(self, attempt_id: str) -> RecoveryExecutionReceipt | None:
+        found = self._many("successor_attempt_id", attempt_id)
+        return found[0] if found else None
+
+    def executed_for_episode(self, episode_id: str) -> RecoveryExecutionReceipt | None:
+        return next(
+            (
+                receipt
+                for receipt in self.for_episode(episode_id)
+                if receipt.outcome is RecoveryExecutionOutcome.EXECUTED
+            ),
+            None,
+        )
+
+    def _insert(self, receipt: RecoveryExecutionReceipt, *, intervention_id: str | None) -> None:
+        _require_transaction(self._connection, "numerical recovery executions")
+        self._connection.execute(
+            "INSERT INTO numerical_recovery_executions (id, episode_id, plan_id, plan_sequence, "
+            "action_id, outcome, intervention_id, successor_attempt_id, runtime_operation_id, "
+            "checkpoint_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(receipt.id),
+                str(receipt.episode_id),
+                str(receipt.plan_id),
+                receipt.plan_sequence,
+                str(receipt.action_id),
+                receipt.outcome.value,
+                intervention_id,
+                None if receipt.successor_attempt_id is None else str(receipt.successor_attempt_id),
+                None if receipt.runtime_operation_id is None else str(receipt.runtime_operation_id),
+                None if receipt.checkpoint_ref is None else str(receipt.checkpoint_ref.id),
+                receipt.model_dump_json(),
+                receipt.created_at.isoformat(),
             ),
         )

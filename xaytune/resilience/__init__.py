@@ -106,12 +106,34 @@ class CheckpointFailureDetector(_ReasonDetector):
 
 
 class NaNInfDetector:
+    """Nonfinite evidence: the observation itself, and the failure it caused.
+
+    Version 2 also reads a ``TrainingFailed`` whose structured reason is
+    ``numerical-nan`` or ``numerical-inf`` -- what a managed worker reports when
+    an armed numerical-recovery control stops it after the observation -- as the
+    same diagnosis, so the failure confirms the observation instead of adding an
+    ``UNKNOWN`` one beside it.
+    """
+
     name = "nan-inf"
-    version = "1"
+    version = "2"
+    failure_reasons = {
+        "numerical-nan": IncidentCategory.NUMERICAL_NAN,
+        "numerical-inf": IncidentCategory.NUMERICAL_INF,
+    }
 
     def inspect(
         self, signal: TrainingObservation | EvaluationObservation, context: AttemptContext
     ) -> IncidentCandidate | None:
+        if isinstance(signal, TrainingFailedPayload):
+            failed = self.failure_reasons.get(signal.reason)
+            if failed is None:
+                return None
+            return IncidentCandidate(
+                category=failed,
+                detector=DetectorProvenance(name=self.name, version=self.version),
+                reason=f"structured reason: {signal.reason}",
+            )
         if not isinstance(signal, NumericalInstabilityObserved):
             return None
         if signal.observation == "nan":

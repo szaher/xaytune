@@ -20,6 +20,7 @@ from pydantic import Field, field_validator
 
 from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.domain.evaluation import EvaluationSpec
+from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.immutable import FrozenDomainModel
@@ -55,6 +56,12 @@ class ExperimentSpec(FrozenDomainModel):
             ``max_wall_time_seconds``, ``max_gpu_hours``, ``max_tokens`` or
             ``max_cost``, which nothing measures authoritatively yet, is
             refused at submission.
+        numerical_recovery: Arms managed numerical recovery, recorded with the
+            experiment. Set, a managed Native training attempt fails when its
+            loss becomes nonfinite, and the host may propose a governed
+            ``ChangeLearningRate`` with these explicit parameters, carried by a
+            checkpoint-backed successor attempt. ``None`` leaves numerical
+            incidents report-only. It is not candidate identity.
     """
 
     name: str = Field(min_length=1)
@@ -67,6 +74,7 @@ class ExperimentSpec(FrozenDomainModel):
     hypothesis: str | None = None
     evaluation: EvaluationSpec | None = None
     budget: BudgetSpec | None = None
+    numerical_recovery: NumericalRecoveryPolicyV1 | None = None
 
     @field_validator("compiler", "runtime")
     @classmethod

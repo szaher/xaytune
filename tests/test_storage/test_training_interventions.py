@@ -15,6 +15,7 @@ from tests.test_storage.numerical_fixtures import (
     HALVE,
     REVIEWER,
     checkpointed_lr_run,
+    executed_successor,
     human_intervention,
     nonfinite_plan,
     restored_successor,
@@ -104,6 +105,19 @@ def apply(repo, intervention, attempt, *, step=14_250, previous=2e-4, applicatio
     )
 
 
+def confirm(repo, directive, *, step=100):
+    """Record the worker's confirmation of *directive*."""
+    return repo.record_intervention_application(
+        directive.intervention_id,
+        application_id=directive.application_id,
+        attempt_id=directive.attempt_id,
+        position=TrainingPosition(optimizer_step=step),
+        observed_previous_value=directive.expected_previous_value,
+        applied_value=directive.applied_value,
+        actor=ACTOR,
+    )
+
+
 def realization_matches_rebuild(repo, run_id):
     stored = repo.get_run_realization(run_id)
     attempts, checkpoints = repo.run_ancestry(run_id)
@@ -156,8 +170,13 @@ def test_adr011_scenario_lr_drop_is_an_intervention_on_the_same_run(connection, 
     assert decided.interventions == (intervention.id,)
     assert decided.history_fingerprint == before.history_fingerprint
 
-    successor = restored_successor(repo, run, attempt, world["c100"])
-    applied = apply(repo, intervention, successor)
+    successor, (directive,), _ = executed_successor(
+        repo, run, attempt, governed.action.id, world["c100"]
+    )
+    assert repo.actions.get(str(governed.action.id)).status is ActionStatus.EXECUTING
+    applied = confirm(repo, directive)
+    assert repo.actions.get(str(governed.action.id)).status is ActionStatus.SUCCEEDED
+    assert applied.attempt_id == successor.id
     assert applied.checkpoint_ancestor == world["c100"].payload.checkpoint_ref
     after = realization_matches_rebuild(repo, run.id)
     assert after.candidate_fingerprint == before.candidate_fingerprint == run.candidate_fingerprint
@@ -447,8 +466,10 @@ def test_failed_intervention_transaction_rolls_back(connection, monkeypatch):
 def test_intervention_tables_are_append_only(connection, tmp_path, table, operation):
     repo, world, _, inputs, proposal = prepared(connection, tmp_path=tmp_path)
     intervention = record(repo, propose(repo, inputs, proposal).action.id)
-    successor = restored_successor(repo, world["run"], world["attempt"], world["c100"])
-    apply(repo, intervention, successor)
+    _, (directive,), _ = executed_successor(
+        repo, world["run"], world["attempt"], intervention.action_id, world["c100"]
+    )
+    confirm(repo, directive)
     assert count(repo, table) >= 1
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         with write_transaction(connection):

@@ -1,12 +1,14 @@
 # ADR-017 — Reuse policy
 
 ## Status
-Proposed — 2026-09-21.
+Accepted — 2026-10-01
 
-Split out of ADR-006, whose identity model is now `Accepted` while this half is
-genuinely undecided. Gates band G — the planner's reuse decisions. It does not
-gate band B, because nothing here changes a persisted column: a reuse policy is
-a query over fingerprints that already exist.
+Proposed on 2026-09-21, when it was split out of ADR-006 so that ADR-006's
+identity model could be `Accepted` while this half was still undecided. It gates
+band G, the planner. Accepted with the conservative v1 decision below: training
+artifact reuse is off. That answers every open question by refusing to
+substitute, which is safe without a reuse implementation. A real reuse policy
+can come later, under its own ADR.
 
 ## Context
 
@@ -44,23 +46,56 @@ The questions that are actually open:
 
 ## Decision
 
-**Not yet decided.** This ADR exists to hold the question, not to answer it
-prematurely, and to stop ADR-006 carrying two statuses at once.
+**v1: training artifact reuse is disabled.** The planner and controller schedule
+the work they are asked to do. They never substitute an existing training
+artifact for it.
 
-What is already settled and constrains any answer:
+1. **Fingerprints are necessary evidence, never sufficient authority.** A
+   matching `CandidateFingerprint`, `ExecutionFingerprint` or
+   `ArtifactLineageFingerprint` does not authorize skipping execution. Training
+   is stochastic: ADR-012's `EXACT` resume is a data-position guarantee, not
+   bitwise numerics.
+2. **No substitution.** No planner, including PR-024's `RuleBasedPlanner`, and
+   no controller path may satisfy a requested Run with an existing artifact.
+   Every requested Run executes as new work.
+3. **Replicates always execute.** A request for another seed, or another
+   replicate at the same seed, is a request for a new sample. Satisfying it
+   from an existing run is the silent statistical failure that ADR-015 §3 rules
+   out for stochastic evaluation.
+4. **No cross-experiment training reuse.** An artifact from another experiment
+   is never a candidate. Matching fingerprints say nothing about the other
+   experiment's governance, provenance or budget attribution.
+5. **Rolled-back trajectories are never reused as retained results.** ADR-011's
+   history/lineage split stands. A trajectory a rollback abandoned is audit
+   history, not a result.
+6. **Evaluation reuse stays governed by ADR-015 §3.** That rule is keyed on
+   evaluator determinism. This ADR neither widens nor narrows it.
+7. **Matches may be shown, never acted on silently.** Fingerprints and
+   provenance may expose a possible match for a person or tool to inspect. A
+   match cannot skip, shorten or replace execution.
+8. **Future reuse needs an explicit `ReusePolicy`.** Enabling any training
+   reuse requires a new or superseding ADR: a versioned, durable `ReusePolicy`
+   (ADR-016), opt-in per experiment, plus a separate implementation. That ADR
+   must answer budget attribution and match invalidation (dataset revisions,
+   container digests, evaluator providers). v1 does not answer them because v1
+   never reuses.
 
-- The fingerprints themselves — ADR-006 for the identity model and the canonical
-  typed encoder, ADR-011 for the four layers and the history/lineage split.
-- In-flight runs are never reuse candidates; fingerprints are provisional until
-  terminal (ADR-011).
-- Evaluation reuse **is** decided, in ADR-015 §3, and keyed on evaluator
-  determinism. This ADR covers training artifacts only, and should not
-  contradict it: a `STOCHASTIC` evaluator's result is a sample, and by the same
-  argument a replicate of a stochastic training run is a sample.
+Already settled before this decision, and unchanged by it:
+
+- The fingerprints themselves: ADR-006 defines the identity model and the
+  canonical typed encoder; ADR-011 defines the four layers and the
+  history/lineage split.
+- In-flight runs are never reuse candidates: their fingerprints stay
+  provisional until the run is terminal (ADR-011).
 
 ## Consequences
 
-- Band G cannot start until this is accepted. Nothing earlier is blocked.
-- Until then, the planner must schedule work rather than reuse it. Doing the work
-  twice is wasteful; silently substituting a different trajectory is wrong, and
-  the second is not recoverable from the provenance record.
+- Band G is unblocked. PR-024 starts with no reuse decisions to make: a planner
+  proposes work, and accepted work runs.
+- Budget accounting stays simple. Every executed run is charged to the
+  experiment that ran it, and no ledger has to attribute borrowed GPU-hours.
+- Duplicate work costs more compute. That is the accepted price: doing work
+  twice is wasteful, but silently substituting a different trajectory is wrong,
+  and the provenance record cannot recover from it.
+- Reproducibility evidence is preserved. Two runs with matching fingerprints
+  stay two observations, so their differences remain measurable.

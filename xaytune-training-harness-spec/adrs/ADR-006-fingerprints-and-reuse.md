@@ -1,8 +1,8 @@
 # ADR-006 — Identity is split across training, execution, evaluation, and checkpoint compatibility
 
 ## Status
-Accepted — 2026-09-21, for the identity model. **Reuse policy is deferred to
-ADR-017 (`Proposed`)** and still gates band G.
+Accepted — 2026-09-21, for the identity model. **Reuse policy is decided in
+ADR-017** (accepted 2026-10-01; v1 disables training artifact reuse).
 
 Split because half-accepted was unusable as a gate: Phase 2 implements the
 fingerprints from this ADR while the planner's reuse decisions genuinely are

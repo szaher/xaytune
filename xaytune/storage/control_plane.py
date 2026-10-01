@@ -38,9 +38,11 @@ Every boundary below is arranged so only the first can happen.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal, Protocol, TypeVar
@@ -57,6 +59,8 @@ from xaytune.core.domain.action import (
 )
 from xaytune.core.domain.actions import (
     ActionSpec,
+    ChangeLearningRate,
+    MutationClass,
     action_descriptor,
     action_from_spec,
     encode_payload,
@@ -88,6 +92,23 @@ from xaytune.core.domain.evaluation import (
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import Experiment, ExperimentNode
 from xaytune.core.domain.incident import AttemptContext, Incident
+from xaytune.core.domain.intervention import (
+    IncidentTrigger,
+    InterventionApplication,
+    InterventionOrigin,
+    TrainingIntervention,
+    TrainingPosition,
+    TriggerEvaluation,
+    mutation_for_action,
+)
+from xaytune.core.domain.numerical_recovery import (
+    EffectiveLearningRate,
+    NumericalLRProposal,
+    NumericalRecoveryActionBinding,
+    NumericalRecoveryInputsV1,
+    NumericalRecoveryPolicyV1,
+    PriorNumericalIntervention,
+)
 from xaytune.core.domain.oom_recovery import OOMRecoveryInputsV1, OOMResizeProposal
 from xaytune.core.domain.operation import (
     RuntimeOperation,
@@ -101,6 +122,13 @@ from xaytune.core.domain.policy import (
     PolicyVerdict,
     applicability_problems,
     awaits_execution,
+)
+from xaytune.core.domain.realization import (
+    AttemptAncestry,
+    CheckpointAncestry,
+    RunRealization,
+    project_run_realization,
+    retained_trajectory,
 )
 from xaytune.core.domain.recovery import (
     COORDINATOR_NAME,
@@ -135,13 +163,15 @@ from xaytune.core.ids import (
     EventId,
     ExperimentId,
     ExperimentNodeId,
+    InterventionApplicationId,
+    InterventionId,
     OperationId,
     RecoveryEpisodeId,
     RunAttemptId,
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import Actor, ArtifactRef, RuntimeRef
+from xaytune.core.refs import Actor, ArtifactRef, CheckpointRef, RuntimeRef
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
     EvaluationRunStatus,
@@ -158,6 +188,11 @@ from xaytune.storage.database import write_transaction
 from xaytune.storage.errors import AggregateNotFoundError, StorageError
 from xaytune.storage.graph import ExperimentGraph
 from xaytune.storage.incidents import IncidentStore
+from xaytune.storage.interventions import (
+    InterventionApplicationStore,
+    NumericalRecoveryActionBindingStore,
+    TrainingInterventionStore,
+)
 from xaytune.storage.journal import (
     EventJournal,
     IdempotencyConflictError,
@@ -176,6 +211,7 @@ __all__ = [
     "ControlPlaneRepository",
     "DecisionConflictError",
     "EvaluationReconciliation",
+    "InterventionNotAuthorizedError",
     "ProvenanceError",
     "StalePolicyContextError",
     "UnknownOperationTargetError",
@@ -325,6 +361,10 @@ class CancellationSagaRequiredError(StorageError):
 
 class ProvenanceError(StorageError):
     """A record would attribute something to a producer that did not make it."""
+
+
+class InterventionNotAuthorizedError(StorageError):
+    """A TrainingIntervention was requested for an Action governance has not authorized."""
 
 
 class StaleRecoveryContextError(StorageError):
@@ -542,6 +582,22 @@ def _require_result_of_run(result: EvaluationResult, run: EvaluationRun) -> None
         )
 
 
+@dataclass(frozen=True)
+class _BoundRecoveryProposal:
+    """A recovery decision's Action binding, checked and written with the Action.
+
+    ``replay`` returns the Action already bound to the same decision;
+    ``require_current`` re-verifies the decision under the write lock;
+    ``insert`` writes the binding in the Action's transaction.
+    """
+
+    action_id: ActionId
+    spec: ActionSpec
+    replay: Callable[[], GovernedAction | None]
+    require_current: Callable[[], None]
+    insert: Callable[[], None]
+
+
 class ControlPlaneRepository:
     """Atomic writes over the control-plane aggregates and their journals."""
 
@@ -559,6 +615,9 @@ class ControlPlaneRepository:
         self.recovery_plans = RecoveryPlanStore(connection)
         self.recovery_action_bindings = RecoveryActionBindingStore(connection)
         self.recovery_execution_receipts = RecoveryExecutionReceiptStore(connection)
+        self.numerical_recovery_bindings = NumericalRecoveryActionBindingStore(connection)
+        self.training_interventions = TrainingInterventionStore(connection)
+        self.intervention_applications = InterventionApplicationStore(connection)
         self.graph = ExperimentGraph(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
@@ -2127,8 +2186,7 @@ class ControlPlaneRepository:
         capabilities: CapabilityDocument | None,
         action_id: ActionId | None = None,
         destinations: tuple[str, ...] = (),
-        _recovery_binding: RecoveryActionBinding | None = None,
-        _recovery_inputs: OOMRecoveryInputsV1 | None = None,
+        _bound: _BoundRecoveryProposal | None = None,
     ) -> GovernedAction:
         """Validate, authorize and record one proposed action, in one commit. Applies nothing.
 
@@ -2163,12 +2221,7 @@ class ControlPlaneRepository:
         """
         if spec.type in CANCELLATION_TYPES:  # type: ignore[attr-defined]
             raise CancellationNotGovernedError(spec.type)  # type: ignore[attr-defined]
-        if (_recovery_binding is None) != (_recovery_inputs is None):
-            raise ValueError("recovery Action binding and inputs must be supplied together")
-        if _recovery_binding is not None and (
-            action_id != _recovery_binding.action_id
-            or spec != _recovery_binding.proposal.action_spec
-        ):
+        if _bound is not None and (action_id != _bound.action_id or spec != _bound.spec):
             raise ProvenanceError("recovery Action spec or id disagrees with its binding")
         action = action_from_spec(
             spec,
@@ -2177,13 +2230,13 @@ class ControlPlaneRepository:
             reason=reason,
             action_id=action_id,
         )
-        if _recovery_binding is not None:
-            bound = self._replay_recovery_action(_recovery_binding)
+        if _bound is not None:
+            bound = _bound.replay()
             if bound is not None:
                 return bound
         replayed = self._replay_governed(action)
         if replayed is not None:
-            if _recovery_binding is not None:
+            if _bound is not None:
                 raise IdempotencyConflictError(str(action.id), ("recovery binding",), kind="Action")
             return replayed
 
@@ -2208,20 +2261,19 @@ class ControlPlaneRepository:
             )
 
         with write_transaction(self._connection):
-            if _recovery_binding is not None:
-                bound = self._replay_recovery_action(_recovery_binding)
+            if _bound is not None:
+                bound = _bound.replay()
                 if bound is not None:
                     return bound
             replayed = self._replay_governed(action)
             if replayed is not None:
-                if _recovery_binding is not None:
+                if _bound is not None:
                     raise IdempotencyConflictError(
                         str(action.id), ("recovery binding",), kind="Action"
                     )
                 return replayed
-            if _recovery_binding is not None:
-                assert _recovery_inputs is not None
-                self._require_current_oom_action(_recovery_binding, _recovery_inputs)
+            if _bound is not None:
+                _bound.require_current()
             current = self.policy_context(
                 spec,
                 experiment_id=experiment_id,
@@ -2236,8 +2288,8 @@ class ControlPlaneRepository:
                 )
 
             self.actions._insert(action)
-            if _recovery_binding is not None:
-                self.recovery_action_bindings._insert(_recovery_binding)
+            if _bound is not None:
+                _bound.insert()
             self._emit_action(
                 action, "ActionProposed", proposed_by, destinations, extra={"reason": reason}
             )
@@ -2315,8 +2367,13 @@ class ControlPlaneRepository:
             capabilities=capabilities,
             action_id=binding.action_id,
             destinations=destinations,
-            _recovery_binding=binding,
-            _recovery_inputs=inputs,
+            _bound=_BoundRecoveryProposal(
+                action_id=binding.action_id,
+                spec=binding.proposal.action_spec,
+                replay=lambda: self._replay_recovery_action(binding),
+                require_current=lambda: self._require_current_oom_action(binding, inputs),
+                insert=lambda: self.recovery_action_bindings._insert(binding),
+            ),
         )
 
     def _replay_recovery_action(self, requested: RecoveryActionBinding) -> GovernedAction | None:
@@ -2366,6 +2423,482 @@ class ControlPlaneRepository:
             != proposal.source_execution_state_fingerprint
         ):
             raise StaleRecoveryContextError("OOM source execution changed before Action proposal")
+
+    # ---- PR-021: numerical recovery and training interventions ----------------------------
+
+    def run_ancestry(
+        self, run_id: RunId | str
+    ) -> tuple[tuple[AttemptAncestry, ...], tuple[CheckpointAncestry, ...]]:
+        """The immutable attempt/checkpoint facts that retained-trajectory lineage needs."""
+        attempts = self.aggregates.attempts_for_run(str(run_id))
+        ancestry = tuple(
+            AttemptAncestry(
+                attempt_id=attempt.id,
+                attempt_number=attempt.attempt_number,
+                restored_from=None if attempt.checkpoint_ref is None else attempt.checkpoint_ref.id,
+            )
+            for attempt in attempts
+        )
+        checkpoints = tuple(
+            CheckpointAncestry(
+                checkpoint_id=record.payload.checkpoint_ref.id,
+                producer_attempt_id=RunAttemptId(record.context.target.id),
+                embodied_application_ids=None
+                if record.payload.state_manifest is None
+                else record.payload.state_manifest.applied_intervention_application_ids,
+            )
+            for attempt in attempts
+            for record in self.checkpoints.for_attempt(str(attempt.id))
+        )
+        return ancestry, checkpoints
+
+    def events_for_run(self, run_id: RunId | str) -> tuple[DomainEvent, ...]:
+        """The run's intervention history as recorded in the event log, in sequence order."""
+        run = self.aggregates.load_run(str(run_id))
+        attempts = {str(a.id) for a in self.aggregates.attempts_for_run(str(run.id))}
+        return tuple(
+            event
+            for event in self.events.events_for_experiment(str(run.experiment_id))
+            if event.aggregate_id == str(run.id) or event.aggregate_id in attempts
+        )
+
+    def get_run_realization(self, run_id: RunId | str) -> RunRealization:
+        """Project the run's realization from the intervention and application tables.
+
+        A projection, never stored: ``rebuild_run_realization`` over
+        :meth:`events_for_run` must give the same value.
+        """
+        run = self.aggregates.load_run(str(run_id))
+        attempts, checkpoints = self.run_ancestry(run.id)
+        return project_run_realization(
+            run,
+            self.training_interventions.for_run(str(run.id)),
+            self.intervention_applications.for_run(str(run.id)),
+            attempts,
+            checkpoints,
+        )
+
+    def _effective_learning_rate(self, run: Run, head: RunAttemptId) -> EffectiveLearningRate:
+        """The base learning rate on *head*'s retained trajectory, from durable records."""
+        attempts, checkpoints = self.run_ancestry(run.id)
+        applications = self.intervention_applications.for_run(str(run.id))
+        trajectory = retained_trajectory(head, attempts, checkpoints, applications)
+        if trajectory is None:
+            raise ProvenanceError(
+                f"attempt {head} descends from a checkpoint that does not record which "
+                f"intervention applications it embodies; its learning rate is unknown"
+            )
+        if trajectory.application_ids:
+            latest = next(a for a in applications if a.id == trajectory.application_ids[-1])
+            return EffectiveLearningRate(
+                value=latest.applied_value,
+                application_id=latest.id,
+                intervention_id=latest.intervention_id,
+            )
+        node = self.aggregates.load_node(str(run.node_id))
+        declared = node.candidate.candidate.training.optimization.learning_rate
+        if declared is None or not math.isfinite(declared) or declared <= 0:
+            raise ProvenanceError(f"run {run.id}'s candidate declares no learning rate")
+        return EffectiveLearningRate(value=float(declared))
+
+    def _prior_numerical_interventions(
+        self, run_id: RunId | str
+    ) -> tuple[PriorNumericalIntervention, ...]:
+        priors = []
+        for intervention in self.training_interventions.for_run(str(run_id)):
+            binding = self.numerical_recovery_bindings.for_action(str(intervention.action_id))
+            if binding is None:
+                continue
+            priors.append(
+                PriorNumericalIntervention(
+                    intervention_id=intervention.id,
+                    action_id=intervention.action_id,
+                    episode_id=binding.episode_id,
+                    previous_learning_rate=binding.proposal.previous_learning_rate.value,
+                    promised_learning_rate=intervention.mutation.learning_rate,
+                )
+            )
+        return tuple(priors)
+
+    def numerical_recovery_inputs(
+        self, plan_id: str, policy: NumericalRecoveryPolicyV1 | None
+    ) -> NumericalRecoveryInputsV1:
+        """Derive the planner's typed inputs from durable records alone.
+
+        The learning rate is the source attempt's *retained-trajectory* value:
+        the latest recorded application it descends from, else the candidate's
+        declared value. Never a proposed or approved-but-unapplied value.
+
+        Raises:
+            AggregateNotFoundError: If the plan does not exist.
+            ProvenanceError: If the trajectory's learning rate cannot be established.
+            pydantic.ValidationError: If the plan is not a training-attempt episode.
+        """
+        plan = self.recovery_plans.get(plan_id)
+        if plan is None:
+            raise AggregateNotFoundError("recovery plan", plan_id)
+        context = plan.inputs.context
+        run = self.aggregates.load_run(str(context.run_id))
+        source = RunAttemptId(context.target.id)
+        return NumericalRecoveryInputsV1(
+            plan=plan,
+            run_id=run.id,
+            candidate_fingerprint=run.candidate_fingerprint,
+            source_attempt_id=source,
+            execution_state_fingerprint=plan.execution_state_fingerprint,
+            current_learning_rate=self._effective_learning_rate(run, source),
+            prior_interventions=self._prior_numerical_interventions(run.id),
+            policy=policy,
+        )
+
+    def propose_numerical_recovery_action(
+        self,
+        inputs: NumericalRecoveryInputsV1,
+        proposal: NumericalLRProposal,
+        *,
+        proposed_by: Actor,
+        reason: str,
+        policy: Any,
+        capabilities: CapabilityDocument | None,
+        action_id: ActionId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> GovernedAction:
+        """Govern one decision-bound ``ChangeLearningRate`` and bind it atomically.
+
+        Goes through the ordinary Action path: validation, applicability and
+        *policy* decide ALLOW, DENY or REQUIRE_APPROVAL. This records no
+        intervention and no application; see :meth:`record_numerical_intervention`.
+        """
+        binding = NumericalRecoveryActionBinding.for_proposal(
+            action_id or ActionId.generate(), proposal
+        )
+        return self.propose_action(
+            proposal.action_spec,
+            experiment_id=inputs.plan.inputs.context.experiment_id,
+            proposed_by=proposed_by,
+            reason=reason,
+            policy=policy,
+            capabilities=capabilities,
+            action_id=binding.action_id,
+            destinations=destinations,
+            _bound=_BoundRecoveryProposal(
+                action_id=binding.action_id,
+                spec=binding.proposal.action_spec,
+                replay=lambda: self._replay_numerical_recovery_action(binding),
+                require_current=lambda: self._require_current_numerical_action(binding, inputs),
+                insert=lambda: self.numerical_recovery_bindings._insert(binding),
+            ),
+        )
+
+    def _replay_numerical_recovery_action(
+        self, requested: NumericalRecoveryActionBinding
+    ) -> GovernedAction | None:
+        existing = self.numerical_recovery_bindings.for_plan(str(requested.plan_id))
+        if existing is None:
+            return None
+        if existing.proposal != requested.proposal:
+            raise IdempotencyConflictError(
+                str(requested.plan_id), ("numerical proposal",), kind="recovery plan"
+            )
+        return self.governed_action(existing.action_id)
+
+    def _require_current_numerical_action(
+        self, binding: NumericalRecoveryActionBinding, inputs: NumericalRecoveryInputsV1
+    ) -> None:
+        proposal = binding.proposal
+        if (
+            proposal.input_fingerprint != inputs.input_fingerprint
+            or proposal.run_id != inputs.run_id
+            or proposal.candidate_fingerprint != inputs.candidate_fingerprint
+            or proposal.source_attempt_id != inputs.source_attempt_id
+            or proposal.source_execution_state_fingerprint != inputs.execution_state_fingerprint
+            or proposal.previous_learning_rate != inputs.current_learning_rate
+            or inputs.policy is None
+            or proposal.policy_fingerprint != inputs.policy.policy_fingerprint
+        ):
+            raise ProvenanceError("numerical proposal disagrees with its typed planning inputs")
+        self._require_fresh_numerical_decision(binding)
+        if self.numerical_recovery_inputs(str(binding.plan_id), inputs.policy) != inputs:
+            raise StaleRecoveryContextError("numerical recovery inputs changed before proposal")
+
+    def _require_fresh_numerical_decision(self, binding: NumericalRecoveryActionBinding) -> None:
+        """The bound plan is still the episode's open, fresh decision for this source."""
+        proposal = binding.proposal
+        plan = self.recovery_plans.get(str(binding.plan_id))
+        if (
+            plan is None
+            or plan.episode_id != binding.episode_id
+            or plan.sequence != binding.plan_sequence
+            or proposal.trigger.incident_id not in plan.accepted_incident_ids
+        ):
+            raise ProvenanceError("numerical proposal does not describe the recorded RecoveryPlan")
+        if not self.recovery_plans.is_effective_and_fresh(str(plan.id)):
+            raise StaleRecoveryContextError("numerical RecoveryPlan is no longer open and fresh")
+        run = self.aggregates.load_run(str(proposal.run_id))
+        attempt = self.aggregates.load_attempt(str(proposal.source_attempt_id))
+        if (
+            run.status is not RunStatus.ACTIVE
+            or attempt.run_id != run.id
+            or run.candidate_fingerprint != proposal.candidate_fingerprint
+            or execution_state_fingerprint_v1(FrozenDict(attempt.model_dump(mode="json")))
+            != proposal.source_execution_state_fingerprint
+        ):
+            raise StaleRecoveryContextError("numerical source changed before the decision was used")
+        if self._effective_learning_rate(run, attempt.id) != proposal.previous_learning_rate:
+            raise StaleRecoveryContextError("the trajectory's learning rate changed meanwhile")
+
+    def record_numerical_intervention(
+        self,
+        action_id: ActionId | str,
+        *,
+        actor: Actor,
+        rationale: str,
+        intervention_id: InterventionId | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> TrainingIntervention:
+        """Record the intervention an authorized numerical-recovery Action decided.
+
+        Provenance is copied from the bound proposal, never inferred:
+        ``REACTIVE_POLICY`` origin, the exact nonfinite ``IncidentTrigger`` and
+        the proposal's explicit replay policy. The plan must still be the
+        episode's open, fresh decision. No application is recorded: that
+        requires confirmation that the change actually took effect.
+        """
+        binding = self.numerical_recovery_bindings.for_action(str(action_id))
+        if binding is None:
+            raise ProvenanceError(f"Action {action_id} has no numerical recovery binding")
+        proposal = binding.proposal
+        spec = proposal.action_spec
+        intervention = TrainingIntervention(
+            id=intervention_id or InterventionId.generate(),
+            run_id=proposal.run_id,
+            action_id=binding.action_id,
+            origin=InterventionOrigin.REACTIVE_POLICY,
+            trigger=proposal.trigger,
+            replay_policy=proposal.replay_policy,
+            mutation=mutation_for_action(spec),
+            rationale=rationale,
+            evidence_refs=(str(proposal.trigger.incident_id),),
+        )
+        return self.record_training_intervention(
+            intervention, actor=actor, destinations=destinations
+        )
+
+    def record_training_intervention(
+        self,
+        intervention: TrainingIntervention,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> TrainingIntervention:
+        """Record the scientific decision of one authorized Action, with its event.
+
+        Only an Action awaiting execution (VALIDATED + ALLOW or APPROVED +
+        REQUIRE_APPROVAL) whose type is a scientific intervention on this same
+        active Run qualifies, and its mutation must be exactly the Action's.
+        One intervention per Action; an identical replay returns the original.
+
+        Raises:
+            InterventionNotAuthorizedError: If governance has not authorized it.
+            ProvenanceError: If the intervention disagrees with its Action,
+                Run, trigger or numerical decision.
+            StaleRecoveryContextError: If a numerical decision is no longer fresh.
+            IdempotencyConflictError: If the Action already has a different one.
+        """
+        intervention = TrainingIntervention.model_validate_json(intervention.model_dump_json())
+        with write_transaction(self._connection):
+            existing = self.training_interventions.for_action(
+                str(intervention.action_id)
+            ) or self.training_interventions.get(str(intervention.id))
+            if existing is not None:
+                if existing.semantic_fingerprint() != intervention.semantic_fingerprint():
+                    raise IdempotencyConflictError(
+                        str(intervention.action_id), ("training_intervention",), kind="Action"
+                    )
+                return existing
+            action = self.actions.get(str(intervention.action_id))
+            if action is None:
+                raise AggregateNotFoundError("Action", str(intervention.action_id))
+            decision = self.policy.for_action(str(action.id))
+            if not awaits_execution(action, decision):
+                raise InterventionNotAuthorizedError(
+                    f"Action {action.id} is {action.status.value}; only an authorized "
+                    f"Action becomes a training intervention"
+                )
+            spec = spec_of(action)
+            if (
+                action_descriptor(action.type).mutation_class
+                is not MutationClass.SCIENTIFIC_INTERVENTION
+                or not isinstance(spec, ChangeLearningRate)
+                or mutation_for_action(spec) != intervention.mutation
+            ):
+                raise ProvenanceError(
+                    f"Action {action.id} ({action.type}) does not decide this scientific mutation"
+                )
+            run = self.aggregates.load_run(str(intervention.run_id))
+            if (
+                action.target != ActionTarget(kind="run", id=str(run.id))
+                or action.experiment_id != run.experiment_id
+            ):
+                raise ProvenanceError(f"Action {action.id} does not target run {run.id}")
+            if run.status is not RunStatus.ACTIVE:
+                raise ProvenanceError(f"run {run.id} is {run.status.value}, not active")
+            self._require_intervention_provenance(intervention, action, run)
+
+            sequence = self._write_sequenced_event(
+                DomainEvent(
+                    id=EventId.generate(),
+                    experiment_id=str(run.experiment_id),
+                    aggregate_type="Run",
+                    aggregate_id=str(run.id),
+                    aggregate_revision=run.revision,
+                    event_type="TrainingInterventionRecorded",
+                    actor=actor,
+                    payload=FrozenDict(
+                        {
+                            "status": run.status.value,
+                            "intervention_id": str(intervention.id),
+                            "action_id": str(action.id),
+                            "training_intervention": intervention.model_dump(mode="json"),
+                        }
+                    ),
+                ),
+                destinations,
+            )
+            self.training_interventions._insert(
+                intervention, experiment_id=str(run.experiment_id), event_sequence=sequence
+            )
+            return intervention
+
+    def _require_intervention_provenance(
+        self, intervention: TrainingIntervention, action: Action, run: Run
+    ) -> None:
+        binding = self.numerical_recovery_bindings.for_action(str(action.id))
+        trigger = intervention.trigger
+        if binding is not None:
+            proposal = binding.proposal
+            if (
+                intervention.origin is not InterventionOrigin.REACTIVE_POLICY
+                or trigger != proposal.trigger
+                or intervention.replay_policy is not proposal.replay_policy
+                or intervention.run_id != proposal.run_id
+            ):
+                raise ProvenanceError(
+                    "a numerical-recovery intervention copies its bound decision's provenance"
+                )
+            self._require_fresh_numerical_decision(binding)
+            return
+        if intervention.origin is InterventionOrigin.REACTIVE_POLICY:
+            raise ProvenanceError("a policy-origin intervention requires a bound recovery decision")
+        if intervention.origin is InterventionOrigin.SCHEDULED:
+            raise ProvenanceError("scheduled interventions are not executed in this release")
+        proposer = {
+            InterventionOrigin.REACTIVE_HUMAN: "human",
+            InterventionOrigin.REACTIVE_AGENT: "llm_agent",
+        }[intervention.origin]
+        if action.proposed_by.type != proposer:
+            raise ProvenanceError(
+                f"a {intervention.origin.value} intervention is proposed by a {proposer}, "
+                f"not {action.proposed_by.type}"
+            )
+        if isinstance(trigger, IncidentTrigger) and trigger.incident_id is not None:
+            incident = self.incidents.get(str(trigger.incident_id))
+            if (
+                incident is None
+                or incident.context.run_id != run.id
+                or incident.category is not trigger.incident_category
+            ):
+                raise ProvenanceError("the triggering incident is not this run's")
+
+    def record_intervention_application(
+        self,
+        intervention_id: InterventionId | str,
+        *,
+        application_id: InterventionApplicationId,
+        attempt_id: RunAttemptId | str,
+        position: TrainingPosition,
+        previous_value: float,
+        applied_value: float,
+        actor: Actor,
+        trigger_evaluation: TriggerEvaluation | None = None,
+        checkpoint_ancestor: CheckpointRef | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> InterventionApplication:
+        """Append one confirmed effect of an intervention, ordered by its event sequence.
+
+        Only confirmation that the mutation actually took effect may call
+        this: approval, an intervention row, or an intended runtime request is
+        not an application. Nothing in this release calls it; the executor
+        that confirms effects is the next review gate. An identical replay of
+        *application_id* returns the original with its original sequence.
+        """
+        with write_transaction(self._connection):
+            intervention = self.training_interventions.get(str(intervention_id))
+            if intervention is None:
+                raise AggregateNotFoundError("training intervention", str(intervention_id))
+            attempt = self.aggregates.load_attempt(str(attempt_id))
+            if attempt.run_id != intervention.run_id:
+                raise ProvenanceError(
+                    f"attempt {attempt.id} does not belong to run {intervention.run_id}"
+                )
+            draft: dict[str, Any] = {
+                "id": application_id,
+                "intervention_id": intervention.id,
+                "attempt_id": attempt.id,
+                "position": position,
+                "trigger_evaluation": trigger_evaluation,
+                "previous_value": previous_value,
+                "applied_value": applied_value,
+                "checkpoint_ancestor": checkpoint_ancestor,
+            }
+            existing = self.intervention_applications.get(str(application_id))
+            if existing is not None:
+                requested = InterventionApplication.model_validate(
+                    {
+                        **draft,
+                        "event_sequence": existing.event_sequence,
+                        "created_at": existing.created_at,
+                    }
+                )
+                if requested.semantic_fingerprint() != existing.semantic_fingerprint():
+                    raise IdempotencyConflictError(
+                        str(application_id), ("intervention_application",), kind="application"
+                    )
+                return existing
+            if applied_value != intervention.mutation.learning_rate:
+                raise ProvenanceError("the applied value is not the intervention's decided value")
+            if checkpoint_ancestor is not None:
+                record = self.checkpoints.get(str(checkpoint_ancestor.id))
+                if record is None or record.context.run_id != intervention.run_id:
+                    raise ProvenanceError("the checkpoint ancestor is not this run's")
+            run = self.aggregates.load_run(str(intervention.run_id))
+            preview = InterventionApplication.model_validate({**draft, "event_sequence": 1})
+            sequence = self._write_sequenced_event(
+                DomainEvent(
+                    id=EventId.generate(),
+                    experiment_id=str(run.experiment_id),
+                    aggregate_type="RunAttempt",
+                    aggregate_id=str(attempt.id),
+                    aggregate_revision=attempt.revision,
+                    event_type="InterventionApplied",
+                    actor=actor,
+                    payload=FrozenDict(
+                        {
+                            "status": attempt.status.value,
+                            "application_id": str(application_id),
+                            "intervention_id": str(intervention.id),
+                            "run_id": str(run.id),
+                            "intervention_application": preview.model_dump(
+                                mode="json", exclude={"event_sequence"}
+                            ),
+                        }
+                    ),
+                ),
+                destinations,
+            )
+            application = preview.model_copy(update={"event_sequence": sequence})
+            self.intervention_applications._insert(application, run_id=str(run.id))
+            return application
 
     def _record_oom_recovery_execution(
         self,
@@ -4338,7 +4871,12 @@ class ControlPlaneRepository:
         return self._write_event(event, destinations)
 
     def _write_event(self, event: DomainEvent, destinations: tuple[str, ...]) -> DomainEvent:
-        self.events._append(event)
+        self._write_sequenced_event(event, destinations)
+        return event
+
+    def _write_sequenced_event(self, event: DomainEvent, destinations: tuple[str, ...]) -> int:
+        """Append *event* and its outbox records; return the sequence the database assigned."""
+        sequence = self.events._append(event)
         now = utc_now()
         for destination in destinations:
             self.events._enqueue(
@@ -4350,7 +4888,7 @@ class ControlPlaneRepository:
                     updated_at=now,
                 )
             )
-        return event
+        return sequence
 
 
 def _cancel_digest(kind: str, target_id: str) -> str:

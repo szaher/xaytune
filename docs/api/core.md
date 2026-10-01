@@ -398,6 +398,75 @@ is already durable. This is governance provenance, not successor authority:
 the executor must still verify the failed attempt's resolved configuration,
 checkpoint bytes, limits and plan freshness before any successor write.
 
+## Numerical recovery and training interventions (PR-021, pre-executor)
+
+A learning-rate drop taken because a continuing run became numerically unstable
+changes training semantics. It is therefore a `TrainingIntervention` on the same
+`Run` (ADR-011): not an `ExecutionOverride`, which must preserve declared
+training intent, and not a new `ExperimentNode`, which is for alternatives you
+want to compare. The node, the `CandidateFingerprint` and the run stay the same.
+
+```text
+NUMERICAL_NAN / NUMERICAL_INF incident
+  → RecoveryEpisode / effective RecoveryPlan   (numerical-intervention, REQUIRES_HUMAN)
+  → NumericalRecoveryPlanner                   (pure)
+  → ChangeLearningRate Action + NumericalRecoveryActionBinding
+  → PolicyEngine: DENY / REQUIRE_APPROVAL / ALLOW
+  → TrainingIntervention                       (only for an authorized Action)
+  → InterventionApplication                    (only on confirmed effect; executor gate)
+```
+
+`NumericalRecoveryPlanner.plan(NumericalRecoveryInputsV1)` is pure. Its input
+binds the effective plan, run, candidate and source execution identity, the
+source trajectory's effective base learning rate, earlier numerical
+interventions on the run, and an explicit `NumericalRecoveryPolicyV1`.
+`repository.numerical_recovery_inputs(plan_id, policy)` derives these facts from
+durable records. Eligibility comes from structured accepted evidence only: every
+diagnosis must resolve to the `numerical-intervention` family and at least one
+must be NaN or Inf. Another specialised family, an unrelated diagnosis, an
+incident diagnosed both NaN and Inf, or a plan that does not await review
+escalates. `RecoveryPlan.reason` is never read.
+
+There is **no built-in reduction**. `NumericalRecoveryPolicyV1` has two required
+fields, `learning_rate_multiplier` (strictly between 0 and 1) and
+`minimum_learning_rate` (a floor, or `None` to state that none applies). Without
+a policy the planner escalates with `NO_POLICY` and the run stays human-governed.
+A reduction below the floor escalates; it is never clamped.
+
+Loop protection uses the structured learning-rate state, not execution
+fingerprints. If an earlier numerical intervention promised 1e-4 and the source
+trajectory's effective rate is not an application of that intervention at that
+value, the planner escalates with `PRIOR_INTERVENTION_NOT_REFLECTED`. One episode
+yields at most one intervention.
+
+A proposal carries one `ChangeLearningRate` spec, the exact triggering
+`IncidentTrigger` and an explicit `REAPPLY_AFTER_ROLLBACK` replay policy: an
+incident is a past occurrence and cannot be re-armed. The OOM
+`RecoveryActionBinding` v1alpha1 is unchanged; numerical proposals use a separate
+`NumericalRecoveryActionBinding` and table, and one plan revision binds at most
+one of the two.
+
+`record_numerical_intervention(action_id, ...)` records the intervention only for
+an Action awaiting execution (`VALIDATED + ALLOW` or `APPROVED + REQUIRE_APPROVAL`)
+while its plan is still open and fresh. It copies origin `REACTIVE_POLICY`, the
+trigger and the replay policy from the bound proposal. `record_training_intervention`
+is the general form: origin must match the Action's proposer, the mutation must
+equal the Action's, and the database refuses an intervention whose Action is not
+an authorized `change-learning-rate` on the same active run.
+
+`TrainingIntervention` has no status. `InterventionApplication` records one
+confirmed effect at a `TrainingPosition`; its canonical order is the
+`InterventionApplied` event sequence, never the position, and a rollback appends a
+new application rather than deleting one. Nothing records an application yet: that
+belongs to the live-worker executor, which is the next review gate.
+
+`repository.get_run_realization(run_id)` projects a `RunRealization`, which is
+never stored. `rebuild_run_realization(run, repository.events_for_run(run_id), ...)`
+rebuilds the same value from the event log. `history_fingerprint` changes whenever an
+application is appended. `artifact_lineage_fingerprint` covers only the
+applications on the head attempt's retained trajectory, and is `None` when a restore
+checkpoint does not record which applications it embodies.
+
 ## State machines
 
 Each aggregate has its own lifecycle. There is deliberately no single experiment-wide status covering training and evaluation: with concurrent branches, an experiment-wide `EVALUATING` would be meaningless.

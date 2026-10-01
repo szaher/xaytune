@@ -39,6 +39,8 @@ __all__ = [
     "ExperimentId",
     "ExperimentNodeId",
     "IncidentId",
+    "InterventionApplicationId",
+    "InterventionId",
     "RecoveryPlanId",
     "RecoveryEpisodeId",
     "RecoveryExecutionReceiptId",
@@ -195,6 +197,20 @@ class IncidentId(TypedId):
 
     __slots__ = ()
     prefix = "inc_"
+
+
+class InterventionId(TypedId):
+    """Identifies a durable scientific decision to change a continuing run (ADR-011)."""
+
+    __slots__ = ()
+    prefix = "intervention_"
+
+
+class InterventionApplicationId(TypedId):
+    """Identifies one confirmed occurrence of an intervention taking effect."""
+
+    __slots__ = ()
+    prefix = "intapp_"
 
 
 class RecoveryEpisodeId(TypedId):

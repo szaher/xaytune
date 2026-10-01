@@ -37,6 +37,12 @@ from xaytune.config.schema import (
     TrainerConfig,
 )
 from xaytune.core.execution import ResolvedExecutionPlan, TrainingExecutionSpec
+from xaytune.core.execution_controls import (
+    MANAGED_NUMERICAL_RECOVERY,
+    TRAINING_INTERVENTIONS,
+    ManagedNumericalRecoveryControl,
+    TrainingInterventionDirectives,
+)
 from xaytune.core.immutable import FrozenDict, thaw
 from xaytune.core.refs import CheckpointRef
 from xaytune.core.telemetry import (
@@ -248,6 +254,36 @@ class _NativeObservations:
         report(self._writer, build)
 
 
+class ManagedNumericalInstabilityError(RuntimeError):
+    """An armed numerical-recovery control stops the attempt on a nonfinite loss.
+
+    Raised by :func:`register_managed_numerical_guard`, never by the observation
+    callbacks: ``NumericalInstabilityObserved`` stays evidence only. ``reason`` is
+    the structured ``TrainingFailed`` reason the NaN/Inf detector reads as the
+    same diagnosis, so the failure confirms the observation rather than adding
+    an unknown one.
+    """
+
+    def __init__(self, observation: str, step: int) -> None:
+        self.reason = "numerical-nan" if observation == "nan" else "numerical-inf"
+        super().__init__(f"loss became {observation} at optimizer step {step}")
+
+
+def register_managed_numerical_guard(callbacks: Any) -> None:
+    """Fail the attempt on a nonfinite loss, after the observation was reported.
+
+    Must be registered **after** the observation callbacks and **before** managed
+    checkpoint capture: callbacks run in registration order and an exception
+    stops the rest, so the unsafe step is reported and never captured.
+    """
+
+    @callbacks.on("step_end")
+    def _guard(state: Any) -> None:
+        loss = state.metrics.get("loss")
+        if loss is not None and not math.isfinite(loss):
+            raise ManagedNumericalInstabilityError(nonfinite(loss), state.global_step)
+
+
 class UnsupportedPrecisionError(RuntimeError):
     """The declared precision cannot be honoured on the device the model is on."""
 
@@ -368,8 +404,23 @@ def main(*_arguments: str) -> int:
         writer,
         gradient_accumulation=worker_config.optimization.gradient_accumulation,
     )
+    options = plan.runtime_options if plan is not None else FrozenDict()
 
     try:
+        # Before setup: the guard must be registered after the observation
+        # callbacks and before managed capture, which setup below registers.
+        control = options.get(MANAGED_NUMERICAL_RECOVERY)
+        if control is not None:
+            ManagedNumericalRecoveryControl.model_validate(thaw(control))
+            register_managed_numerical_guard(callbacks)
+        raw_directives = options.get(TRAINING_INTERVENTIONS)
+        directives = (
+            TrainingInterventionDirectives.model_validate(thaw(raw_directives)).directives
+            if raw_directives is not None
+            else ()
+        )
+        if directives and (not managed or "checkpoint_restore" not in options):
+            raise ValueError("intervention directives require a managed checkpoint restore")
         components = setup_training(train_config, callback_manager=callbacks)
         # After the model is placed, because only then is the device known,
         # and before train(), which would otherwise degrade silently.
@@ -406,9 +457,20 @@ def main(*_arguments: str) -> int:
             )
             restore_payload = plan.runtime_options.get("checkpoint_restore")
             if restore_payload is not None:
-                restore_training_state = adapter.bind_restore(
+                restore_state = adapter.bind_restore(
                     CheckpointRef.model_validate(thaw(restore_payload))
                 )
+                restoring = adapter
+
+                def restore_training_state(
+                    model: Any, optimizer: Any, scheduler: Any, scaler: Any
+                ) -> Any:
+                    restored = restore_state(model, optimizer, scheduler, scaler)
+                    restoring.apply_directives(
+                        directives, optimizer, scheduler, restored.global_step
+                    )
+                    return restored
+
         components.trainer.train(
             model=components.model,
             train_dataloader=loader,
@@ -421,8 +483,11 @@ def main(*_arguments: str) -> int:
         # only place that can report one. It is training-level evidence; the
         # launcher separately records the non-zero exit as process-level
         # evidence, and the two are not duplicates.
+        reason = (
+            exc.reason if isinstance(exc, ManagedNumericalInstabilityError) else failure_reason(exc)
+        )
         try:
-            writer.write(TrainingFailedPayload(reason=failure_reason(exc), detail=str(exc)))
+            writer.write(TrainingFailedPayload(reason=reason, detail=str(exc)))
         except OSError:
             # The channel failing too must not replace the error that matters.
             pass

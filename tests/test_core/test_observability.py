@@ -343,6 +343,13 @@ def examples():
         t.GradientOverflowObserved(),
         t.OptimizerStepSkipped(reason="overflow"),
         t.NumericalInstabilityObserved(quantity="loss", observation="nan"),
+        t.InterventionAppliedPayload(
+            application_id="intapp_x",
+            intervention_id="intervention_x",
+            optimizer_step=100,
+            previous_value=2e-4,
+            applied_value=1e-4,
+        ),
     ]
 
 

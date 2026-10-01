@@ -31,6 +31,7 @@ from xaytune.checkpoints._files import describe
 from xaytune.compilation.attempt_resolution import training_execution_fingerprint
 from xaytune.core.checkpoint import CheckpointCompatibilityKey, CheckpointContext, RestoreContext
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.intervention import InterventionDirective
 from xaytune.core.execution import ResolvedExecutionPlan, TrainingExecutionSpec
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import ArtifactId, CheckpointId, RunAttemptId
@@ -47,6 +48,7 @@ from xaytune.core.resume import (
     StateRestore,
     WorkerRNGState,
 )
+from xaytune.core.telemetry import InterventionAppliedPayload
 from xaytune.runtimes.worker import ObservationWriter
 from xaytune.trainer.callbacks import CallbackManager, TrainState
 
@@ -210,6 +212,10 @@ class NativeCheckpointAdapter:
         self._initial_epoch = 0
         self._initial_offset = 0
         self._current_base_offset = 0
+        # The InterventionApplications this trajectory embodies: inherited from the
+        # restored checkpoint, plus each directive applied here, in order. Every
+        # capture records exactly this, so lineage reconstruction never loses one.
+        self._embodied: list[str] = []
 
     def loader(self, original: DataLoader[Any], batch_size: int) -> DataLoader[Any]:
         if (
@@ -260,6 +266,10 @@ class NativeCheckpointAdapter:
             or cursor.next_sample_offset % self.effective_batch
         ):
             raise ValueError("Native checkpoint cursor disagrees with its sampler capture")
+        embodied = restored.manifest.state_manifest.applied_intervention_application_ids
+        if embodied is None:
+            raise ValueError("Native FULL checkpoint does not record its applied interventions")
+        self._embodied = list(embodied)
         self._initial_epoch = cursor.epoch
         self._initial_offset = cursor.next_sample_offset
         self.sampler.set_epoch(self._initial_epoch, self._initial_offset)
@@ -316,6 +326,49 @@ class NativeCheckpointAdapter:
             )
 
         return apply
+
+    def apply_directives(
+        self,
+        directives: tuple[InterventionDirective, ...],
+        optimizer: Any,
+        scheduler: Any,
+        optimizer_step: int,
+    ) -> None:
+        """Apply directed learning-rate interventions to restored state, then report each.
+
+        The mutation replaces the base learning rate the schedule scales: every
+        group keeps its schedule factor, so the rate continues from the restored
+        position at the new base. Each directive's expected previous value must be
+        the restored (or just-applied) base exactly; any disagreement refuses the
+        attempt before a single step runs at an unintended rate.
+        """
+        for directive in directives:
+            bases = [float(base) for base in scheduler.base_lrs]
+            if not bases or any(base != bases[0] for base in bases):
+                raise ValueError("Native learning-rate directive requires one base rate")
+            previous = bases[0]
+            if previous != directive.expected_previous_value:
+                raise ValueError(
+                    f"restored base learning rate {previous!r} is not the directive's "
+                    f"expected {directive.expected_previous_value!r}"
+                )
+            applied = directive.applied_value
+            for group in optimizer.param_groups:
+                factor = group["lr"] / previous
+                group["initial_lr"] = applied
+                group["lr"] = applied * factor
+            scheduler.base_lrs = [applied for _ in bases]
+            scheduler._last_lr = [group["lr"] for group in optimizer.param_groups]
+            self._embodied.append(str(directive.application_id))
+            self.writer.write(
+                InterventionAppliedPayload(
+                    application_id=str(directive.application_id),
+                    intervention_id=str(directive.intervention_id),
+                    optimizer_step=optimizer_step,
+                    previous_value=previous,
+                    applied_value=applied,
+                )
+            )
 
     def register_capture(
         self,
@@ -398,7 +451,7 @@ class NativeCheckpointAdapter:
                     workers=workers,
                 ),
                 micro_step=0,
-                applied_intervention_application_ids=(),
+                applied_intervention_application_ids=tuple(self._embodied),
             )
             cursor = DataCursor(
                 dataset_fingerprint=self.dataset_fingerprint,

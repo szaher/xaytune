@@ -100,6 +100,9 @@ from xaytune.core.domain.experiment import (
     ExperimentNode,
 )
 from xaytune.core.domain.incident import Incident, IncidentCategory
+from xaytune.core.domain.intervention import InterventionDirective, TrainingPosition
+from xaytune.core.domain.intervention_replay import InterventionReplayError
+from xaytune.core.domain.numerical_recovery import NONFINITE_CATEGORIES, NumericalEscalation
 from xaytune.core.domain.oom_recovery import (
     OOMEscalation,
     OOMRecoveryInputsV1,
@@ -144,6 +147,7 @@ from xaytune.core.telemetry import (
     CheckpointCommittedPayload,
     EvaluationCompletedPayload,
     EvaluationStartedPayload,
+    InterventionAppliedPayload,
     TrainingStartedPayload,
     WorkerReadyPayload,
 )
@@ -165,6 +169,11 @@ from xaytune.experiment.handle import (
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.resilience import IncidentClassifier
+from xaytune.resilience.numerical import NumericalRecoveryPlanner
+from xaytune.resilience.numerical_execution import (
+    NumericalCheckpointUnavailableError,
+    NumericalRecoveryExecutor,
+)
 from xaytune.resilience.oom import OOMRecoveryPlanner
 from xaytune.resilience.oom_execution import (
     OOMCheckpointUnavailableError,
@@ -179,6 +188,7 @@ from xaytune.storage.control_plane import (
     StalePolicyContextError,
     StaleRecoveryContextError,
 )
+from xaytune.storage.journal import IdempotencyConflictError
 from xaytune.storage.migrations import migrate
 
 __all__ = [
@@ -478,6 +488,15 @@ class EmbeddedControllerHost:
         :meth:`~xaytune.storage.ControlPlaneRepository.approve_action` raises.
         """
         self.repository.approve_action(action_id, approver=approver, reason=reason)
+        numerical = self.repository.numerical_recovery_bindings.for_action(str(action_id))
+        if numerical is not None:
+            episode = self.repository.recovery_episodes.get(str(numerical.episode_id))
+            assert episode is not None
+            await self._drive_numerical_recovery(
+                episode.context.experiment_id,
+                RunId(episode.context.run_id),
+                RunAttemptId(episode.context.target.id),
+            )
         binding = self.repository.recovery_action_bindings.for_action(str(action_id))
         if binding is not None:
             episode = self.repository.recovery_episodes.get(str(binding.episode_id))
@@ -494,6 +513,20 @@ class EmbeddedControllerHost:
     ) -> GovernedAction:
         """A human refuses an action awaiting approval."""
         self.repository.reject_action(action_id, approver=approver, reason=reason)
+        numerical = self.repository.numerical_recovery_bindings.for_action(str(action_id))
+        if numerical is not None:
+            try:
+                self.repository.abandon_numerical_recovery_action(
+                    ActionId(str(action_id)), actor=approver, reason=reason
+                )
+            except StaleRecoveryContextError:
+                episode = self.repository.recovery_episodes.get(str(numerical.episode_id))
+                assert episode is not None
+                await self._drive_numerical_recovery(
+                    episode.context.experiment_id,
+                    RunId(episode.context.run_id),
+                    RunAttemptId(episode.context.target.id),
+                )
         binding = self.repository.recovery_action_bindings.for_action(str(action_id))
         if binding is not None:
             try:
@@ -588,7 +621,9 @@ class EmbeddedControllerHost:
         awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
         approval_targets = set()
         for action in awaiting_approval:
-            binding = self.repository.recovery_action_bindings.for_action(str(action.id))
+            binding = self.repository.recovery_action_bindings.for_action(
+                str(action.id)
+            ) or self.repository.numerical_recovery_bindings.for_action(str(action.id))
             if binding is not None and self.repository.recovery_plans.is_effective_and_fresh(
                 str(binding.plan_id)
             ):
@@ -713,6 +748,8 @@ class EmbeddedControllerHost:
                 self._advance_attempt(attempt_id, RunAttemptStatus.RUNNING, position)
             elif isinstance(observation, ArtifactProducedPayload):
                 self._record_artifact(attempt_id, observation.artifact_ref, position)
+            elif isinstance(observation, InterventionAppliedPayload):
+                self._record_intervention_applied(experiment_id, attempt_id, observation)
             elif isinstance(observation, CheckpointCommittedPayload):
                 self.repository.record_checkpoint(
                     attempt_id,
@@ -753,7 +790,7 @@ class EmbeddedControllerHost:
             )
             return
         run_outcome: RunStatus | None = outcome[1]
-        oom_observed = False
+        oom_observed = numerical_observed = False
         if outcome[0] is RunAttemptStatus.FAILED:
             target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
             oom_observed = any(
@@ -761,7 +798,15 @@ class EmbeddedControllerHost:
                 in {candidate.category for candidate in observed.candidates}
                 for observed in self.repository.incidents.for_attempt(target)
             )
-            if oom_observed and self._checkpoint_manager is not None:
+            numerical_observed = (
+                not oom_observed
+                and self._numerical_incident(attempt_id) is not None
+                and self.repository.aggregates.load_experiment(
+                    str(experiment_id)
+                ).numerical_recovery
+                is not None
+            )
+            if (oom_observed or numerical_observed) and self._checkpoint_manager is not None:
                 # Recovery may still create a successor under this logical Run.
                 # The recovery workflow later decides whether to continue or fail it.
                 run_outcome = None
@@ -769,11 +814,191 @@ class EmbeddedControllerHost:
         self._reconcile_cancellations(experiment_id)
         if oom_observed and run_outcome is None:
             await self._drive_oom_recovery(experiment_id, run_id, attempt_id)
+        elif numerical_observed and run_outcome is None:
+            await self._drive_numerical_recovery(experiment_id, run_id, attempt_id)
         if outcome[1] is RunStatus.SUCCEEDED:
             run = self.repository.aggregates.load_run(str(run_id))
             await self._continue_to_evaluation(experiment_id, run.node_id)
 
     # ---- issuing and reconciling submissions (ADR-013) -----------------------
+
+    def _oom_incident(self, attempt_id: RunAttemptId) -> bool:
+        target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+        return any(
+            candidate.category is IncidentCategory.CUDA_OOM
+            for observed in self.repository.incidents.for_attempt(target)
+            for candidate in observed.candidates
+        )
+
+    def _numerical_incident(self, attempt_id: RunAttemptId) -> Incident | None:
+        """The attempt's first nonfinite incident, if numerical recovery is its concern."""
+        target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+        return next(
+            (
+                observed
+                for observed in self.repository.incidents.for_attempt(target)
+                if any(
+                    candidate.category in NONFINITE_CATEGORIES for candidate in observed.candidates
+                )
+            ),
+            None,
+        )
+
+    def _record_intervention_applied(
+        self,
+        experiment_id: ExperimentId,
+        attempt_id: RunAttemptId,
+        observation: InterventionAppliedPayload,
+    ) -> None:
+        """Record a worker-confirmed effect, and only for a directive this attempt carried."""
+        directive = self.repository.intervention_directives.get(observation.application_id)
+        if (
+            directive is None
+            or directive.attempt_id != attempt_id
+            or str(directive.intervention_id) != observation.intervention_id
+        ):
+            self._escalations[str(experiment_id)] = (
+                f"attempt {attempt_id} reported an intervention application "
+                f"{observation.application_id} that no directive of it names"
+            )
+            return
+        try:
+            self.repository.record_intervention_application(
+                directive.intervention_id,
+                application_id=directive.application_id,
+                attempt_id=attempt_id,
+                position=TrainingPosition(optimizer_step=observation.optimizer_step),
+                observed_previous_value=observation.previous_value,
+                applied_value=observation.applied_value,
+                actor=_ACTOR,
+            )
+        except (ProvenanceError, IdempotencyConflictError) as error:
+            self._escalations[str(experiment_id)] = str(error)
+
+    async def _drive_numerical_recovery(
+        self, experiment_id: ExperimentId, run_id: RunId, attempt_id: RunAttemptId
+    ) -> None:
+        """Govern and consume one numerical episode as a checkpoint-backed successor.
+
+        Spec 08 §9a. The decision is a governed ``ChangeLearningRate``; its
+        authorized outcome is a ``TrainingIntervention``; the successor attempt
+        restores a validated checkpoint from before the unsafe step and carries
+        the intervention -- with any re-application a rollback requires -- as
+        directives the worker applies and confirms. An approval-pending Action
+        leaves the Run active; approval or attach resumes from the record.
+        """
+        observed = self._numerical_incident(attempt_id)
+        experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        policy = experiment.numerical_recovery
+        if observed is None or policy is None:
+            return
+        target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+        episode = self.repository.recovery_episodes.for_attempt(target)
+        if self._checkpoint_manager is None:
+            if episode is not None:
+                self._escalations[str(experiment_id)] = (
+                    f"numerical episode {episode.id} needs its checkpoint manager to resume"
+                )
+            else:
+                self._settle(attempt_id, run_id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+            return
+        request = None
+        if episode is None and self._recovery_request_for_incident is not None:
+            request = self._recovery_request_for_incident(observed)
+        if episode is None and request is None:
+            self._escalations[str(experiment_id)] = (
+                f"numerical attempt {attempt_id} needs an explicit RecoveryRequest "
+                "before its first recovery decision"
+            )
+            return
+        coordinator = RecoveryCoordinator(self.repository, self._checkpoint_manager)
+        plan = await coordinator.plan(str(observed.id), request)
+        if not self.repository.recovery_plans.is_effective_and_fresh(str(plan.id)):
+            self._escalations[str(experiment_id)] = (
+                f"numerical episode {plan.episode_id} has uncovered or changed evidence"
+            )
+            return
+        run = self.repository.aggregates.load_run(str(run_id))
+        assert experiment.compiler is not None
+        compiler = self._compiler(experiment.compiler.name)
+        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
+        runtime = self._recorded_runtime(experiment)
+        capabilities = runtime.capabilities()
+
+        def resolver(candidate_attempt: RunAttempt, **options: Any) -> ResolvedExecutionPlan:
+            return self._plan(experiment, run, candidate_attempt, compiler, **options)
+
+        existing = self.repository.numerical_recovery_bindings.for_plan(str(plan.id))
+        if existing is None:
+            try:
+                inputs = self.repository.numerical_recovery_inputs(str(plan.id), policy)
+            except (ProvenanceError, ValidationError) as error:
+                self._escalations[str(experiment_id)] = (
+                    f"numerical episode {plan.episode_id} cannot be planned: {error}"
+                )
+                return
+            proposed = NumericalRecoveryPlanner().plan(inputs)
+            if isinstance(proposed, NumericalEscalation):
+                self._settle(attempt_id, run_id, RunAttemptStatus.FAILED, RunStatus.FAILED)
+                return
+            governed = self.repository.propose_numerical_recovery_action(
+                inputs,
+                proposed,
+                proposed_by=_ACTOR,
+                reason="numerical recovery: lower the learning rate and continue the run",
+                policy=self._policy,
+                capabilities=capabilities,
+            )
+        else:
+            governed = self.repository.governed_action(existing.action_id)
+        action = governed.action
+        if action.status is ActionStatus.APPROVAL_PENDING:
+            return
+        if action.status is ActionStatus.REJECTED:
+            self.repository.abandon_numerical_recovery_action(
+                action.id, actor=_ACTOR, reason="numerical recovery Action was rejected"
+            )
+            return
+        if action.status not in (ActionStatus.VALIDATED, ActionStatus.APPROVED):
+            # EXECUTING: the successor and its intent exist; submission
+            # reconciliation and the worker's confirmation own the next step.
+            return
+        try:
+            if self.repository.training_interventions.for_action(str(action.id)) is None:
+                self.repository.record_numerical_intervention(
+                    action.id,
+                    actor=_ACTOR,
+                    rationale="loss became nonfinite; lower the learning rate and continue",
+                )
+        except StaleRecoveryContextError as error:
+            self._escalations[str(experiment_id)] = str(error)
+            return
+        executor = NumericalRecoveryExecutor(
+            self.repository, self._checkpoint_manager, resolver, capabilities=capabilities
+        )
+        while True:
+            try:
+                successor, operation, _ = await executor.execute(action.id, actor=_ACTOR)
+                break
+            except CapacityUnavailableError:
+                await asyncio.sleep(_CAPACITY_POLL_SECONDS)
+            except (NumericalCheckpointUnavailableError, BudgetExhaustedError) as error:
+                self.repository.abandon_numerical_recovery_action(
+                    action.id, actor=_ACTOR, reason=str(error)
+                )
+                return
+            except (
+                StaleRecoveryContextError,
+                StalePolicyContextError,
+                InterventionReplayError,
+            ) as error:
+                # Nothing was committed. Unknown lineage fails closed and waits
+                # for a human; a changed decision is replanned on attach.
+                self._escalations[str(experiment_id)] = str(error)
+                return
+        await self._issue(
+            experiment_id, run_id, successor.id, operation, resolver(successor), runtime
+        )
 
     async def _drive_oom_recovery(
         self, experiment_id: ExperimentId, run_id: RunId, attempt_id: RunAttemptId
@@ -941,14 +1166,24 @@ class EmbeddedControllerHost:
         run: Run,
         attempt: RunAttempt | RunAttemptId,
         compiler: TrainerCompiler,
+        *,
+        directives: tuple[InterventionDirective, ...] | None = None,
+        restore_action_id: str | None = None,
     ) -> ResolvedExecutionPlan:
         """The attempt's execution plan, built from the durable record alone.
 
         Submission and reconciliation both use this, so a submission re-issued
         after a restart is the same request by construction: the same candidate
         snapshot, seed, output location and target, compiled by the same compiler
-        version, then resolved through that attempt's durable overrides and
-        checkpoint binding. Its digest is checked before anything is issued.
+        version, then resolved through that attempt's durable overrides,
+        checkpoint binding and intervention directives. Its digest is checked
+        before anything is issued.
+
+        The managed numerical-recovery control is armed from the experiment's
+        recorded ``numerical_recovery`` policy, for a compiled plan with managed
+        Native checkpoints -- the only worker that honours it. *directives* and
+        *restore_action_id* are given only for a successor not yet recorded;
+        otherwise both are read from the record.
         """
         node = self.repository.aggregates.load_node(str(run.node_id))
         assert experiment.runtime is not None and experiment.artifact_root is not None
@@ -968,7 +1203,20 @@ class EmbeddedControllerHost:
                 checkpoint_store_uri=str(Path(experiment.artifact_root) / "checkpoints"),
             ),
         )
-        return resolve_training_attempt(spec, attempt, experiment.runtime.kind)
+        if directives is None:
+            directives = self.repository.intervention_directives.for_attempt(str(attempt.id))
+        if restore_action_id is None:
+            receipt = self.repository.numerical_recovery_executions.for_successor(str(attempt.id))
+            restore_action_id = None if receipt is None else str(receipt.action_id)
+        return resolve_training_attempt(
+            spec,
+            attempt,
+            experiment.runtime.kind,
+            directives=directives,
+            numerical_recovery=experiment.numerical_recovery is not None
+            and spec.checkpoint.format == "native-torch/v1",
+            restore_action_id=restore_action_id,
+        )
 
     async def _issue(
         self,
@@ -1119,6 +1367,9 @@ class EmbeddedControllerHost:
                     and latest.status in (RunAttemptStatus.FAILED, RunAttemptStatus.PREEMPTED)
                 ):
                     await self._drive_oom_recovery(experiment.id, run.id, latest.id)
+                    run = aggregates.load_run(str(run.id))
+                    if run.status is RunStatus.ACTIVE and not self._oom_incident(latest.id):
+                        await self._drive_numerical_recovery(experiment.id, run.id, latest.id)
             await self._reconcile_evaluation(experiment, node.id)
 
         for action in self.repository.actions.for_target("experiment", str(experiment.id)):

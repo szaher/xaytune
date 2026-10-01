@@ -206,3 +206,210 @@ def test_real_local_native_nan_recovers_with_a_training_intervention(tmp_path: P
             await host.close()
 
     asyncio.run(scenario())
+
+
+class _InjectTwoNaNs(_InjectOneOOM):
+    """NaN-fail attempt 1 after its step-1 commit and attempt 2 after its first commit.
+
+    With ``corrupt_second`` the second attempt's commit is corrupted before it fails,
+    so recovery must fall back to attempt 1's checkpoint -- from before the first
+    intervention's application -- and re-apply it.
+    """
+
+    def __init__(self, inner: LocalRuntime, store_root: Path, *, corrupt_second: bool) -> None:
+        super().__init__(inner)
+        self.store_root = store_root
+        self.corrupt_second = corrupt_second
+        self.failed_references: set[str] = set()
+
+    async def submit_or_get(self, operation_id, plan):
+        reference = await self.inner.submit_or_get(operation_id, plan)
+        self.attempt_of = getattr(self, "attempt_of", {})
+        self.attempt_of[reference.external_id] = plan.target.id
+        return reference
+
+    async def watch(self, reference, cursor=None):
+        index = list(self.attempt_of).index(reference.external_id)
+        async for event in self.inner.watch(reference, cursor):
+            yield event
+            if (
+                index < 2
+                and reference.external_id not in self.failed_references
+                and isinstance(event.payload.data, CheckpointCommittedPayload)
+            ):
+                self.failed_references.add(reference.external_id)
+                if index == 1 and self.corrupt_second:
+                    committed = (
+                        self.store_root / "committed" / str(event.payload.data.checkpoint_ref.id)
+                    )
+                    (committed / "model.pt").write_bytes(b"corrupted")
+                await self.inner.cancel(reference, OperationId.generate())
+                step = event.payload.data.optimizer_step + 1
+                for offset, data in enumerate(
+                    (
+                        NumericalInstabilityObserved(
+                            optimizer_step=step, quantity="loss", observation="nan"
+                        ),
+                        TrainingFailedPayload(reason="numerical-nan"),
+                    ),
+                    start=1,
+                ):
+                    yield RuntimeEventEnvelope(
+                        event_id=f"injected-nan-{reference.external_id}-{offset}",
+                        target=event.target,
+                        stream_generation=event.stream_generation,
+                        sequence=event.sequence + offset,
+                        payload=TrainingEventPayload(data=data),
+                    )
+                return
+
+    async def get_status(self, reference):
+        status = await self.inner.get_status(reference)
+        if reference.external_id in self.failed_references:
+            while status.state in ("pending", "running", "cancelling"):
+                await asyncio.sleep(0.02)
+                status = await self.inner.get_status(reference)
+            from xaytune.runtimes import RuntimeStatus
+
+            return RuntimeStatus(state="failed", exit_code=1)
+        return status
+
+
+def _two_nan_scenario(tmp_path: Path, *, corrupt_second: bool, check) -> None:
+    async def scenario():
+        spec = _spec(
+            tmp_path,
+            budget=BudgetSpec(max_runs=1, max_parallel_runs=1, max_failures=3),
+            numerical_recovery=HALVE,
+        )
+        optimization = spec.candidate.training.optimization.model_copy(
+            update={"micro_batch_size": 2, "gradient_accumulation": 1}
+        )
+        training = spec.candidate.training.model_copy(
+            update={
+                "optimization": optimization,
+                "checkpoint": CheckpointIntent(every_optimizer_steps=1),
+            }
+        )
+        spec = spec.model_copy(
+            update={"candidate": spec.candidate.model_copy(update={"training": training})}
+        )
+        store_root = tmp_path / "artifacts" / "checkpoints"
+        manager = CheckpointManager(SerializedStateCodec(), LocalCheckpointStore(store_root))
+        runtime = _InjectTwoNaNs(
+            LocalRuntime(tmp_path / "runtime"), store_root, corrupt_second=corrupt_second
+        )
+
+        def request_for_incident(incident) -> RecoveryRequest:
+            experiment = host.repository.aggregates.load_experiment(
+                str(incident.context.experiment_id)
+            )
+            run = host.repository.aggregates.load_run(incident.context.run_id)
+            attempt = host.repository.aggregates.load_attempt(incident.context.target.id)
+            source_plan = host._plan(experiment, run, attempt, NativeCompiler())
+            assert run.seed is not None
+            return RecoveryRequest(
+                restore_context=native_restore_context(
+                    source_plan, Path(source_plan.spec.config["data"]["path"]), seed=run.seed
+                )
+            )
+
+        host = EmbeddedControllerHost(
+            tmp_path / "state.db",
+            runtimes={"local": lambda _config: runtime},
+            policy=RulePolicyEngine(default=PolicyVerdict.ALLOW),
+            checkpoint_manager=manager,
+            recovery_request_for_incident=request_for_incident,
+        )
+        try:
+            handle = await host.submit(spec)
+            await asyncio.wait_for(handle.wait(), timeout=120)
+            repository = host.repository
+            (node,) = repository.aggregates.nodes_for_experiment(str(handle.experiment_id))
+            (run,) = repository.aggregates.runs_for_node(str(node.id))
+            check(repository, run, repository.aggregates.attempts_for_run(str(run.id)))
+        finally:
+            await host.close()
+
+    asyncio.run(scenario())
+
+
+def _lineage(repository, run, attempts):
+    first, second, third = attempts
+    assert run.status is RunStatus.SUCCEEDED
+    assert [a.status for a in attempts] == [
+        RunAttemptStatus.FAILED,
+        RunAttemptStatus.FAILED,
+        RunAttemptStatus.SUCCEEDED,
+    ]
+    i1, i2 = repository.training_interventions.for_run(str(run.id))
+    assert (i1.mutation.learning_rate, i2.mutation.learning_rate) == (
+        DECLARED_LR * 0.5,
+        DECLARED_LR * 0.25,
+    )
+    (a1,) = [
+        a
+        for a in repository.intervention_applications.for_run(str(run.id))
+        if a.attempt_id == second.id
+    ]
+    assert a1.intervention_id == i1.id
+    second_capture = repository.checkpoints.for_attempt(str(second.id))[0]
+    assert second_capture.payload.state_manifest.applied_intervention_application_ids == (
+        str(a1.id),
+    )
+    return i1, i2, a1, third
+
+
+def test_real_rollback_before_a1_reapplies_the_same_intervention(tmp_path: Path) -> None:
+    _two_nan_scenario(tmp_path, corrupt_second=True, check=_check_rollback)
+
+
+def _check_rollback(repository, run, attempts) -> None:
+    i1, i2, a1, third = _lineage(repository, run, attempts)
+    first = attempts[0]
+    assert third.checkpoint_ref is not None
+    assert repository.checkpoints.get(str(third.checkpoint_ref.id)).context.target.id == str(
+        first.id
+    ), "C2 was corrupt, so the restore fell back to attempt 1's C1, from before A1"
+    reapply, initial = repository.intervention_directives.for_attempt(str(third.id))
+    assert (reapply.kind, reapply.intervention_id) == (
+        InterventionDirectiveKind.REAPPLY_AFTER_ROLLBACK,
+        i1.id,
+    )
+    assert (initial.kind, initial.intervention_id) == (InterventionDirectiveKind.INITIAL, i2.id)
+    on_third = [
+        a
+        for a in repository.intervention_applications.for_run(str(run.id))
+        if a.attempt_id == third.id
+    ]
+    assert [(a.intervention_id, a.previous_value, a.applied_value) for a in on_third] == [
+        (i1.id, DECLARED_LR, DECLARED_LR * 0.5),
+        (i2.id, DECLARED_LR * 0.5, DECLARED_LR * 0.25),
+    ]
+    assert on_third[0].id != a1.id, "a re-application is a new application of the same I"
+    assert len(repository.training_interventions.for_run(str(run.id))) == 2
+    captures = repository.checkpoints.for_attempt(str(third.id))
+    assert captures[-1].payload.state_manifest.applied_intervention_application_ids == tuple(
+        str(a.id) for a in on_third
+    )
+    realization = repository.get_run_realization(run.id)
+    assert realization.trajectory is not None
+    assert realization.trajectory.application_ids == tuple(a.id for a in on_third)
+
+
+def test_real_restore_of_c2_embodying_a1_does_not_reapply(tmp_path: Path) -> None:
+    _two_nan_scenario(tmp_path, corrupt_second=False, check=_check_no_reapply)
+
+
+def _check_no_reapply(repository, run, attempts) -> None:
+    i1, i2, a1, third = _lineage(repository, run, attempts)
+    assert third.checkpoint_ref is not None
+    assert repository.checkpoints.get(str(third.checkpoint_ref.id)).context.target.id == str(
+        attempts[1].id
+    ), "the restore is C2, which embodies A1"
+    (initial,) = repository.intervention_directives.for_attempt(str(third.id))
+    assert (initial.kind, initial.intervention_id) == (InterventionDirectiveKind.INITIAL, i2.id)
+    assert len(repository.intervention_applications.for_intervention(str(i1.id))) == 1
+    realization = repository.get_run_realization(run.id)
+    assert realization.trajectory is not None
+    assert realization.trajectory.application_ids[0] == a1.id

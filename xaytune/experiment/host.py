@@ -117,7 +117,7 @@ from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarg
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.recovery import RecoveryRequest
 from xaytune.core.domain.run import Run, RunAttempt
-from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
+from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.errors import XaytuneError
 from xaytune.core.execution import PythonModuleEntrypoint, ResolvedExecutionPlan
 from xaytune.core.execution_controls import MANAGED_NUMERICAL_RECOVERY, TRAINING_INTERVENTIONS
@@ -172,6 +172,7 @@ from xaytune.experiment.handle import (
     RunOutcome,
 )
 from xaytune.experiment.spec import ExperimentSpec
+from xaytune.planning import PLANNERS, Planner
 from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.resilience import IncidentClassifier
 from xaytune.resilience.numerical import NumericalRecoveryPlanner
@@ -351,6 +352,10 @@ class EmbeddedControllerHost:
             :class:`~xaytune.policy.DenyAllPolicy`: with no policy configured,
             every proposal is denied, with a durable decision saying why.
             Cancellation is never governed by it.
+        planners: Planner factories by kind, each binding a ``PlannerSpec``.
+            Defaults to :data:`~xaytune.planning.PLANNERS` (``rule-based`` and
+            ``no-op``). A spec's planner is bound at submission and recorded;
+            nothing invokes it yet.
     """
 
     def __init__(
@@ -364,6 +369,7 @@ class EmbeddedControllerHost:
         policy: PolicyEngine | None = None,
         checkpoint_manager: CheckpointManager | None = None,
         recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None = None,
+        planners: Mapping[str, Callable[[PlannerSpec], Planner]] | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -378,6 +384,7 @@ class EmbeddedControllerHost:
         self._compilers = dict(_default_compilers() if compilers is None else compilers)
         self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
         self._evaluators = dict(_default_evaluators() if evaluators is None else evaluators)
+        self._planners = dict(PLANNERS if planners is None else planners)
         self._decision_engine = (
             ThresholdDecisionEngine() if decision_engine is None else decision_engine
         )
@@ -401,8 +408,10 @@ class EmbeddedControllerHost:
         recorded; training continues under a controller task in this process.
 
         Raises:
-            UnknownImplementationError: If the spec names a compiler, runtime
-                or evaluator this host cannot resolve.
+            UnknownImplementationError: If the spec names a compiler, runtime,
+                evaluator or planner this host cannot resolve.
+            PlannerConfigurationError: If the planner refuses its spec's
+                version or configuration.
             UnsupportedCandidateError: If the compiler cannot run the candidate
                 exactly as declared.
             UnsupportedEvaluationError: If the evaluator cannot run the
@@ -429,8 +438,9 @@ class EmbeddedControllerHost:
             if refused:
                 raise UnsupportedNumericalRecoveryError(refused)
         evaluation = None if spec.evaluation is None else self._bind_evaluation(spec.evaluation)
+        planner = None if spec.planner is None else self._planner(spec.planner).spec
 
-        experiment = self._record_experiment(spec, compiler, runtime, evaluation)
+        experiment = self._record_experiment(spec, compiler, runtime, evaluation, planner)
         node = self._record_node(experiment, spec)
         try:
             run = self._record_run(node, spec.seed)
@@ -2207,6 +2217,7 @@ class EmbeddedControllerHost:
         compiler: TrainerCompiler,
         runtime: RuntimeBackend,
         evaluation: EvaluationSpec | None,
+        planner: PlannerSpec | None = None,
     ) -> Experiment:
         experiment = Experiment(
             id=ExperimentId.generate(),
@@ -2225,6 +2236,7 @@ class EmbeddedControllerHost:
             budget=spec.budget,
             numerical_recovery=spec.numerical_recovery,
             evaluation=evaluation,
+            planner=planner,
         )
         self.repository.create_experiment(experiment, actor=_ACTOR)
         return self.repository.transition_experiment(
@@ -2383,6 +2395,41 @@ class EmbeddedControllerHost:
         _require_version("runtime", spec, runtime.descriptor.plugin_version)  # type: ignore[attr-defined]
         return runtime
 
+    def _planner(self, spec: PlannerSpec) -> Planner:
+        """Bind *spec* to a planner: resolved, its API checked, its config validated (ADR-016).
+
+        Raises:
+            UnknownImplementationError: If this host has no planner of the kind.
+            PlannerConfigurationError: If the planner refuses the spec.
+        """
+        factory = self._planners.get(spec.kind)
+        if factory is None:
+            raise UnknownImplementationError(
+                f"no planner of kind {spec.kind!r}; this host knows {sorted(self._planners)}"
+            )
+        return factory(spec)
+
+    def _recorded_planner(self, experiment: Experiment) -> Planner | None:
+        """The planner the record names, at the version it names, or ``None`` if it names none.
+
+        Raises:
+            ImplementationMismatchError: If this host's planner of that kind
+                is another version.
+        """
+        spec = experiment.planner
+        if spec is None:
+            return None
+        # Bound by kind and config first, so a version that moved is reported
+        # as the mismatch it is rather than as a configuration error.
+        planner = self._planner(spec.model_copy(update={"version": None}))
+        _require_version("planner", spec, planner.descriptor.plugin_version)
+        if planner.spec != spec:
+            raise ImplementationMismatchError(
+                f"the record's planner spec {spec} does not bind to itself on this host "
+                f"({planner.spec}); continuing with a different planner is refused"
+            )
+        return planner
+
     def _evaluator(self, name: str) -> Evaluator:
         factory = self._evaluators.get(name)
         if factory is None:
@@ -2421,11 +2468,11 @@ def _is_refusal(exc: BaseException) -> bool:
 
 
 def _require_version(
-    kind: str, spec: CompilerSpec | RuntimeSpec | EvaluatorSpec, available: str
+    kind: str, spec: CompilerSpec | RuntimeSpec | EvaluatorSpec | PlannerSpec, available: str
 ) -> None:
     """Refuse to continue work recorded against a different implementation version."""
     if spec.version != available:
-        name = spec.kind if isinstance(spec, RuntimeSpec) else spec.name
+        name = spec.kind if isinstance(spec, (RuntimeSpec, PlannerSpec)) else spec.name
         raise ImplementationMismatchError(
             f"the record names {kind} {name!r} at version {spec.version}, but this host "
             f"provides {available}; continuing its work with a different version is refused"

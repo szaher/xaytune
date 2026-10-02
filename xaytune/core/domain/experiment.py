@@ -18,7 +18,7 @@ from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
-from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
+from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.ids import (
     DecisionId,
@@ -103,6 +103,14 @@ class Experiment(AggregateModel):
     compiler: CompilerSpec | None = None
     runtime: RuntimeSpec | None = None
     artifact_root: str | None = None
+
+    planner: PlannerSpec | None = None
+    """Which planner proposes the experiment's next candidate, bound (ADR-016).
+
+    ``None`` -- the default, and every record written before PR-024 -- means
+    no planner was chosen: an experiment that reaches the planning stage
+    waits for someone to propose by hand.
+    """
 
     evaluation: EvaluationSpec | None = None
     """How each trained candidate is evaluated, with its evaluator bound.

@@ -443,6 +443,30 @@ An incident proposes no response. It creates no Action, runtime operation, new
 attempt, or experiment node. Recovery plans and recovery execution remain later
 work.
 
+## Planning
+
+When every candidate of an open experiment is decided on its merits
+(`next_stage == "planning"`), a **planner** proposes what to try next. It
+proposes only; it never creates a node or runs anything.
+
+- **Declared as a spec.** Set `ExperimentSpec.planner =
+  PlannerSpec(kind="rule-based", config={...})`. The host binds it at
+  submission and records it with its version. A planner it cannot bind is
+  refused, and nothing is recorded.
+- **From the record alone.** `host.repository.planning_context(experiment_id)`
+  is a read-only projection: the objective, each candidate with its current
+  identity, decisions, evaluation results, and the budget. A planner reads
+  nothing else, so the same context gives the same proposals. Each proposal
+  carries the context's fingerprint and the planner's identity.
+- **The rule-based planner** applies typed mutation rules, in declared order,
+  to the best `COMPLETED` candidate by its recorded primary metric. The first
+  rule is `increase-lora-rank` (for example 16 → 32, capped by `max_rank`).
+  A candidate the experiment already has is skipped.
+- It does not judge targets or constraints (the decision engine does), handle
+  failures (recovery does) or reuse artifacts (ADR-017).
+
+Turning a proposal into a new node is not implemented yet.
+
 ## Local checkpoint bundles
 
 `xaytune.checkpoints` provides a codec, local store and manager. The initial
@@ -493,4 +517,5 @@ comparison across replicates), lm-eval generation tasks, reusing earlier
 evaluation results, carrying out a proposed action (other than
 cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
 TRL managed checkpoint capture/application,
-planners and branching, daemon hosting, and runtimes other than local.
+branching (turning a planner's proposal into a node), plateau detection,
+daemon hosting, and runtimes other than local.

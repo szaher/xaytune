@@ -22,10 +22,10 @@ from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
-from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
+from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.immutable import FrozenDomainModel
 
-__all__ = ["CompilerSpec", "ExperimentSpec", "RuntimeSpec"]
+__all__ = ["CompilerSpec", "ExperimentSpec", "PlannerSpec", "RuntimeSpec"]
 
 
 class ExperimentSpec(FrozenDomainModel):
@@ -62,6 +62,11 @@ class ExperimentSpec(FrozenDomainModel):
             ``ChangeLearningRate`` with these explicit parameters, carried by a
             checkpoint-backed successor attempt. ``None`` leaves numerical
             incidents report-only. It is not candidate identity.
+        planner: Which planner proposes the next candidate once the
+            experiment reaches the planning stage, as a ``PlannerSpec``. The
+            host binds it at submission -- resolving the kind, validating the
+            config, recording the version -- and refuses one it cannot bind.
+            Nothing invokes it yet: proposals are consumed from PR-025/026.
     """
 
     name: str = Field(min_length=1)
@@ -75,14 +80,17 @@ class ExperimentSpec(FrozenDomainModel):
     evaluation: EvaluationSpec | None = None
     budget: BudgetSpec | None = None
     numerical_recovery: NumericalRecoveryPolicyV1 | None = None
+    planner: PlannerSpec | None = None
 
-    @field_validator("compiler", "runtime")
+    @field_validator("compiler", "runtime", "planner")
     @classmethod
-    def _unbound(cls, spec: CompilerSpec | RuntimeSpec) -> CompilerSpec | RuntimeSpec:
+    def _unbound(
+        cls, spec: CompilerSpec | RuntimeSpec | PlannerSpec | None
+    ) -> CompilerSpec | RuntimeSpec | PlannerSpec | None:
         # The version is the host's to resolve and record. Accepting one from
         # the caller would let the record claim an implementation version
         # nothing checked.
-        if spec.version is not None:
+        if spec is not None and spec.version is not None:
             raise ValueError(
                 "version is resolved by the host at submission and recorded; do not supply it"
             )

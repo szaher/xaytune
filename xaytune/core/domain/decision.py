@@ -9,6 +9,7 @@ Decision            with the transitions the outcome causes:
                       STOP_SUCCEEDED   node COMPLETED, experiment SUCCEEDED
                       STOP_FAILED      node REJECTED,  experiment FAILED
                       REJECT           node REJECTED   (the experiment goes on)
+                      BRANCH           node COMPLETED  (the experiment goes on)
 ```
 
 A decision is a historical fact, like an evaluation result. It is written
@@ -57,7 +58,7 @@ class DecisionOutcome(str, Enum):
     """What a decision does with a candidate. The vocabulary the engine uses so far.
 
     The specification names more -- ``CONTINUE_CURRENT``, ``EVALUATE_MORE``,
-    ``BRANCH``, ``PROMOTE``, ``PAUSE``, ``STOP_BUDGET`` -- and each arrives
+    ``PROMOTE``, ``PAUSE``, ``STOP_BUDGET`` -- and each arrives
     with the machinery that can act on it. Until then an outcome nothing
     could carry out would be a record of an intention, not a decision.
     """
@@ -67,6 +68,16 @@ class DecisionOutcome(str, Enum):
 
     STOP_FAILED = "stop_failed"
     """No constraint is violated, but the target is not met: the experiment ends unsuccessfully."""
+
+    BRANCH = "branch"
+    """No constraint is violated and the target is not met; another candidate may be tried.
+
+    The candidate is finished and valid -- ``COMPLETED``, not ``REJECTED`` --
+    and the experiment stays ``ACTIVE``. ``BRANCH`` creates no candidate: a
+    planner proposes one and branching materializes it, after the budget
+    says the experiment may still spend. It is the adaptive reading of a
+    missed target, where ``STOP_FAILED`` is the single-candidate one.
+    """
 
     REJECT = "reject"
     """A constraint is violated: this candidate is unacceptable, whatever its objective.
@@ -78,7 +89,7 @@ class DecisionOutcome(str, Enum):
     @property
     def node_status(self) -> ExperimentNodeStatus:
         """Where the decision leaves the candidate."""
-        if self is DecisionOutcome.STOP_SUCCEEDED:
+        if self in (DecisionOutcome.STOP_SUCCEEDED, DecisionOutcome.BRANCH):
             return ExperimentNodeStatus.COMPLETED
         return ExperimentNodeStatus.REJECTED
 

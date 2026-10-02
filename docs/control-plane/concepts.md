@@ -216,6 +216,20 @@ and a **decision engine** decides it.
 
   It compares point estimates exactly and makes no statistical claim: it says
   whether 0.83 meets a stated threshold, not that 0.83 beats 0.81.
+- **Adaptive thresholds.** `AdaptiveThresholdDecisionEngine` compares the
+  same way, for an experiment that may try another candidate. Only a missed
+  target is read differently:
+
+  ```text
+  target not met, constraints held                           → BRANCH
+  ```
+
+  `BRANCH` means the candidate is finished and valid, and another may be
+  explored. It creates no candidate, and the engine never looks at the
+  budget: whether the experiment may still spend on another candidate is
+  asked when one is proposed. Pass the engine to the host as
+  `decision_engine=AdaptiveThresholdDecisionEngine()`. The default stays
+  `ThresholdDecisionEngine`, which is unchanged.
 - **Durable, in one commit.** The `Decision` records the outcome, the
   evidence (each comparison, with the result it came from), the engine and
   its version, and a fingerprint of its inputs. It is written with what its
@@ -225,10 +239,13 @@ and a **decision engine** decides it.
   STOP_SUCCEEDED   candidate COMPLETED   experiment SUCCEEDED, best_node_id = it
   STOP_FAILED      candidate REJECTED    experiment FAILED
   REJECT           candidate REJECTED    experiment stays ACTIVE ("planning" next)
+  BRANCH           candidate COMPLETED   experiment stays ACTIVE ("planning" next)
   ```
 
-  `REJECT` judges the candidate, not the experiment: another candidate may
-  still be proposed and succeed. Only a `STOP` ends the experiment.
+  `REJECT` and `BRANCH` judge the candidate, not the experiment: another
+  candidate may still be proposed and succeed. Only a `STOP` ends the
+  experiment. A `REJECTED` candidate violated a constraint; a `COMPLETED` one
+  under an open experiment is valid but short of the target.
 - **Pure.** The engine returns a `DecisionProposal`: the outcome, reason,
   evidence and input fingerprint, with no id, time or actor. The same context
   always gives an identical proposal. The repository adds the id, time and

@@ -728,6 +728,36 @@ Implement deterministic objective/constraint decisions. As built:
   decides a node a crash left there. A crash point, `deciding`, proves a
   restart decides once, and a decided experiment is never decided again.
 
+### PR-015b — adaptive decisions (`BRANCH`)
+
+Lands before PR-024, because it defines what a candidate that finished valid
+but short of the target looks like, and the planner builds on that. As built:
+
+- **`DecisionOutcome.BRANCH`** (spec 10 §9): constraints held and the target is
+  not met, so another candidate may be explored. The node becomes
+  `COMPLETED`, not `REJECTED`. The experiment is **unchanged** and stays
+  `ACTIVE`, and `best_node_id` stays unset. `BRANCH` creates no candidate:
+  PR-024 proposes one and PR-025 materializes it.
+- **`AdaptiveThresholdDecisionEngine`** (`adaptive-threshold` 1.0.0) uses
+  `ThresholdDecisionEngine`'s comparison exactly. The only difference is that
+  a missed target is `BRANCH` rather than `STOP_FAILED`. A violated constraint
+  is still `REJECT`, a met target is still `STOP_SUCCEEDED`, and no target is
+  still undecidable.
+- **`ThresholdDecisionEngine` 1.0.0 is unchanged** and stays the host
+  default. The single-candidate reading of a missed target does not silently
+  change, and the two engines give identical input fingerprints for the same
+  context.
+- **Not budget-aware.** A decision answers what the evaluation established
+  about the candidate. Whether the experiment may still spend on another
+  candidate is asked when one is proposed. An exhausted budget ends the
+  experiment there (`BUDGET_EXHAUSTED`) and never rewrites a decision.
+- **`next_stage = "planning"`** now follows when every candidate of an
+  `ACTIVE` experiment is decided on its merits: `REJECTED`, or `COMPLETED`
+  after a `BRANCH`. A failed or cancelled candidate is still
+  `"failure-handling"`.
+- No migration: `decisions.outcome` is unconstrained text, and
+  `DECIDING → COMPLETED` was already a node transition.
+
 ### PR-016 — BudgetLedger
 
 Implement reserve/commit/consume/release. As built:
@@ -1130,6 +1160,14 @@ An alternative candidate creates a new node; an in-run scientific change records
 ### PR-026 — end-to-end MVP test
 
 Reference scenario in `18-mvp-reference-scenario.md`.
+
+Before PR-026, settle one known mismatch. The scenario declares
+`maxGpuHours: 8`, but PR-016 refuses `max_gpu_hours` at submission, because
+GPU consumption is not yet measured authoritatively. Either implement
+authoritative GPU-hour metering, or make the first acceptance scenario
+enforce `maxRuns` only and explicitly defer GPU-hour enforcement. Its
+Step D also requires the adaptive decision engine (PR-015b): a missed target
+must `BRANCH`, not `STOP_FAILED`.
 
 Phase exit:
 

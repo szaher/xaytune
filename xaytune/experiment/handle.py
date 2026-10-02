@@ -69,8 +69,9 @@ None                 the experiment is terminal
                      ALLOW decision, or APPROVED with a REQUIRE_APPROVAL one
 "decision"           a candidate is DECIDING: its decision was deferred
 "evaluation"         a trained candidate is unevaluated, or evaluating
-"planning"           the experiment is ACTIVE and every candidate was rejected
-                     on its merits: another candidate is needed to go on
+"planning"           the experiment is ACTIVE and every candidate was decided on
+                     its merits -- rejected, or completed short of the target
+                     (BRANCH): another candidate is needed to go on
 "failure-handling"   training or evaluation failed or was cancelled, and did
                      not establish a result: recovery or policy is needed
 ```
@@ -81,10 +82,11 @@ nothing has evaluated, or the evaluation still running. ``"decision"`` is a
 node in ``DECIDING`` that the decision engine could not decide -- its
 ``DecisionDeferred`` event says why -- and that someone must decide.
 ``"planning"`` comes only from a scientific outcome -- every candidate
-``REJECTED`` -- never from candidates merely having ended: a failed or
-cancelled candidate is ``"failure-handling"``, even beside a rejected one.
-A ``REJECT`` judges the candidate, not the experiment, and what comes next is
-another candidate: a planner's work, which does not exist yet.
+``REJECTED`` or, after a ``BRANCH`` decision, ``COMPLETED`` -- never from
+candidates merely having ended: a failed or cancelled candidate is
+``"failure-handling"``, even beside a decided one. ``REJECT`` and ``BRANCH``
+judge the candidate, not the experiment, and what comes next is another
+candidate: a planner's work.
 
 The two action stages come first: an action someone proposed and is waiting
 on is what comes next, before anything the candidates' states suggest -- a
@@ -137,7 +139,8 @@ class ExperimentResult(FrozenDomainModel):
             on, if it could run -- never a status any aggregate is in:
             ``"decision"`` for a node in ``DECIDING`` the engine could not
             decide, ``"planning"`` for an active experiment whose candidates
-            were all rejected and which needs another,
+            were all decided -- rejected, or completed short of the target --
+            and which needs another,
             ``"evaluation"`` for a trained candidate nothing has evaluated (or
             whose evaluation is still running), ``"failure-handling"`` for one
             whose runs or evaluations failed or were cancelled (retry, recover

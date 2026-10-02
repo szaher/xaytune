@@ -229,6 +229,11 @@ _OUTCOME_POLL_SECONDS = 0.5
 # How often a training attempt waiting for a parallel-run slot looks again.
 _CAPACITY_POLL_SECONDS = 0.5
 
+# A candidate whose decision settled what it is: rejected on a constraint, or
+# completed short of the target. A COMPLETED node under an ACTIVE experiment
+# can only be a BRANCH -- STOP_SUCCEEDED ends the experiment with it.
+_SCIENTIFICALLY_SETTLED = frozenset({ExperimentNodeStatus.REJECTED, ExperimentNodeStatus.COMPLETED})
+
 _RUNTIME_OUTCOME: Mapping[str, tuple[RunAttemptStatus, RunStatus]] = {
     "succeeded": (RunAttemptStatus.SUCCEEDED, RunStatus.SUCCEEDED),
     "failed": (RunAttemptStatus.FAILED, RunStatus.FAILED),
@@ -336,7 +341,11 @@ class EmbeddedControllerHost:
             ``EvaluatorSpec`` resolves through. Defaults to the built-in
             ``native``.
         decision_engine: What decides an evaluated candidate. Defaults to
-            :class:`~xaytune.decision.ThresholdDecisionEngine`.
+            :class:`~xaytune.decision.ThresholdDecisionEngine`, for which a
+            missed target ends the experiment;
+            :class:`~xaytune.decision.AdaptiveThresholdDecisionEngine` reads
+            it as ``BRANCH`` and leaves the experiment open for another
+            candidate.
         policy: What authorizes a proposed action
             (:meth:`ExperimentHandle.propose`). ``None`` means
             :class:`~xaytune.policy.DenyAllPolicy`: with no policy configured,
@@ -748,10 +757,11 @@ class EmbeddedControllerHost:
             next_stage = "decision"
         elif trained or evaluating:
             next_stage = "evaluation"
-        elif nodes and all(node.status is ExperimentNodeStatus.REJECTED for node in nodes):
-            # Every candidate was evaluated and rejected on its merits, and
-            # the experiment is still open: another candidate is what comes
-            # next -- a planner's work, which does not exist yet. Only a
+        elif nodes and all(node.status in _SCIENTIFICALLY_SETTLED for node in nodes):
+            # Every candidate was evaluated and decided on its merits --
+            # rejected for a violated constraint, or completed short of the
+            # target (BRANCH) -- and the experiment is still open: another
+            # candidate is what comes next, a planner's work. Only a
             # scientific outcome leads here. A candidate that failed or was
             # cancelled did not establish a result, and is failure-handling.
             next_stage = "planning"

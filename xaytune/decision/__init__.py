@@ -16,7 +16,10 @@ byte for byte, which is what lets a restarted controller decide a cycle again
 and have the repository recognize the answer it already recorded. The id,
 time and actor of the durable decision are the repository's to add.
 
-:class:`ThresholdDecisionEngine` is the one built in.
+:class:`ThresholdDecisionEngine` decides as if the candidate were the only
+one: a missed target ends the experiment. :class:`AdaptiveThresholdDecisionEngine`
+decides for an experiment that may try another: a missed target finishes the
+candidate and leaves the experiment open (``BRANCH``).
 """
 
 from __future__ import annotations
@@ -34,7 +37,12 @@ from xaytune.core.domain.decision import (
 from xaytune.core.domain.evaluation import EvaluationResult, MetricResult
 from xaytune.core.domain.objective import ConstraintOperator
 
-__all__ = ["DecisionEngine", "ThresholdDecisionEngine", "UndecidableError"]
+__all__ = [
+    "AdaptiveThresholdDecisionEngine",
+    "DecisionEngine",
+    "ThresholdDecisionEngine",
+    "UndecidableError",
+]
 
 
 class UndecidableError(ValueError):
@@ -112,6 +120,9 @@ class ThresholdDecisionEngine:
     name = "threshold"
     version = "1.0.0"
 
+    _target_missed = DecisionOutcome.STOP_FAILED
+    _target_missed_note = ""
+
     def decide(self, context: DecisionContext) -> DecisionProposal:
         objective = context.objective
         found: dict[str, tuple[EvaluationResult, MetricResult]] = {}
@@ -167,8 +178,8 @@ class ThresholdDecisionEngine:
             outcome = DecisionOutcome.STOP_SUCCEEDED
             reason = f"target met: {_describe(target)}"
         else:
-            outcome = DecisionOutcome.STOP_FAILED
-            reason = f"target not met: {_describe(target)}"
+            outcome = self._target_missed
+            reason = f"target not met: {_describe(target)}{self._target_missed_note}"
         if constraints and not violated:
             reason += "; constraints held: " + "; ".join(_describe(e) for e in constraints)
 
@@ -184,6 +195,40 @@ class ThresholdDecisionEngine:
             evaluation_result_ids=tuple(sorted(r.id for r in context.results)),
             input_fingerprint=context.input_fingerprint(),
         )
+
+
+class AdaptiveThresholdDecisionEngine(ThresholdDecisionEngine):
+    """The threshold comparison, for an experiment that may try another candidate.
+
+    ```text
+    a metric is missing or reported twice   → undecidable
+    any constraint violated                 → REJECT          node REJECTED
+    no target                               → undecidable
+    target met                              → STOP_SUCCEEDED  experiment SUCCEEDED
+    target not met, constraints held        → BRANCH          node COMPLETED,
+                                                              experiment stays ACTIVE
+    ```
+
+    It differs from :class:`ThresholdDecisionEngine` only in what a missed
+    target means. There the candidate is the experiment's only one, so missing
+    the target ends the experiment. Here it is one of possibly several: the
+    candidate is finished and valid, and another may be explored.
+
+    ``BRANCH`` creates nothing. A planner proposes the next candidate, and
+    branching materializes it. Whether the experiment may still spend on one
+    is the budget's question, asked then -- never this engine's. It answers
+    what the evaluation established about this candidate, so a budget that
+    runs out later does not rewrite a decision already made.
+
+    Comparison is identical to the non-adaptive engine: point estimates
+    against stated thresholds, unsliced metrics only, and a target required.
+    """
+
+    name = "adaptive-threshold"
+    version = "1.0.0"
+
+    _target_missed = DecisionOutcome.BRANCH
+    _target_missed_note = "; the candidate is finished and another may be explored"
 
 
 def _measurements(

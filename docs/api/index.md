@@ -10,7 +10,7 @@ This section documents xaytune's Python API.
 | `xaytune.experiment` | `EmbeddedControllerHost`, `ExperimentHandle`, `ExperimentSpec` |
 | `xaytune.compilation` | `TrainerCompiler`, `NativeCompiler`, `TRLCompiler` |
 | `xaytune.evaluation` | The `Evaluator` contract, `NativeEvaluator` in `xaytune.evaluation.native`, and `LMEvalEvaluator` in `xaytune.evaluation.lmeval` |
-| `xaytune.decision` | The `DecisionEngine` contract and `ThresholdDecisionEngine`; `Decision` and `DecisionContext` are in `xaytune.core.domain.decision` |
+| `xaytune.decision` | The `DecisionEngine` contract, `ThresholdDecisionEngine` and `AdaptiveThresholdDecisionEngine`; `Decision` and `DecisionContext` are in `xaytune.core.domain.decision` |
 | `xaytune.runtimes` | `RuntimeBackend` and `LocalRuntime` |
 | `xaytune.storage` | SQLite persistence, migrations, `ControlPlaneRepository` |
 

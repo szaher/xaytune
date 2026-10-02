@@ -9,6 +9,7 @@ Decision + node + experiment:
    STOP_SUCCEEDED  node COMPLETED  experiment SUCCEEDED, best_node_id = node
    STOP_FAILED     node REJECTED   experiment FAILED
    REJECT          node REJECTED   experiment ACTIVE, next_stage "planning"
+   BRANCH          node COMPLETED  experiment ACTIVE, next_stage "planning"  (adaptive)
 ```
 
 A cycle the engine cannot decide stays ``DECIDING``, with a
@@ -154,6 +155,29 @@ def test_a_violated_constraint_rejects_the_candidate_and_leaves_the_experiment_o
     assert record["experiment"].best_node_id is None
     (decision,) = record["decisions"]
     assert decision.outcome is DecisionOutcome.REJECT
+    assert "ExperimentStatusChanged" not in record["events"][-2:]
+
+
+def test_with_the_adaptive_engine_a_missed_target_branches_and_planning_is_next(
+    tmp_path: Path,
+) -> None:
+    """BRANCH: the candidate is finished and valid, and another may be tried."""
+    from xaytune.decision import AdaptiveThresholdDecisionEngine
+
+    result, record = _run(
+        tmp_path,
+        _scripted(tmp_path, _objective(target=0.9), value=0.8),
+        decision_engine=AdaptiveThresholdDecisionEngine(),
+    )
+
+    assert result.status is ExperimentStatus.ACTIVE
+    assert result.next_stage == "planning"
+    assert result.quiescent
+    assert result.nodes[0].status is ExperimentNodeStatus.COMPLETED
+    assert record["experiment"].best_node_id is None
+    (decision,) = record["decisions"]
+    assert decision.outcome is DecisionOutcome.BRANCH
+    assert (decision.engine_name, decision.engine_version) == ("adaptive-threshold", "1.0.0")
     assert "ExperimentStatusChanged" not in record["events"][-2:]
 
 
@@ -308,6 +332,14 @@ _PATHS: dict[ExperimentNodeStatus, tuple[ExperimentNodeStatus, ...]] = {
         ExperimentNodeStatus.DECIDING,
         ExperimentNodeStatus.REJECTED,
     ),
+    ExperimentNodeStatus.COMPLETED: (
+        ExperimentNodeStatus.PLANNED,
+        ExperimentNodeStatus.READY,
+        ExperimentNodeStatus.ACTIVE,
+        ExperimentNodeStatus.EVALUATING,
+        ExperimentNodeStatus.DECIDING,
+        ExperimentNodeStatus.COMPLETED,
+    ),
     ExperimentNodeStatus.FAILED: (
         ExperimentNodeStatus.PLANNED,
         ExperimentNodeStatus.READY,
@@ -363,11 +395,12 @@ def _next_stage(
     return asyncio.run(scenario())
 
 
-REJECTED, FAILED, DECIDING, CANCELLED = (
+REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
     ExperimentNodeStatus.REJECTED,
     ExperimentNodeStatus.FAILED,
     ExperimentNodeStatus.DECIDING,
     ExperimentNodeStatus.CANCELLED,
+    ExperimentNodeStatus.COMPLETED,
 )
 
 
@@ -376,6 +409,11 @@ REJECTED, FAILED, DECIDING, CANCELLED = (
     [
         ((REJECTED,), ExperimentStatus.ACTIVE, "planning"),
         ((REJECTED, REJECTED), ExperimentStatus.ACTIVE, "planning"),
+        ((COMPLETED,), ExperimentStatus.ACTIVE, "planning"),
+        ((COMPLETED, REJECTED), ExperimentStatus.ACTIVE, "planning"),
+        ((COMPLETED, FAILED), ExperimentStatus.ACTIVE, "failure-handling"),
+        ((COMPLETED, DECIDING), ExperimentStatus.ACTIVE, "decision"),
+        ((COMPLETED,), ExperimentStatus.SUCCEEDED, None),
         ((FAILED,), ExperimentStatus.ACTIVE, "failure-handling"),
         ((CANCELLED,), ExperimentStatus.ACTIVE, "failure-handling"),
         ((REJECTED, FAILED), ExperimentStatus.ACTIVE, "failure-handling"),
@@ -387,6 +425,11 @@ REJECTED, FAILED, DECIDING, CANCELLED = (
     ids=[
         "rejected-is-planning",
         "all-rejected-is-planning",
+        "branched-is-planning",
+        "branched-beside-rejected-is-planning",
+        "a-failure-beside-a-branch-is-failure-handling",
+        "a-deferral-beside-a-branch-is-decision",
+        "succeeded-is-none",
         "failed-is-failure-handling",
         "cancelled-is-failure-handling",
         "a-failure-beside-a-rejection-is-failure-handling",

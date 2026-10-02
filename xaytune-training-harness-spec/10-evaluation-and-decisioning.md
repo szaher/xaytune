@@ -240,6 +240,14 @@ STOP_FAILED
 STOP_BUDGET
 ```
 
+Implemented so far: `STOP_SUCCEEDED`, `STOP_FAILED` and `REJECT` (PR-015), and
+`BRANCH` (PR-015b). `BRANCH` means the candidate is finished and valid, short
+of the target, and another may be explored. It leaves the node `COMPLETED` and
+the experiment `ACTIVE`. It is produced by `AdaptiveThresholdDecisionEngine`;
+the non-adaptive `ThresholdDecisionEngine` keeps reading a missed target as
+`STOP_FAILED`. Decisions never consult the budget: `STOP_BUDGET` is the
+budget's to cause, when another candidate is proposed.
+
 ## 10. Noise-aware decisions
 
 Do not assume:

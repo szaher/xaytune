@@ -5,6 +5,7 @@ record_decision   decision + node + (for STOP outcomes) experiment + events    o
                     STOP_SUCCEEDED  node COMPLETED  experiment SUCCEEDED, best_node_id
                     STOP_FAILED     node REJECTED   experiment FAILED
                     REJECT          node REJECTED   experiment stays ACTIVE
+                    BRANCH          node COMPLETED  experiment stays ACTIVE (test_branch_decisions)
 defer_decision    DecisionDeferred on the node, once per cycle; the node stays DECIDING
 ```
 """

@@ -1907,10 +1907,11 @@ class ControlPlaneRepository:
         STOP_SUCCEEDED   node COMPLETED   experiment SUCCEEDED, best_node_id = node
         STOP_FAILED      node REJECTED    experiment FAILED
         REJECT           node REJECTED    experiment unchanged
+        BRANCH           node COMPLETED   experiment unchanged
         ```
 
-        ``REJECT`` is a judgement on the candidate, not the experiment: another
-        candidate may yet be proposed. Only the ``STOP`` outcomes end an
+        ``REJECT`` and ``BRANCH`` are judgements on the candidate, not the
+        experiment: another candidate may yet be proposed. Only the ``STOP`` outcomes end an
         experiment, and only an ``ACTIVE`` one; a paused experiment is
         somebody's to resume or stop. There is no moment at which a decision
         is recorded but not applied, or applied with no decision on record.
@@ -2040,13 +2041,24 @@ class ControlPlaneRepository:
     def _conclude_experiment(
         self, decision: Decision, actor: Actor, destinations: tuple[str, ...]
     ) -> None:
-        """End an ``ACTIVE`` experiment when the decision says to stop it; otherwise nothing."""
-        if decision.outcome is DecisionOutcome.REJECT:
+        """End an ``ACTIVE`` experiment when the decision says to stop it; otherwise nothing.
+
+        Every outcome is handled by name. One with no transition here fails
+        closed, inside the decision's transaction, so an outcome added later
+        can never fall through to failing the experiment.
+
+        Raises:
+            StorageError: If the outcome has no experiment transition.
+        """
+        outcome = decision.outcome
+        if outcome in (DecisionOutcome.REJECT, DecisionOutcome.BRANCH):
             return
+        if outcome not in (DecisionOutcome.STOP_SUCCEEDED, DecisionOutcome.STOP_FAILED):
+            raise StorageError(f"decision outcome {outcome.value} has no experiment transition")
         experiment = self.aggregates.load_experiment(str(decision.experiment_id))
         if experiment.status is not ExperimentStatus.ACTIVE:
             return
-        if decision.outcome is DecisionOutcome.STOP_SUCCEEDED:
+        if outcome is DecisionOutcome.STOP_SUCCEEDED:
             ended = experiment.succeeded_with(decision.node_id)
         else:
             ended = experiment.with_status(ExperimentStatus.FAILED)

@@ -9,8 +9,9 @@ restores never create nodes (ADR-003); they create run attempts.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
@@ -21,12 +22,15 @@ from xaytune.core.domain.specs import CompilerSpec, RuntimeSpec
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.ids import (
     DecisionId,
-    EvaluationRunId,
     ExperimentId,
     ExperimentNodeId,
-    RunId,
 )
-from xaytune.core.immutable import AggregateModel, FrozenDict, FrozenDomainModel
+from xaytune.core.immutable import (
+    AggregateModel,
+    FrozenDict,
+    FrozenDomainModel,
+    drop_retired_fields,
+)
 from xaytune.core.refs import Actor, ControllerHostRef
 from xaytune.core.state.machines import EXPERIMENT_MACHINE, NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
@@ -67,6 +71,11 @@ class Experiment(AggregateModel):
     attribute assignment (Rule 7).
     """
 
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_topology(cls, data: Any) -> Any:
+        return drop_retired_fields(data, "Experiment", "active_node_ids")
+
     id: ExperimentId
     name: str
     objective: Objective
@@ -81,7 +90,8 @@ class Experiment(AggregateModel):
     """
 
     status: ExperimentStatus = ExperimentStatus.CREATED
-    active_node_ids: tuple[ExperimentNodeId, ...] = Field(default_factory=tuple)
+    # A decision, not topology: which nodes the experiment has comes from
+    # ``nodes_for_experiment`` (open question 15).
     best_node_id: ExperimentNodeId | None = None
 
     controller_host: ControllerHostRef
@@ -149,6 +159,11 @@ class ExperimentNode(AggregateModel):
     can be derived from more than one predecessor.
     """
 
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_topology(cls, data: Any) -> Any:
+        return drop_retired_fields(data, "ExperimentNode", "run_ids", "evaluation_run_ids")
+
     id: ExperimentNodeId
     experiment_id: ExperimentId
 
@@ -164,9 +179,6 @@ class ExperimentNode(AggregateModel):
     )
 
     status: ExperimentNodeStatus = ExperimentNodeStatus.CREATED
-
-    run_ids: tuple[RunId, ...] = Field(default_factory=tuple)
-    evaluation_run_ids: tuple[EvaluationRunId, ...] = Field(default_factory=tuple)
 
     evaluation_cycle: int = Field(default=0, ge=0)
     """Which evaluation round the node is in, or last was in; 0 before any.

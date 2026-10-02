@@ -44,7 +44,14 @@ from typing_extensions import Self
 
 from xaytune.core.errors import InvalidDomainValueError
 
-__all__ = ["AggregateModel", "FrozenDict", "FrozenDomainModel", "deep_freeze", "thaw"]
+__all__ = [
+    "AggregateModel",
+    "FrozenDict",
+    "FrozenDomainModel",
+    "deep_freeze",
+    "drop_retired_fields",
+    "thaw",
+]
 
 
 class FrozenDict(Mapping[str, Any]):
@@ -214,7 +221,7 @@ class FrozenDomainModel(BaseModel):
             snapshot.model_copy(update={"payload": {"a": {"b": 1}}})
             # payload is now a plain dict again, and mutable
 
-            experiment.model_copy(update={"active_node_ids": ["not-an-id"]})
+            node.model_copy(update={"parent_ids": ["not-an-id"]})
             # no longer a typed id, and never validated
 
     That is not an obscure corner: ``with_status`` is built on it, and the docs
@@ -251,6 +258,33 @@ class FrozenDomainModel(BaseModel):
         if not update:
             return super().model_copy(deep=deep)
         return self._validated_copy(update)
+
+
+def drop_retired_fields(data: Any, owner: str, *names: str) -> Any:
+    """Accept stored records that still carry *names*, which no writer ever filled.
+
+    ``extra="forbid"`` refuses unknown keys, so removing a field would make every
+    record written before the removal unreadable. A retired field is dropped
+    only when it holds its never-written default (``None`` or empty). A real
+    value fails closed: some writer this release does not know put it there, and
+    silently discarding it would lose that fact.
+
+    Raises:
+        InvalidDomainValueError: If a retired field holds a value.
+    """
+    if not isinstance(data, Mapping) or not any(name in data for name in names):
+        return data
+    kept = dict(data)
+    for name in names:
+        if name not in kept:
+            continue
+        value = kept.pop(name)
+        if value is not None and not (isinstance(value, (list, tuple)) and not value):
+            raise InvalidDomainValueError(
+                f"{owner}.{name} is retired; topology comes from the repository's "
+                f"relationships, and a stored value cannot be honoured"
+            )
+    return kept
 
 
 class AggregateModel(FrozenDomainModel):

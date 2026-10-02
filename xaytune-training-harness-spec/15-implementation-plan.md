@@ -102,7 +102,7 @@ matter of record rather than of review:
 |---|---|
 | ADR-001 — experiment control plane | the premise every later ADR assumes |
 | ADR-005 — the persistence transaction contract | band B, including PR-004; every transaction boundary and repository invariant the repository must hold |
-| ADR-006 — fingerprints (identity model) | PR-007 fingerprint framework; reuse policy split out to ADR-017 |
+| ADR-006 — fingerprints (identity model) | PR-007 fingerprint framework; reuse policy decided separately in ADR-017 |
 | ADR-007 — evaluation independence | band D; extended by ADR-015 |
 | ADR-008 — versioned plugin ABI | band C; accepted 2026-09-22 |
 | ADR-009 — checkpoint layers | band F; accepted 2026-09-28, including PR-018's local-only and legacy read-surface boundaries |
@@ -112,6 +112,7 @@ matter of record rather than of review:
 | ADR-014 — worker telemetry protocol | `RuntimeBackend.watch()`; PR-005 event schema |
 | ADR-015 — durable evaluation lifecycle | PR-005 evaluation tables |
 | ADR-016 — specs versus implementations | PR-005 experiment record |
+| ADR-017 — reuse policy | band G; accepted 2026-10-01 with v1 training-artifact reuse disabled |
 
 ### Still Proposed, and what each actually blocks
 
@@ -121,7 +122,6 @@ that does not depend on it:
 | ADR | Blocks |
 |---|---|
 | ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
-| ADR-017 — reuse policy | band G (planner reuse decisions); split out of ADR-006 |
 | ADR-018 — agent harness candidates | future H02–H12 harness track; does not gate Phase 5/6 |
 
 ### Superseded
@@ -151,12 +151,14 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** The remaining `Proposed`
-ones gate later bands: ADR-017 band G, ADR-004 band H and ADR-018 the separate harness track.
+ones gate later bands: ADR-004 band H and ADR-018 the separate harness track.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
 ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for band F
 before PR-018 merges. It freezes the local codec/store/manager architecture and
 preserves legacy readability through the existing trainer loader.
+ADR-017 was accepted on 2026-10-01, unblocking band G. Its v1 decision disables
+training artifact reuse.
 
 From here, changes to these contracts should come from an implementation
 finding, a failing test or a demonstrated contradiction — not from another pass
@@ -1117,6 +1119,8 @@ Rules:
 - plateau → propose evaluation/stop
 - OOM → recovery path
 - failed constraint → reject candidate
+
+No artifact reuse: ADR-017 v1 says every proposed run executes as new work.
 
 ### PR-025 — experiment branching
 

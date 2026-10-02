@@ -97,7 +97,8 @@ marked open in the table. Those details need review before their H-track step,
 including workload/state/telemetry versioning, model-provider reproducibility,
 trajectory retention, replicate statistics, multi-objective contract evolution
 and candidate-proposal governance before harness mutation execution.
-ADR-017 still governs reuse policy; this ADR does not silently accept it.
+ADR-017 governs reuse policy (accepted; v1 disables training artifact reuse);
+this ADR does not change it.
 
 The first MVP limits mutations to prompt, context policy and tool descriptions/
 configuration within authorized tools on a pinned suite. Middleware, delegation,

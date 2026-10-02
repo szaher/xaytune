@@ -124,9 +124,9 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     out; without it a node can sit in `EVALUATING` forever with nothing to observe
   - ADR-016 separates persisted `*Spec` objects from live implementations, which
     is what makes a controller restartable
-  - ADR-017 holds the reuse-policy question split out of ADR-006; it gates band G
-    and nothing earlier, because a reuse rule is a query over fingerprints that
-    already exist
+  - ADR-017 holds the reuse policy split out of ADR-006. It was accepted on
+    2026-10-01 with a conservative v1: training artifact reuse is disabled, and
+    matching fingerprints are evidence, never authority. That unblocks band G
   - [ADR-018](adrs/ADR-018-agent-harness-candidates.md) proposes first-class harness
     candidates while preserving CandidateSpec; it gates the future H02–H12 track,
     not current recovery or generic planner work
@@ -136,9 +136,9 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-005 – ADR-009, ADR-011 – ADR-016 |
+  | Accepted by decision | ADR-001, ADR-005 – ADR-009, ADR-011 – ADR-017 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-004, ADR-017, ADR-018 |
+  | Still `Proposed` | ADR-004, ADR-018 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.
@@ -151,7 +151,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   aggregates. ADR-008 was accepted on 2026-09-22, which unblocked band C.
   ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for
   band F and the legacy read-surface contract for PR-018. The remaining proposed
-  ADRs gate later work: ADR-017 band G, ADR-004 band H and ADR-018 the separate harness track.
+  ADRs gate later work: ADR-004 band H and ADR-018 the separate harness track.
+  ADR-017 was accepted on 2026-10-01, unblocking band G.
 - `schemas/` — proposed YAML and JSON/Python schema examples, and the design
   drafts of migrations 001–003 with their rationale. They are not the schema:
   the shipped migrations are `xaytune/storage/migrations/001`–`006` (core

@@ -1,11 +1,11 @@
 # ADR-006 — Identity is split across training, execution, evaluation, and checkpoint compatibility
 
 ## Status
-Accepted — 2026-09-21, for the identity model. **Reuse policy is deferred to
-ADR-017 (`Proposed`)** and still gates band G.
+Accepted — 2026-09-21, for the identity model. **Reuse policy is decided in
+ADR-017** (accepted 2026-10-01; v1 disables training artifact reuse).
 
 Split because half-accepted was unusable as a gate: Phase 2 implements the
-fingerprints from this ADR while the planner's reuse decisions genuinely are
+fingerprints from this ADR while the planner's reuse decisions were still
 undecided. Those are separable, so they are now separate documents rather than
 one document in two states. The identity half is additionally superseded in
 detail by ADR-011, which replaces `TrainingSpecFingerprint` with the layered
@@ -15,7 +15,9 @@ model below.
 (`CandidateFingerprint`, `RunHistoryFingerprint`, `ArtifactLineageFingerprint`,
 `ExecutionFingerprint`,
 `EvaluationFingerprint`, `CheckpointCompatibilityKey`). **The reuse-policy half
-of this ADR is still open** and gates band G — planner reuse decisions.
+of this ADR is decided by ADR-017.** ADR-017 v1 disables training artifact
+reuse, so matching fingerprints do not authorize skipping execution. Band G is
+therefore unblocked.
 
 A single training fingerprint cannot describe a run whose training semantics changed
 partway through. ADR-011 splits it into `CandidateFingerprint` (what was declared,
@@ -39,8 +41,9 @@ Do not use one hash for all purposes.
 
 Identical candidate fingerprints do not automatically suppress reruns.
 
-Reuse is governed by explicit `ReusePolicy` and seed/replicate semantics, and asks four
-distinct questions (ADR-011):
+Future training reuse, if introduced, must be governed by the explicit versioned
+`ReusePolicy` required by ADR-017 together with seed/replicate semantics. The
+fingerprint model supports the following distinct identity questions:
 
 | Question | Match on |
 |---|---|

@@ -24,6 +24,16 @@ def test_v1_reuse_policy_disables_training_artifact_reuse():
     assert "necessary evidence, never sufficient authority" in decision
 
 
+def test_adr_006_defers_to_the_decided_reuse_policy():
+    """ADR-006 split its reuse half out; it must not still call that half open."""
+    adr = (SPEC / "adrs/ADR-006-fingerprints-and-reuse.md").read_text()
+    flat = " ".join(adr.split())
+    assert "Reuse policy is decided in ADR-017" in flat
+    assert "decided by ADR-017" in flat
+    assert "still open" not in flat
+    assert "(`Proposed`)" not in flat
+
+
 @pytest.mark.parametrize("document", ["README.md", "15-implementation-plan.md"])
 def test_reuse_policy_status_tables_agree(document):
     text = (SPEC / document).read_text()

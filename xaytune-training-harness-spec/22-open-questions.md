@@ -145,37 +145,40 @@ Revisit when a third workload type appears. The likely candidates are a
 data-preparation job or a reward-model scoring pass. Unifying before then would
 mean carrying training-only concepts into evaluation and weakening both types.
 
-## 15. Two representations of topology, one of which is stale
+## 15. Two representations of topology — resolved: the relationships only
 
-Raised in PR-012 review. The aggregates carry child lists that duplicate the
+Raised in PR-012 review. The aggregates carried child lists that duplicated the
 normalized relationships:
 
 ```text
 Experiment.active_node_ids
 ExperimentNode.run_ids
+ExperimentNode.evaluation_run_ids
 Run.attempt_ids
 Run.final_attempt_id
 ```
 
-Nothing writes them. The repository creates nodes, runs and attempts in their
-own tables with a foreign key to the parent, and the controller reads
-topology from those (`nodes_for_experiment`, `runs_for_node`,
-`attempts_for_run`). So a submitted experiment has nodes, runs and attempts in
-the tables while these fields stay empty. Nothing reads them yet, so nothing is
-wrong yet; but one representation is out of date, and the first code to trust
-it would be wrong without knowing.
+No code ever wrote them. The repository creates nodes, runs and attempts in
+their own tables, each with a foreign key to its parent, and the controller
+reads topology from those tables (`nodes_for_experiment`, `runs_for_node`,
+`evaluation_runs_for_node`, `attempts_for_run`). The two representations
+therefore disagreed for every submitted experiment.
 
-Decide before planner, retry or multi-node work, which are the first to read
-topology in bulk:
+**Resolved before PR-024 with option B.** The fields are removed. The
+normalized relationships are the single source of truth, which is the rule the
+rest of the persistence layer already follows (ADR-005: aggregates come from
+their own tables, events are provenance, derived data is rebuildable).
+Planners and controllers get topology only from the repository queries. A
+run's final attempt is the one with the highest `attempt_number`.
 
-- **A.** Maintain them transactionally: every child creation also rewrites the
-  parent at a new revision. This couples a child's creation to a write on its
-  parent, which then contends with every other writer to that parent.
-- **B.** (leaning) Remove them, or reclassify them as derived projections that
-  are never stored. The normalized relationship stays the single source of
-  truth, which is the rule the rest of the persistence layer already follows
-  (ADR-005: aggregates from their own tables, events as provenance, derived
-  data rebuildable).
+Option A was rejected. Maintaining the lists would couple every child's
+creation to a write on its parent, at a new revision, which would then contend
+with every other writer to that parent.
 
-`best_node_id` is not in this list. It records a decision, not a structural
-relationship, and B would not remove it.
+Records stored before the removal still load. Each removed field is accepted
+and dropped only while it holds the default nobody overwrote (empty or
+`None`). A stored value fails closed rather than being silently discarded.
+
+`Experiment.best_node_id` (a decision), `ExperimentNode.parent_ids`
+(scientific lineage) and `ExperimentNode.decision_ids` (maintained by the
+decision transaction) are not topology and stay.

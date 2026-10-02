@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 
 from xaytune.core.clock import utc_now
 from xaytune.core.fingerprint import fingerprint
@@ -29,7 +29,12 @@ from xaytune.core.ids import (
     RunAttemptId,
     RunId,
 )
-from xaytune.core.immutable import AggregateModel, FrozenDict, FrozenDomainModel
+from xaytune.core.immutable import (
+    AggregateModel,
+    FrozenDict,
+    FrozenDomainModel,
+    drop_retired_fields,
+)
 from xaytune.core.refs import ArtifactRef, CheckpointRef, ResourceUsage, RuntimeRef
 from xaytune.core.state.machines import ATTEMPT_MACHINE, RUN_MACHINE
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
@@ -86,6 +91,11 @@ class ExecutionOverride(FrozenDomainModel):
 class Run(AggregateModel):
     """A logical execution of a scientific candidate."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_topology(cls, data: Any) -> Any:
+        return drop_retired_fields(data, "Run", "attempt_ids", "final_attempt_id")
+
     id: RunId
     node_id: ExperimentNodeId
     experiment_id: ExperimentId
@@ -98,9 +108,6 @@ class Run(AggregateModel):
         serialization_alias="candidate_fingerprint",
     )
     execution_plan_ref: str | None = None
-
-    attempt_ids: tuple[RunAttemptId, ...] = Field(default_factory=tuple)
-    final_attempt_id: RunAttemptId | None = None
 
     status: RunStatus = RunStatus.CREATED
 

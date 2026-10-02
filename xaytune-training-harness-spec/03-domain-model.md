@@ -20,6 +20,23 @@ Experiment
   └── Artifact*
 ```
 
+### Topology has one source of truth
+
+The hierarchy above is stored as normalized relationships. Each child row has
+a foreign key to its parent, and the repository answers every structural
+question: `nodes_for_experiment`, `runs_for_node`, `evaluation_runs_for_node`,
+`attempts_for_run` and `evaluation_attempts_for_run`. Aggregates do **not**
+carry child-id lists. A parent's copy of its children would be a second
+representation, and keeping it current would make every child creation write
+its parent. A run's final attempt is the one with the highest
+`attempt_number`.
+
+What aggregates do carry is not topology. `Experiment.best_node_id` records a
+decision. `ExperimentNode.parent_ids` is scientific lineage between nodes.
+`ExperimentNode.decision_ids` records which decisions apply to the node and is
+maintained by the decision transaction. Planners and controllers read topology
+only through the repository (open question 15).
+
 ## 2. Experiment
 
 Represents the complete optimization objective.
@@ -33,7 +50,6 @@ class Experiment(BaseModel):
     budget: BudgetSpec | None
 
     status: ExperimentStatus
-    active_node_ids: list[ExperimentNodeId]
     best_node_id: ExperimentNodeId | None
 
     controller_host: ControllerHostRef
@@ -65,8 +81,6 @@ class ExperimentNode(BaseModel):
 
     status: ExperimentNodeStatus
 
-    run_ids: list[RunId]
-    evaluation_run_ids: list[EvaluationRunId]
     decision_ids: list[DecisionId]
 
     created_by: Actor
@@ -127,9 +141,6 @@ class Run(BaseModel):
 
     candidate_fingerprint: str
     execution_plan_ref: str | None
-
-    attempt_ids: list[RunAttemptId]
-    final_attempt_id: RunAttemptId | None
 
     status: RunStatus
 
@@ -353,7 +364,6 @@ class EvaluationRun(AggregateModel):
     seed: int | None                  # replicate identity lives here, never on
     replicate: int | None             # EvaluationSpec -- see below
 
-    attempt_ids: list[EvaluationAttemptId]
     result: EvaluationResult | None   # set only when terminal and SUCCEEDED
 
     status: EvaluationRunStatus

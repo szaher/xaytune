@@ -195,13 +195,11 @@ class TestDeepImmutability:
 
     def test_aggregate_id_lists_cannot_be_appended_to(self):
         """An id list that accepts post-construction appends also skips validation."""
-        experiment = make_experiment()
+        node = make_node(parent_ids=(ExperimentNodeId.generate(),))
         with pytest.raises(AttributeError):
-            experiment.active_node_ids.append("node_bogus")
-
-        node = make_node()
+            node.parent_ids.append("node_bogus")
         with pytest.raises(AttributeError):
-            node.run_ids.append("run_bogus")
+            node.decision_ids.append("decision_bogus")
 
     def test_metadata_cannot_be_mutated(self):
         experiment = make_experiment(metadata={"owner": "team-a"})

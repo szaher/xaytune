@@ -53,6 +53,7 @@ from xaytune.core.capabilities import (
 from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.domain.decision import DecisionOutcome
 from xaytune.core.domain.planning import (
+    PLANNER_SPEC_IDENTITY_VERSION,
     PLANNING_CONTEXT_IDENTITY_VERSION,
     CandidateProposal,
     DecisionSummary,
@@ -60,8 +61,11 @@ from xaytune.core.domain.planning import (
     PlanningContext,
     Proposal,
     ProposalProvenance,
+    planner_spec_identity_v1,
+    settled_for_planning,
 )
 from xaytune.core.domain.specs import PlannerSpec
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel, thaw
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 
@@ -138,8 +142,19 @@ def _provenance(planner: Planner, context: PlanningContext) -> ProposalProvenanc
         planner_provider=descriptor.provider,
         planner_name=descriptor.name,
         planner_version=descriptor.plugin_version,
+        planner_api_version=descriptor.api_version,
         planner_spec_kind=spec.kind,
         planner_spec_version=spec.version,
+        planner_spec_identity_version=PLANNER_SPEC_IDENTITY_VERSION,
+        planner_spec_fingerprint=fingerprint(
+            planner_spec_identity_v1(
+                spec,
+                provider=descriptor.provider,
+                name=descriptor.name,
+                plugin_version=descriptor.plugin_version,
+                api_version=descriptor.api_version,
+            )
+        ),
         context_identity_version=PLANNING_CONTEXT_IDENTITY_VERSION,
         context_fingerprint=context.input_fingerprint(),
     )
@@ -244,8 +259,6 @@ class RuleBasedPlannerConfig(FrozenDomainModel):
 
 # ---- the rule-based planner --------------------------------------------------------------
 
-_SETTLED = frozenset({ExperimentNodeStatus.REJECTED, ExperimentNodeStatus.COMPLETED})
-
 
 @dataclass(frozen=True)
 class _Parent:
@@ -259,7 +272,9 @@ class RuleBasedPlanner:
     """Proposes the next candidate by applying declared mutations to the best one so far.
 
     ```text
-    not the planning stage, or a quota exhausted      → nothing
+    not the planning stage (every node COMPLETED by
+      BRANCH or REJECTED by REJECT), or a quota
+      exhausted                                       → nothing
     parent = best COMPLETED candidate by its recorded,
              unsliced primary metric (a BRANCH);
              ties broken by node id                   → none eligible: nothing
@@ -355,11 +370,22 @@ class RuleBasedPlanner:
 
 
 def _planning_stage(context: PlanningContext) -> bool:
-    """The experiment is open and every candidate was decided on its merits."""
+    """The experiment is open and every candidate was decided on its merits.
+
+    Judged by status *and* the decision that produced it
+    (:func:`~xaytune.core.domain.planning.settled_for_planning`): a
+    ``COMPLETED`` or ``REJECTED`` node left by a ``STOP_*`` decision, or with
+    no decision, means the experiment is not asking for another candidate.
+    """
     return (
         context.experiment_status is ExperimentStatus.ACTIVE
         and bool(context.nodes)
-        and all(node.status in _SETTLED for node in context.nodes)
+        and all(
+            settled_for_planning(
+                node.status, None if node.latest_decision is None else node.latest_decision.outcome
+            )
+            for node in context.nodes
+        )
     )
 
 

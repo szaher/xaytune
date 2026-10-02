@@ -114,6 +114,7 @@ from xaytune.core.domain.oom_recovery import (
     PriorOOMResize,
 )
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
+from xaytune.core.domain.planning import settled_for_planning
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.recovery import RecoveryRequest
 from xaytune.core.domain.run import Run, RunAttempt
@@ -460,6 +461,11 @@ class EmbeddedControllerHost:
         await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
         return ExperimentHandle(experiment.id, self)
 
+    def _settled_for_planning(self, node: NodeOutcome) -> bool:
+        decisions = self.repository.aggregates.decisions_for_node(str(node.node_id))
+        latest = max(decisions, key=lambda d: d.evaluation_cycle) if decisions else None
+        return settled_for_planning(node.status, None if latest is None else latest.outcome)
+
     def _numerical_recovery_refusals(
         self, spec: ExperimentSpec, compiler: TrainerCompiler, runtime: RuntimeBackend
     ) -> tuple[str, ...]:
@@ -768,13 +774,22 @@ class EmbeddedControllerHost:
         elif trained or evaluating:
             next_stage = "evaluation"
         elif nodes and all(node.status in _SCIENTIFICALLY_SETTLED for node in nodes):
-            # Every candidate was evaluated and decided on its merits --
-            # rejected for a violated constraint, or completed short of the
-            # target (BRANCH) -- and the experiment is still open: another
-            # candidate is what comes next, a planner's work. Only a
-            # scientific outcome leads here. A candidate that failed or was
-            # cancelled did not establish a result, and is failure-handling.
-            next_stage = "planning"
+            if all(self._settled_for_planning(node) for node in nodes):
+                # Every candidate was evaluated and decided on its merits --
+                # rejected for a violated constraint, or completed short of
+                # the target (BRANCH) -- and the experiment is still open:
+                # another candidate is what comes next, a planner's work.
+                # Only a scientific outcome leads here. A candidate that
+                # failed or was cancelled did not establish a result, and is
+                # failure-handling.
+                next_stage = "planning"
+            else:
+                # Settled, but not in a way that asks for another candidate: a
+                # STOP decision the experiment did not apply -- it was paused
+                # when the decision was made, and resuming does not apply it
+                # -- or a node settled with no decision. Somebody must decide
+                # what the experiment's outcome is.
+                next_stage = "decision"
         else:
             # Training failed or was cancelled, or an evaluation ended without
             # a result and the node's cycle stalled.

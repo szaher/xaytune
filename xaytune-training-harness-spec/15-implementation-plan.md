@@ -1180,24 +1180,44 @@ built:
   - the budget status.
 
   Its identity is `planning_context_identity_v1`, an explicit versioned
-  projection hashed by `input_fingerprint()`.
-- **Proposals** carry a `ProposalProvenance`: the planner's provider, name and
-  version, the bound spec's kind and version, and the context identity
-  version and fingerprint.
+  projection hashed by `input_fingerprint()`. It covers **everything a planner
+  can read**:
+  - each candidate through `planning_candidate_projection_v1`, which is its v2
+    identity plus each field identity leaves out (`metadata` at every level,
+    `TrainingSpec.api_version`, scheduled-intervention rationales), named one
+    by one;
+  - every budget balance (limit, reserved, committed, consumed, released,
+    outstanding, remaining).
+
+  A tripwire test pins the field sets of every model the context exposes.
+- **Proposals** carry a `ProposalProvenance`:
+  - the planner's provider, name, version and plugin API version;
+  - the bound spec's kind and version;
+  - `planner_spec_fingerprint` (`planner_spec_identity_v1`), which hashes the
+    bound spec with its canonical **config** and the descriptor contract, so
+    two configurations of one planner are told apart;
+  - the context identity version and fingerprint.
   - `CandidateProposal` holds the full candidate, its fingerprint (checked),
     parents, hypothesis, reason, the mutation as data and evidence refs. It
     mints no node id or timestamp.
-  - `ActionProposal` wraps a typed `ActionSpec` instance and refuses a mapping
-    or the base class.
+  - `ActionProposal` wraps a typed `ActionSpec` instance that must be
+    **registered**, with the registered descriptor's schema class exactly
+    `type(action)`. It refuses mappings, the base class, unregistered
+    subclasses, and subclasses posing as a registered type.
   - Nothing is persisted. There is no `planning_rounds` table; durable
     planner audit arrives where proposals are consumed.
 - **`RuleBasedPlanner`** works through an ordered list of typed mutation
   rules (no JSON patches or field paths). The first rule is
   `increase-lora-rank` (`factor` ≥ 2, `max_rank` ≥ 1). It applies only to a
   `lora` adapter with an explicit positive rank, uses `min(rank × factor,
-  max_rank)`, and never shrinks the rank. It acts only at the planning stage:
-  the experiment is `ACTIVE`, every node is `REJECTED` or `COMPLETED`, and no
-  quota is exhausted.
+  max_rank)`, and never shrinks the rank. It acts only at the planning stage,
+  which is judged by status **and** decision (`settled_for_planning`): the
+  experiment is `ACTIVE`, every node is `COMPLETED` by a latest `BRANCH` or
+  `REJECTED` by a latest `REJECT`, and no quota is exhausted.
+  - A `STOP_*` decision anywhere, which a paused experiment does not apply, or
+    a settled node with no decision, blocks planning.
+  - The host's `next_stage` uses the same predicate and reports `"decision"`
+    in those cases instead of `"planning"`.
   - **Parent.** The best `COMPLETED` node whose latest decision is `BRANCH`,
     by the unsliced primary metric measured exactly once in that decision's
     results. Ties go to node id. `REJECTED` nodes are never parents, and a

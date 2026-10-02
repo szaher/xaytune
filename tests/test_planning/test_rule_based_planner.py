@@ -472,7 +472,9 @@ def test_the_identity_projection_is_explicit_and_versioned() -> None:
         "budget",
     }
     (projected,) = identity["nodes"]
-    assert "candidate" not in projected, "identity is the candidate fingerprint, not its bytes"
+    assert set(projected["candidate"]) == {"identity", "beyond_identity"}
+    assert projected["candidate"]["identity"]["version"] == 2, "current candidate identity"
+    assert identity["budget"] is None
 
 
 def test_a_stale_candidate_fingerprint_is_refused() -> None:
@@ -484,3 +486,216 @@ def test_a_stale_candidate_fingerprint_is_refused() -> None:
             candidate=spec,
             candidate_fingerprint=spec.candidate_fingerprint_v1(),
         )
+
+
+# ---- review: decision-aware eligibility --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        lambda: node(0.9, outcome=DecisionOutcome.STOP_SUCCEEDED),
+        lambda: node(0.5, status=REJECTED, outcome=DecisionOutcome.STOP_FAILED),
+        lambda: node(0.6, status=REJECTED, outcome=None),
+        lambda: node(0.6, outcome=None),
+        lambda: node(0.6, outcome=DecisionOutcome.REJECT),
+    ],
+    ids=[
+        "stop-succeeded-beside-branch",
+        "stop-failed-beside-branch",
+        "rejected-with-no-decision",
+        "completed-with-no-decision",
+        "completed-by-a-reject",
+    ],
+)
+def test_a_settlement_its_decision_does_not_explain_blocks_planning(other) -> None:
+    """Status is not enough: a STOP, or no decision, means the experiment asks for no more."""
+    assert propose(planner(), context(node(0.79), other())) == ()
+
+
+# ---- review: the context identity covers what the planner sees ----------------------------
+
+
+def test_candidate_metadata_the_planner_carries_is_in_the_context_identity() -> None:
+    plain = candidate(16)
+    tagged = plain.model_copy(update={"metadata": FrozenDict({"owner": "team-a"})})
+    assert plain.candidate_fingerprint() == tagged.candidate_fingerprint(), "not identity"
+    shared = ExperimentNodeId.generate()
+    first = context(node(0.79, spec=plain, node_id=shared))
+    second = context(node(0.79, spec=tagged, node_id=shared))
+
+    assert first.input_fingerprint() != second.input_fingerprint()
+    (a,), (b,) = propose(planner(), first), propose(planner(), second)
+    assert a.candidate != b.candidate, "the planner does carry it into its proposal"
+    assert a.provenance.context_fingerprint != b.provenance.context_fingerprint
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        lambda c: c.model_copy(
+            update={
+                "training": c.training.model_copy(
+                    update={
+                        "adapter": c.training.adapter.model_copy(
+                            update={"metadata": FrozenDict({"x": 1})}
+                        )
+                    }
+                )
+            }
+        ),
+        lambda c: c.model_copy(
+            update={"training": c.training.model_copy(update={"api_version": "other/v1"})}
+        ),
+        lambda c: c.model_copy(
+            update={
+                "data": c.data.model_copy(
+                    update={
+                        "dataset": c.data.dataset.model_copy(
+                            update={"metadata": FrozenDict({"x": 1})}
+                        )
+                    }
+                )
+            }
+        ),
+    ],
+    ids=["adapter-metadata", "training-api-version", "dataset-ref-metadata"],
+)
+def test_every_non_identity_candidate_field_moves_the_context_identity(spec) -> None:
+    shared = ExperimentNodeId.generate()
+    base = candidate(16)
+    assert (
+        context(node(0.79, spec=base, node_id=shared)).input_fingerprint()
+        != context(node(0.79, spec=spec(base), node_id=shared)).input_fingerprint()
+    )
+
+
+def test_every_budget_balance_is_in_the_context_identity() -> None:
+    def runs(reserved: str, consumed: str) -> BudgetStatus:
+        return BudgetStatus(
+            dimensions=(
+                DimensionStatus(
+                    dimension=BudgetDimension.RUNS,
+                    kind="quota",
+                    limit=Decimal(4),
+                    reserved=Decimal(reserved),
+                    committed=Decimal(0),
+                    consumed=Decimal(consumed),
+                    released=Decimal(0),
+                    outstanding=Decimal(1),
+                    remaining=Decimal(3),
+                ),
+            )
+        )
+
+    parent = node(0.79)
+    assert (
+        context(parent, budget=runs("1", "0")).input_fingerprint()
+        != context(parent, budget=runs("2", "1")).input_fingerprint()
+    ), "same limit and remaining, different balances"
+
+
+def test_the_identity_projections_cover_every_field_of_their_models() -> None:
+    """Tripwire: a field added to anything the planner sees must be projected deliberately."""
+    from pydantic import BaseModel
+
+    from xaytune.core.domain import candidate as candidate_module
+    from xaytune.core.domain.objective import MetricConstraint
+    from xaytune.core.refs import DatasetRef as Dataset
+    from xaytune.core.refs import ModelRef as Model
+
+    pinned: dict[type[BaseModel], set[str]] = {
+        candidate_module.CandidateSpec: {
+            "model", "data", "training", "reward", "environment", "schedule", "metadata"
+        },
+        candidate_module.ModelSpec: {"model", "metadata"},
+        Model: {"uri", "revision", "digest", "metadata"},
+        candidate_module.DataSpec: {"dataset", "format", "max_seq_length", "packing", "metadata"},
+        Dataset: {
+            "uri", "revision", "split", "content_digest", "transform_fingerprint",
+            "tokenizer_fingerprint", "template_fingerprint", "metadata",
+        },
+        candidate_module.TrainingSpec: {
+            "api_version", "kind", "algorithm", "adapter", "optimization", "precision",
+            "checkpoint", "metadata",
+        },
+        candidate_module.AlgorithmSpec: {"name", "params"},
+        candidate_module.AdapterSpec: {"type", "rank", "alpha", "target_modules", "metadata"},
+        candidate_module.OptimizationSpec: {
+            "optimizer", "lr_schedule", "learning_rate", "micro_batch_size",
+            "gradient_accumulation", "epochs", "max_steps", "max_grad_norm", "metadata",
+        },
+        candidate_module.OptimizerSpec: {"name", "weight_decay", "betas", "params"},
+        candidate_module.LRScheduleSpec: {"name", "warmup_steps", "warmup_ratio", "params"},
+        candidate_module.PrecisionSpec: {"dtype", "grad_accum_dtype", "params"},
+        candidate_module.CheckpointIntent: {"every_optimizer_steps", "keep_last", "params"},
+        candidate_module.RewardSpec: {"graders", "metadata"},
+        candidate_module.EnvironmentSpec: {"name", "revision", "metadata"},
+        candidate_module.TrainingSchedule: {"interventions"},
+        candidate_module.ScheduledIntervention: {"id", "trigger", "mutation", "rationale"},
+        PlanningContext: {"experiment_id", "experiment_status", "objective", "nodes", "budget"},
+        NodeSummary: {
+            "node_id", "status", "parent_ids", "candidate", "candidate_fingerprint",
+            "decisions", "evaluations",
+        },
+        DecisionSummary: {
+            "decision_id", "evaluation_cycle", "outcome", "engine_name", "engine_version",
+            "input_fingerprint", "evaluation_result_ids",
+        },
+        EvaluationSummary: {"evaluation_result_id", "evaluation_cycle", "metrics"},
+        MetricSummary: {"name", "value", "slice", "evaluator_name", "evaluator_version"},
+        Objective: {"primary", "target", "constraints"},
+        ObjectiveMetric: {"name", "direction"},
+        MetricConstraint: {"name", "operator", "value"},
+        BudgetStatus: {"dimensions"},
+        DimensionStatus: {
+            "dimension", "kind", "limit", "reserved", "committed", "consumed", "released",
+            "outstanding", "remaining",
+        },
+    }  # fmt: skip
+    for model, fields in pinned.items():
+        assert set(model.model_fields) == fields, model.__name__
+
+
+# ---- review: provenance binds the configuration -------------------------------------------
+
+
+def test_the_planner_configuration_is_bound_into_provenance() -> None:
+    ctx = context(node(0.79))
+    (two,) = propose(planner(GROW), ctx)
+    (four,) = propose(planner({"kind": "increase-lora-rank", "factor": 2, "max_rank": 128}), ctx)
+    (again,) = propose(planner(GROW), ctx)
+
+    assert two.provenance.planner_spec_fingerprint != four.provenance.planner_spec_fingerprint
+    assert two.provenance.planner_spec_fingerprint == again.provenance.planner_spec_fingerprint
+    assert two.provenance.planner_api_version == RuleBasedPlanner.descriptor.api_version
+    assert two.provenance.planner_spec_identity_version == 1
+    assert two.candidate == four.candidate, "same proposal, told apart only by its planner"
+
+
+def test_the_planner_spec_identity_is_explicit_and_versioned() -> None:
+    from xaytune.core.domain.planning import planner_spec_identity_v1
+
+    descriptor = RuleBasedPlanner.descriptor
+    identity = planner_spec_identity_v1(
+        planner(GROW).spec,
+        provider=descriptor.provider,
+        name=descriptor.name,
+        plugin_version=descriptor.plugin_version,
+        api_version=descriptor.api_version,
+    )
+    assert identity == {
+        "kind": "planner-spec",
+        "identity_version": 1,
+        "spec": {
+            "kind": "rule-based",
+            "version": descriptor.plugin_version,
+            "config": {"rules": [GROW]},
+        },
+        "descriptor": {
+            "provider": "xaytune",
+            "name": "rule-based",
+            "plugin_version": descriptor.plugin_version,
+            "api_version": descriptor.api_version,
+        },
+    }

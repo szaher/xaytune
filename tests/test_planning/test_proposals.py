@@ -15,8 +15,11 @@ PROVENANCE = ProposalProvenance(
     planner_provider="xaytune",
     planner_name="rule-based",
     planner_version="1.0.0",
+    planner_api_version="xaytune.plugins/v1alpha1",
     planner_spec_kind="rule-based",
     planner_spec_version="1.0.0",
+    planner_spec_identity_version=1,
+    planner_spec_fingerprint="sha256:spec",
     context_identity_version=1,
     context_fingerprint="sha256:context",
 )
@@ -78,3 +81,29 @@ def test_a_candidate_proposal_needs_a_parent() -> None:
             reason="r",
             provenance=PROVENANCE,
         )
+
+
+def test_an_action_proposal_refuses_an_unregistered_action_type() -> None:
+    from typing import ClassVar, Literal
+
+    from xaytune.core.domain.actions import MutationClass
+
+    class Unregistered(ActionSpec):
+        mutation_class: ClassVar[MutationClass] = MutationClass.EXPERIMENT
+        target_kinds: ClassVar[tuple[str, ...]] = ("node",)  # type: ignore[assignment]
+        type: Literal["planner-invented"] = "planner-invented"
+
+    spec = Unregistered(target=ActionTarget(kind="node", id="x"))
+    with pytest.raises(ValidationError, match="not a registered action type"):
+        ActionProposal(action=spec, reason="r", provenance=PROVENANCE)
+
+
+def test_an_action_proposal_refuses_a_subclass_posing_as_a_registered_type() -> None:
+    """Same ``type`` literal, different schema: the registered class must be the one used."""
+
+    class Impostor(RejectCandidate):
+        pass
+
+    spec = Impostor(target=ActionTarget(kind="node", id="x"))
+    with pytest.raises(ValidationError, match="not the schema registered"):
+        ActionProposal(action=spec, reason="r", provenance=PROVENANCE)

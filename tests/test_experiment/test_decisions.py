@@ -355,10 +355,54 @@ _PATHS: dict[ExperimentNodeStatus, tuple[ExperimentNodeStatus, ...]] = {
 }
 
 
-def _next_stage(
-    tmp_path: Path, nodes: tuple[ExperimentNodeStatus, ...], experiment: ExperimentStatus
-) -> Any:
-    """next_stage for an experiment whose record holds candidates in *nodes*."""
+_DECIDED_BY = {
+    ExperimentNodeStatus.REJECTED: DecisionOutcome.REJECT,
+    ExperimentNodeStatus.COMPLETED: DecisionOutcome.BRANCH,
+}
+
+
+def _record_decision(repo: Any, node: Any, outcome: DecisionOutcome) -> None:
+    """A decision row for *node*, as recording one would leave it -- the status set apart."""
+    from xaytune.core.domain.decision import Decision, MetricEvidence
+    from xaytune.core.ids import EvaluationId
+    from xaytune.storage import write_transaction
+
+    result = EvaluationId.generate()
+    decision = Decision(
+        experiment_id=node.experiment_id,
+        node_id=node.id,
+        evaluation_cycle=1,
+        outcome=outcome,
+        reason="scripted",
+        evidence=(
+            MetricEvidence(
+                metric="accuracy",
+                role="objective",
+                value=0.8,
+                operator=">=",
+                threshold=0.9,
+                satisfied=False,
+                evaluation_result_id=result,
+                evaluator_name="scripted",
+            ),
+        ),
+        engine_name="scripted",
+        engine_version="1",
+        evaluation_result_ids=(result,),
+        input_fingerprint="sha256:scripted",
+        actor=Actor(type="system", id="test"),
+    )
+    with write_transaction(repo._connection):
+        repo.aggregates._insert_decision(decision)
+
+
+def _next_stage(tmp_path: Path, nodes: tuple[Any, ...], experiment: ExperimentStatus) -> Any:
+    """next_stage for an experiment whose record holds candidates in *nodes*.
+
+    Each is a status, decided as its status implies (``REJECTED`` by
+    ``REJECT``, ``COMPLETED`` by ``BRANCH``), or ``(status, outcome)`` to
+    decide it otherwise -- ``outcome=None`` for a node settled with none.
+    """
     from tests.test_storage.conftest import make_experiment, make_node
     from xaytune.experiment import EmbeddedControllerHost
 
@@ -375,12 +419,17 @@ def _next_stage(
                 new_status=ExperimentStatus.ACTIVE,
                 actor=actor,
             )
-            for index, status in enumerate(nodes):
+            for index, entry in enumerate(nodes):
+                status, outcome = entry if isinstance(entry, tuple) else (entry, None)
+                if not isinstance(entry, tuple):
+                    outcome = _DECIDED_BY.get(status)
                 node = repo.create_node(make_node(recorded, fingerprint=str(index)), actor=actor)
                 for step in _PATHS[status]:
                     node = repo.transition_node(
                         node.id, expected_revision=node.revision, new_status=step, actor=actor
                     )
+                if outcome is not None:
+                    _record_decision(repo, node, outcome)
             if experiment is not ExperimentStatus.ACTIVE:
                 repo.transition_experiment(
                     recorded.id,
@@ -414,6 +463,14 @@ REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
         ((COMPLETED, FAILED), ExperimentStatus.ACTIVE, "failure-handling"),
         ((COMPLETED, DECIDING), ExperimentStatus.ACTIVE, "decision"),
         ((COMPLETED,), ExperimentStatus.SUCCEEDED, None),
+        (
+            (COMPLETED, (COMPLETED, DecisionOutcome.STOP_SUCCEEDED)),
+            ExperimentStatus.ACTIVE,
+            "decision",
+        ),
+        ((COMPLETED, (REJECTED, DecisionOutcome.STOP_FAILED)), ExperimentStatus.ACTIVE, "decision"),
+        (((REJECTED, None),), ExperimentStatus.ACTIVE, "decision"),
+        (((COMPLETED, DecisionOutcome.REJECT),), ExperimentStatus.ACTIVE, "decision"),
         ((FAILED,), ExperimentStatus.ACTIVE, "failure-handling"),
         ((CANCELLED,), ExperimentStatus.ACTIVE, "failure-handling"),
         ((REJECTED, FAILED), ExperimentStatus.ACTIVE, "failure-handling"),
@@ -430,6 +487,10 @@ REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
         "a-failure-beside-a-branch-is-failure-handling",
         "a-deferral-beside-a-branch-is-decision",
         "succeeded-is-none",
+        "an-unapplied-stop-succeeded-beside-a-branch-is-decision",
+        "an-unapplied-stop-failed-beside-a-branch-is-decision",
+        "settled-without-a-decision-is-decision",
+        "a-status-its-decision-does-not-explain-is-decision",
         "failed-is-failure-handling",
         "cancelled-is-failure-handling",
         "a-failure-beside-a-rejection-is-failure-handling",

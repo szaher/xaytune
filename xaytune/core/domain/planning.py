@@ -30,18 +30,21 @@ from typing import Any, Literal
 
 from pydantic import Field, SerializeAsAny, field_validator, model_validator
 
-from xaytune.core.domain.actions.contract import ActionSpec
+from xaytune.core.domain.action import UnknownActionTypeError
+from xaytune.core.domain.actions.contract import ActionSpec, action_descriptor
 from xaytune.core.domain.budget import BudgetStatus
-from xaytune.core.domain.candidate import CandidateSpec
+from xaytune.core.domain.candidate import CandidateSpec, candidate_identity_v2
 from xaytune.core.domain.decision import DecisionOutcome
 from xaytune.core.domain.objective import Objective
+from xaytune.core.domain.specs import PlannerSpec
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import DecisionId, EvaluationId, ExperimentId, ExperimentNodeId
-from xaytune.core.immutable import FrozenDict, FrozenDomainModel
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel, thaw
 from xaytune.core.observability import Finite
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 
 __all__ = [
+    "PLANNER_SPEC_IDENTITY_VERSION",
     "PLANNING_CONTEXT_IDENTITY_VERSION",
     "ActionProposal",
     "CandidateProposal",
@@ -52,10 +55,81 @@ __all__ = [
     "PlanningContext",
     "Proposal",
     "ProposalProvenance",
+    "planning_candidate_projection_v1",
+    "settled_for_planning",
+    "planner_spec_identity_v1",
     "planning_context_identity_v1",
 ]
 
 PLANNING_CONTEXT_IDENTITY_VERSION = 1
+
+
+def planning_candidate_projection_v1(candidate: CandidateSpec) -> Mapping[str, Any]:
+    """Everything a planner can see of a candidate, as an explicit versioned projection.
+
+    The candidate's identity (``candidate_identity_v2``) deliberately leaves
+    out fields that do not bear scientific identity -- ``metadata`` at every
+    level, the training spec's ``api_version``, a scheduled intervention's
+    ``rationale``. A planner still sees them, and a mutation carries them
+    into the candidate it proposes, so two contexts differing only there are
+    different planner inputs. This projection is the identity plus each of
+    those fields, named one by one: a field added to the candidate later is
+    a deliberate choice to project, not a silent change of every context's
+    identity. A test pins the candidate's schema against this list.
+    """
+    model, data, training = candidate.model, candidate.data, candidate.training
+    schedule = candidate.schedule
+    return {
+        "identity": candidate_identity_v2(candidate),
+        "beyond_identity": {
+            "metadata": thaw(candidate.metadata),
+            "model": {"metadata": thaw(model.metadata), "ref_metadata": thaw(model.model.metadata)},
+            "data": {
+                "metadata": thaw(data.metadata),
+                "dataset_metadata": thaw(data.dataset.metadata),
+            },
+            "training": {
+                "api_version": training.api_version,
+                "metadata": thaw(training.metadata),
+                "adapter_metadata": None
+                if training.adapter is None
+                else thaw(training.adapter.metadata),
+                "optimization_metadata": thaw(training.optimization.metadata),
+            },
+            "reward_metadata": None
+            if candidate.reward is None
+            else thaw(candidate.reward.metadata),
+            "environment_metadata": None
+            if candidate.environment is None
+            else thaw(candidate.environment.metadata),
+            "schedule_rationales": None
+            if schedule is None
+            else [{"id": item.id, "rationale": item.rationale} for item in schedule.interventions],
+        },
+    }
+
+
+_SETTLED_FOR_PLANNING: frozenset[tuple[ExperimentNodeStatus, DecisionOutcome]] = frozenset(
+    {
+        (ExperimentNodeStatus.COMPLETED, DecisionOutcome.BRANCH),
+        (ExperimentNodeStatus.REJECTED, DecisionOutcome.REJECT),
+    }
+)
+
+
+def settled_for_planning(
+    status: ExperimentNodeStatus, latest_outcome: DecisionOutcome | None
+) -> bool:
+    """Whether a candidate was decided on its merits in a way that leaves room for another.
+
+    The status alone does not say: ``COMPLETED`` is also what ``STOP_SUCCEEDED``
+    leaves, and ``REJECTED`` what ``STOP_FAILED`` does. So the latest decision
+    must agree -- ``COMPLETED`` by ``BRANCH``, ``REJECTED`` by ``REJECT``. A
+    ``STOP_*`` decision says the experiment should end (one decided while it
+    was paused is not applied, and a resume does not undo that), and a settled
+    node with no decision was not settled by one; neither invites planning.
+    """
+    return (status, latest_outcome) in _SETTLED_FOR_PLANNING
 
 
 class MetricSummary(FrozenDomainModel):
@@ -164,13 +238,18 @@ def planning_context_identity_v1(context: PlanningContext) -> Mapping[str, Any]:
     It names what a planner plans from:
 
     - the experiment, its status and its objective;
-    - each node: id, status, sorted parents and **current** candidate
-      fingerprint (the candidate's identity, not its bytes);
+    - each node: id, status, sorted parents, its **current** candidate
+      fingerprint, and everything the planner can see of the candidate
+      (:func:`planning_candidate_projection_v1`);
     - each decision: id, cycle, outcome, engine and version, input
       fingerprint and the results it decided on;
     - each evaluation: result id, cycle and its metrics (name, value, slice,
       evaluator and version);
-    - each enforced budget dimension: kind, limit and remaining.
+    - each enforced budget dimension, every balance it carries: limit,
+      reserved, committed, consumed, released, outstanding and remaining.
+
+    Every field a planner can read is here; a test pins the context's
+    schema against it, so a field added later cannot escape the identity.
 
     Collections are sorted, so the order they were read in is not identity.
     """
@@ -190,6 +269,7 @@ def planning_context_identity_v1(context: PlanningContext) -> Mapping[str, Any]:
             "status": n.status.value,
             "parent_ids": sorted(str(parent) for parent in n.parent_ids),
             "candidate_fingerprint": n.candidate_fingerprint,
+            "candidate": planning_candidate_projection_v1(n.candidate),
             "decisions": [
                 {
                     "decision_id": str(d.decision_id),
@@ -242,6 +322,11 @@ def planning_context_identity_v1(context: PlanningContext) -> Mapping[str, Any]:
                 "dimension": d.dimension.value,
                 "kind": d.kind,
                 "limit": _decimal(d.limit),
+                "reserved": _decimal(d.reserved),
+                "committed": _decimal(d.committed),
+                "consumed": _decimal(d.consumed),
+                "released": _decimal(d.released),
+                "outstanding": _decimal(d.outstanding),
                 "remaining": _decimal(d.remaining),
             }
             for d in sorted(budget.dimensions, key=lambda d: d.dimension.value)
@@ -254,19 +339,51 @@ def _decimal(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
+PLANNER_SPEC_IDENTITY_VERSION = 1
+
+
+def planner_spec_identity_v1(
+    spec: PlannerSpec, *, provider: str, name: str, plugin_version: str, api_version: str
+) -> Mapping[str, Any]:
+    """What makes two bound planners the same, version 1.
+
+    The bound spec -- kind, resolved version and canonical configuration --
+    and the descriptor contract it was bound to: provider, name, plugin
+    version and plugin API version. Two planners of one kind and version
+    configured differently behave differently, so the configuration is
+    identity (ADR-016: the spec is what appears in provenance).
+    """
+    return {
+        "kind": "planner-spec",
+        "identity_version": PLANNER_SPEC_IDENTITY_VERSION,
+        "spec": {"kind": spec.kind, "version": spec.version, "config": thaw(spec.config)},
+        "descriptor": {
+            "provider": provider,
+            "name": name,
+            "plugin_version": plugin_version,
+            "api_version": api_version,
+        },
+    }
+
+
 class ProposalProvenance(FrozenDomainModel):
     """Which planner proposed this, configured how, from which context.
 
     Carried on every proposal, so a proposal can be traced without a planning
-    record: the planner's descriptor identity, the bound ``PlannerSpec`` it
-    ran under, and the fingerprint of the context it saw.
+    record: the planner's descriptor contract, the bound ``PlannerSpec`` it ran
+    under -- configuration included, by its fingerprint
+    (:func:`planner_spec_identity_v1`) -- and the fingerprint of the context
+    it saw (:func:`planning_context_identity_v1`).
     """
 
     planner_provider: str = Field(min_length=1)
     planner_name: str = Field(min_length=1)
     planner_version: str = Field(min_length=1)
+    planner_api_version: str = Field(min_length=1)
     planner_spec_kind: str = Field(min_length=1)
     planner_spec_version: str = Field(min_length=1)
+    planner_spec_identity_version: int = Field(ge=1)
+    planner_spec_fingerprint: str = Field(min_length=1)
     context_identity_version: int = Field(ge=1)
     context_fingerprint: str = Field(min_length=1)
 
@@ -320,10 +437,23 @@ class ActionProposal(FrozenDomainModel):
 
     @field_validator("action", mode="before")
     @classmethod
-    def _a_typed_action(cls, value: Any) -> Any:
+    def _a_registered_action(cls, value: Any) -> Any:
         if not isinstance(value, ActionSpec) or type(value) is ActionSpec:
             raise ValueError(
                 "an action proposal carries a typed ActionSpec instance, never a mapping"
+            )
+        action_type = type(value).model_fields["type"].default
+        try:
+            descriptor = action_descriptor(action_type, value.version)
+        except UnknownActionTypeError as unknown:
+            raise ValueError(
+                f"{type(value).__name__} ({action_type} v{value.version}) is not a registered "
+                f"action type"
+            ) from unknown
+        if descriptor.spec is not type(value):
+            raise ValueError(
+                f"{type(value).__name__} is not the schema registered for {action_type} "
+                f"v{value.version} ({descriptor.spec.__name__})"
             )
         return value
 

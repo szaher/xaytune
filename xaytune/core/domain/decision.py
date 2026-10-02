@@ -88,10 +88,26 @@ class DecisionOutcome(str, Enum):
 
     @property
     def node_status(self) -> ExperimentNodeStatus:
-        """Where the decision leaves the candidate."""
-        if self in (DecisionOutcome.STOP_SUCCEEDED, DecisionOutcome.BRANCH):
-            return ExperimentNodeStatus.COMPLETED
-        return ExperimentNodeStatus.REJECTED
+        """Where the decision leaves the candidate.
+
+        Named per outcome, never defaulted: an outcome added later must say
+        where it leaves the candidate before it can be recorded.
+
+        Raises:
+            ValueError: If the outcome names no node status.
+        """
+        status = _NODE_STATUS.get(self)
+        if status is None:
+            raise ValueError(f"decision outcome {self.value} names no node status")
+        return status
+
+
+_NODE_STATUS: dict[DecisionOutcome, ExperimentNodeStatus] = {
+    DecisionOutcome.STOP_SUCCEEDED: ExperimentNodeStatus.COMPLETED,
+    DecisionOutcome.BRANCH: ExperimentNodeStatus.COMPLETED,
+    DecisionOutcome.STOP_FAILED: ExperimentNodeStatus.REJECTED,
+    DecisionOutcome.REJECT: ExperimentNodeStatus.REJECTED,
+}
 
 
 class DecisionContext(FrozenDomainModel):

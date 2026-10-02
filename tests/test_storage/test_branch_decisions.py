@@ -66,3 +66,64 @@ def test_the_adaptive_engine_still_succeeds_the_experiment_on_target(
     repo.record_decision(proposal, expected_node_revision=deciding.revision, actor=_ACTOR)
     experiment = repo.aggregates.load_experiment(str(node.experiment_id))
     assert (experiment.status, experiment.best_node_id) == (ExperimentStatus.SUCCEEDED, node.id)
+
+
+# ---- every outcome is handled by name ---------------------------------------------
+
+
+def test_every_implemented_outcome_is_handled_explicitly() -> None:
+    """Adding an outcome must update both maps, never fall through to a default."""
+    from xaytune.core.domain.decision import _NODE_STATUS
+
+    assert set(DecisionOutcome) == {
+        DecisionOutcome.STOP_SUCCEEDED,
+        DecisionOutcome.STOP_FAILED,
+        DecisionOutcome.REJECT,
+        DecisionOutcome.BRANCH,
+    }
+    assert set(_NODE_STATUS) == set(DecisionOutcome)
+
+
+def test_an_outcome_with_no_experiment_transition_fails_closed(
+    repo: ControlPlaneRepository, node: Any
+) -> None:
+    """A future outcome reaching the experiment step raises; it never fails the experiment."""
+    from enum import Enum
+    from types import SimpleNamespace
+
+    import pytest
+
+    from xaytune.core.ids import DecisionId
+    from xaytune.storage import write_transaction
+    from xaytune.storage.errors import StorageError
+
+    class Future(str, Enum):
+        EVALUATE_MORE = "evaluate_more"
+
+    decision = SimpleNamespace(
+        id=DecisionId.generate(),
+        outcome=Future.EVALUATE_MORE,
+        experiment_id=node.experiment_id,
+        node_id=node.id,
+    )
+    with pytest.raises(StorageError, match="evaluate_more has no experiment transition"):
+        with write_transaction(repo._connection):
+            repo._conclude_experiment(decision, _ACTOR, ())  # type: ignore[arg-type]
+    experiment = repo.aggregates.load_experiment(str(node.experiment_id))
+    assert (experiment.status, experiment.best_node_id) == (ExperimentStatus.ACTIVE, None)
+
+
+def test_an_outcome_with_no_node_status_records_nothing(
+    repo: ControlPlaneRepository, node: Any, monkeypatch: Any
+) -> None:
+    import pytest
+
+    from xaytune.core.domain import decision as decision_module
+
+    deciding, result = _deciding(repo, node)
+    proposal = _adaptive(repo, deciding, result, target=0.9)
+    monkeypatch.delitem(decision_module._NODE_STATUS, DecisionOutcome.BRANCH)
+    with pytest.raises(ValueError, match="branch names no node status"):
+        repo.record_decision(proposal, expected_node_revision=deciding.revision, actor=_ACTOR)
+    assert repo.aggregates.decision_for_cycle(str(node.id), 1) is None
+    assert repo.aggregates.load_node(str(node.id)).status is ExperimentNodeStatus.DECIDING

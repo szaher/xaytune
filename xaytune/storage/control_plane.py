@@ -2041,13 +2041,24 @@ class ControlPlaneRepository:
     def _conclude_experiment(
         self, decision: Decision, actor: Actor, destinations: tuple[str, ...]
     ) -> None:
-        """End an ``ACTIVE`` experiment when the decision says to stop it; otherwise nothing."""
-        if decision.outcome in (DecisionOutcome.REJECT, DecisionOutcome.BRANCH):
+        """End an ``ACTIVE`` experiment when the decision says to stop it; otherwise nothing.
+
+        Every outcome is handled by name. One with no transition here fails
+        closed, inside the decision's transaction, so an outcome added later
+        can never fall through to failing the experiment.
+
+        Raises:
+            StorageError: If the outcome has no experiment transition.
+        """
+        outcome = decision.outcome
+        if outcome in (DecisionOutcome.REJECT, DecisionOutcome.BRANCH):
             return
+        if outcome not in (DecisionOutcome.STOP_SUCCEEDED, DecisionOutcome.STOP_FAILED):
+            raise StorageError(f"decision outcome {outcome.value} has no experiment transition")
         experiment = self.aggregates.load_experiment(str(decision.experiment_id))
         if experiment.status is not ExperimentStatus.ACTIVE:
             return
-        if decision.outcome is DecisionOutcome.STOP_SUCCEEDED:
+        if outcome is DecisionOutcome.STOP_SUCCEEDED:
             ended = experiment.succeeded_with(decision.node_id)
         else:
             ended = experiment.with_status(ExperimentStatus.FAILED)

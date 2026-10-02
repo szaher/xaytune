@@ -41,8 +41,9 @@ Do not use one hash for all purposes.
 
 Identical candidate fingerprints do not automatically suppress reruns.
 
-Reuse is governed by explicit `ReusePolicy` and seed/replicate semantics, and asks four
-distinct questions (ADR-011):
+Future training reuse, if introduced, must be governed by the explicit versioned
+`ReusePolicy` required by ADR-017 together with seed/replicate semantics. The
+fingerprint model supports the following distinct identity questions:
 
 | Question | Match on |
 |---|---|

@@ -105,6 +105,15 @@ argument ADR-006 makes for compiler and framework versions in
 - Plugin authors must make their configuration JSON-expressible. This is a real
   constraint and is the point.
 
+## Implementation status
+
+`CompilerSpec`, `RuntimeSpec` and `PlannerSpec` are implemented
+(`xaytune.core.domain.specs`). `PlannerSpec` arrived with PR-024: the host
+binds it at submission (kind resolved, plugin API checked, config validated
+into typed rules, version recorded), and a restarted host rebuilds the planner
+from the record. `ControllerHostSpec` arrives with a second host; until then
+`Experiment.controller_host` names the owner.
+
 ## Acceptance criteria
 
 1. `Experiment` persists `PlannerSpec`, `RuntimeSpec` and `ControllerHostSpec`;

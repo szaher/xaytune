@@ -117,6 +117,13 @@ from xaytune.core.domain.operation import (
     RuntimeOperation,
     RuntimeOperationTarget,
 )
+from xaytune.core.domain.planning import (
+    DecisionSummary,
+    EvaluationSummary,
+    MetricSummary,
+    NodeSummary,
+    PlanningContext,
+)
 from xaytune.core.domain.policy import (
     GovernedAction,
     PolicyContext,
@@ -2128,6 +2135,73 @@ class ControlPlaneRepository:
         return True
 
     # ---- ADR-005 §4 ----------------------------------------------------
+
+    # ---- planning (PR-024) ----------------------------------------------------
+
+    def planning_context(self, experiment_id: ExperimentId | str) -> PlanningContext:
+        """The experiment as a planner may see it: a curated projection, read-only.
+
+        Topology comes from the relationships alone (open question 15):
+        nodes of the experiment, each node's decisions and its evaluation
+        results with the cycle each belongs to. Every candidate's identity is
+        recomputed under the current projection from its stored snapshot.
+        Nothing is written.
+        """
+        aggregates = self.aggregates
+        experiment = aggregates.load_experiment(str(experiment_id))
+        nodes = []
+        for node in aggregates.nodes_for_experiment(str(experiment.id)):
+            evaluations = []
+            for run in aggregates.evaluation_runs_for_node(str(node.id)):
+                result = aggregates.evaluation_result_for_run(str(run.id))
+                if result is None:
+                    continue
+                evaluations.append(
+                    EvaluationSummary(
+                        evaluation_result_id=result.id,
+                        evaluation_cycle=run.evaluation_cycle,
+                        metrics=tuple(
+                            MetricSummary(
+                                name=metric.name,
+                                value=metric.value,
+                                slice=metric.slice,
+                                evaluator_name=metric.evaluator_name,
+                                evaluator_version=metric.evaluator_version,
+                            )
+                            for metric in result.metrics
+                        ),
+                    )
+                )
+            candidate = node.candidate.candidate
+            nodes.append(
+                NodeSummary(
+                    node_id=node.id,
+                    status=node.status,
+                    parent_ids=node.parent_ids,
+                    candidate=candidate,
+                    candidate_fingerprint=candidate.candidate_fingerprint(),
+                    decisions=tuple(
+                        DecisionSummary(
+                            decision_id=decision.id,
+                            evaluation_cycle=decision.evaluation_cycle,
+                            outcome=decision.outcome,
+                            engine_name=decision.engine_name,
+                            engine_version=decision.engine_version,
+                            input_fingerprint=decision.input_fingerprint,
+                            evaluation_result_ids=decision.evaluation_result_ids,
+                        )
+                        for decision in aggregates.decisions_for_node(str(node.id))
+                    ),
+                    evaluations=tuple(evaluations),
+                )
+            )
+        return PlanningContext(
+            experiment_id=experiment.id,
+            experiment_status=experiment.status,
+            objective=experiment.objective,
+            nodes=tuple(nodes),
+            budget=self.budget_status(experiment.id),
+        )
 
     # ---- the budget ledger (PR-016) ---------------------------------------
 

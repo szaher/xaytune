@@ -37,7 +37,7 @@ from xaytune.experiment.host import (
     ReconciliationEscalatedError,
     UnknownImplementationError,
 )
-from xaytune.experiment.spec import CompilerSpec, ExperimentSpec, RuntimeSpec
+from xaytune.experiment.spec import CompilerSpec, ExperimentSpec, PlannerSpec, RuntimeSpec
 
 __all__ = [
     "BudgetExhaustedError",
@@ -55,6 +55,7 @@ __all__ = [
     "GovernedAction",
     "ImplementationMismatchError",
     "NodeOutcome",
+    "PlannerSpec",
     "PolicyVerdict",
     "ReconciliationEscalatedError",
     "RunOutcome",

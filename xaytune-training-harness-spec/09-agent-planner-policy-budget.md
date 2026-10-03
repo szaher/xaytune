@@ -25,17 +25,23 @@ An LLM is one possible planner.
 ```python
 class Planner(Protocol):
     descriptor: PluginDescriptor
+    spec: PlannerSpec                    # the bound spec it runs under (ADR-016)
 
     async def propose(
         self,
         context: PlanningContext,
-    ) -> list[CandidateProposal | ActionProposal]: ...
+    ) -> tuple[CandidateProposal | ActionProposal, ...]: ...
 ```
 
-Initial planners:
+Initial planners (PR-024, `xaytune.planning`):
 
-- RuleBasedPlanner
-- NoOpPlanner
+- RuleBasedPlanner -- ordered, typed mutation rules (first: `increase-lora-rank`)
+  applied to the best `COMPLETED` candidate at the planning stage
+- NoOpPlanner -- always `()`
+
+A planner proposes; it never decides or applies. Objective and constraint
+verdicts are the DecisionEngine's, attempt failures are recovery's, and
+creating a node from a `CandidateProposal` is branching's (PR-025).
 
 Later:
 
@@ -117,13 +123,16 @@ Initial action types:
 
 ```python
 class ActionProposal(BaseModel):
-    action: ActionSpec
+    action: ActionSpec          # a typed, registered spec instance -- never a mapping
     reason: str
-    evidence_refs: list[str]
-    proposer: Actor
+    evidence_refs: tuple[str, ...]
+    provenance: ProposalProvenance   # planner identity + context fingerprint
 ```
 
-LLM output must be schema-validated.
+LLM output must be schema-validated. Only action types that exist can be
+proposed; there is no `stop-experiment` or `request-evaluation` type, because
+terminal outcomes belong to the DecisionEngine and evaluation to the
+evaluation lifecycle.
 
 ## 6. Policy engine
 
@@ -194,6 +203,15 @@ class PlanningContext(BaseModel):
     experiment_memory: list[PriorExperimentSummary]
 ```
 
+As built in PR-024, `PlanningContext` (`xaytune.core.domain.planning`) is the
+deterministic subset of this sketch. It holds the experiment's status and
+objective, each node's summary (status, parents, candidate and its current
+fingerprint, decisions, evaluation results by cycle), and the budget status.
+The repository assembles it read-only (`planning_context()`). Its identity is
+the versioned `planning_context_identity_v1`. Allowed-action schemas,
+capability summaries and cross-experiment memory arrive with the planners that
+need them, such as an LLM planner.
+
 Do not provide:
 
 - secrets
@@ -204,7 +222,17 @@ Do not provide:
 
 ## 9. Decision recording
 
-Store:
+**As of PR-024, nothing here is persisted yet.** Planners are pure and their
+output is unconsumed. Each proposal carries its own provenance: the planner's
+provider, name and version, the bound `PlannerSpec`, the planning-context
+identity version and fingerprint, a concise reason, and evidence refs. That
+is enough to materialize and audit it later. The durable recording below
+belongs where proposals are consumed: PR-025 keeps an accepted
+`CandidateProposal`'s provenance with the branch it creates, and an
+`ActionProposal` enters the existing durable Action path. PR-026 adds any
+orchestration record it needs, and PR-032 adds LLM/agent audit.
+
+Eventually store:
 
 - provider
 - model

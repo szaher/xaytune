@@ -11,6 +11,7 @@ This section documents xaytune's Python API.
 | `xaytune.compilation` | `TrainerCompiler`, `NativeCompiler`, `TRLCompiler` |
 | `xaytune.evaluation` | The `Evaluator` contract, `NativeEvaluator` in `xaytune.evaluation.native`, and `LMEvalEvaluator` in `xaytune.evaluation.lmeval` |
 | `xaytune.decision` | The `DecisionEngine` contract, `ThresholdDecisionEngine` and `AdaptiveThresholdDecisionEngine`; `Decision` and `DecisionContext` are in `xaytune.core.domain.decision` |
+| `xaytune.planning` | The `Planner` contract, `RuleBasedPlanner` and `NoOpPlanner`; `PlanningContext` and the proposals are in `xaytune.core.domain.planning`, `PlannerSpec` in `xaytune.core.domain.specs` |
 | `xaytune.runtimes` | `RuntimeBackend` and `LocalRuntime` |
 | `xaytune.storage` | SQLite persistence, migrations, `ControlPlaneRepository` |
 

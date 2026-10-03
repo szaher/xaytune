@@ -67,7 +67,9 @@ None                 the experiment is terminal
 "action-approval"    a proposed action awaits a human's approval
 "action-execution"   an authorized action awaits an executor: VALIDATED with an
                      ALLOW decision, or APPROVED with a REQUIRE_APPROVAL one
-"decision"           a candidate is DECIDING: its decision was deferred
+"decision"           a candidate is DECIDING: its decision was deferred -- or
+                     every candidate is settled, but a STOP decision was not
+                     applied (the experiment was paused) or a node has none
 "evaluation"         a trained candidate is unevaluated, or evaluating
 "planning"           the experiment is ACTIVE and every candidate was decided on
                      its merits -- rejected, or completed short of the target

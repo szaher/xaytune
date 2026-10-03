@@ -11,7 +11,7 @@ Objective:
 task_success >= 0.82
 
 Budget:
-maximum 4 scientific candidates
+maximum 4 runs (one run per candidate in this scenario)
 maximum 8 GPU-hours
 
 Recovery:
@@ -69,11 +69,22 @@ resilience:
     preserveEffectiveBatch: true
 
 planner:
-  type: rule-based
+  kind: rule-based
+  config:
+    rules:
+      - kind: increase-lora-rank   # node_A LoRA 16 → node_B LoRA 32
+        factor: 2
+        max_rank: 64
 
 runtime:
   backend: local
 ```
+
+`maxRuns` bounds **runs**, not candidates (PR-016): it is reserved when a run
+is created. This scenario realizes each candidate once, so four runs allow at
+most four candidates. A separate `max_candidates` budget can come later. The
+planner is the bound `PlannerSpec` (PR-024): rule-based planning needs an
+explicit, typed mutation rule, here LoRA-rank growth.
 
 ## 3. Expected execution
 

@@ -90,7 +90,7 @@ from xaytune.core.domain.evaluation import (
     result_provenance_problems,
 )
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
-from xaytune.core.domain.experiment import Experiment, ExperimentNode
+from xaytune.core.domain.experiment import CandidateSpecSnapshot, Experiment, ExperimentNode
 from xaytune.core.domain.incident import AttemptContext, Incident
 from xaytune.core.domain.intervention import (
     IncidentTrigger,
@@ -118,11 +118,17 @@ from xaytune.core.domain.operation import (
     RuntimeOperationTarget,
 )
 from xaytune.core.domain.planning import (
+    PLANNER_SPEC_IDENTITY_VERSION,
+    PLANNING_CONTEXT_IDENTITY_VERSION,
+    CandidateBranchOrigin,
+    CandidateProposal,
     DecisionSummary,
     EvaluationSummary,
     MetricSummary,
     NodeSummary,
     PlanningContext,
+    ProposalProvenance,
+    planner_spec_identity_v1,
 )
 from xaytune.core.domain.policy import (
     GovernedAction,
@@ -219,6 +225,8 @@ from xaytune.storage.repository import AggregateStore
 __all__ = [
     "ApprovalConflictError",
     "ApprovalError",
+    "BranchRefusedError",
+    "CandidateConflictError",
     "CancellationNotGovernedError",
     "ControlPlaneRepository",
     "DecisionConflictError",
@@ -226,6 +234,7 @@ __all__ = [
     "InterventionNotAuthorizedError",
     "ProvenanceError",
     "StalePolicyContextError",
+    "StaleProposalError",
     "UnknownOperationTargetError",
 ]
 
@@ -373,6 +382,18 @@ class CancellationSagaRequiredError(StorageError):
 
 class ProvenanceError(StorageError):
     """A record would attribute something to a producer that did not make it."""
+
+
+class BranchRefusedError(StorageError):
+    """A candidate proposal cannot be materialized as a node; nothing was written."""
+
+
+class StaleProposalError(BranchRefusedError):
+    """The experiment changed since the proposal was planned. Plan again from a fresh context."""
+
+
+class CandidateConflictError(BranchRefusedError):
+    """The experiment already has this candidate, from another proposal or none."""
 
 
 class InterventionNotAuthorizedError(StorageError):
@@ -2202,6 +2223,207 @@ class ControlPlaneRepository:
             nodes=tuple(nodes),
             budget=self.budget_status(experiment.id),
         )
+
+    def materialize_candidate_proposal(
+        self,
+        experiment_id: ExperimentId | str,
+        proposal: CandidateProposal,
+        *,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> ExperimentNode:
+        """Turn a candidate proposal into a ``PLANNED`` child node, in one commit (PR-025).
+
+        Everything is checked inside the write transaction that creates the
+        node, so no other writer can change the experiment in between:
+
+        ```text
+        the candidate's current fingerprint is the proposal's     else ProvenanceError
+        the experiment already has this candidate:
+            from this very proposal                 → that node; nothing written
+            from anything else                      → CandidateConflictError
+        the experiment is ACTIVE                                   else BranchRefusedError
+        the proposal was made by the recorded planner, configured
+          exactly as recorded (spec fingerprint recomputed)        else ProvenanceError
+        the planning context is unchanged since (fingerprint)      else StaleProposalError
+        no budget quota is exhausted                               else BranchRefusedError
+        each evidence ref is a decision or result of a parent      else ProvenanceError
+        the parents exist, in this experiment, with no cycle       else LineageError
+        ```
+
+        Then the node is created -- id minted here, candidate stored as
+        proposed, ``branch_origin`` recording the proposal -- and moved to
+        ``PLANNED``, with ``NodeCreated`` and ``ExperimentNodeStatusChanged``,
+        in the same commit. No run, attempt, action, operation or ledger entry
+        is written: realizing the node is PR-026's, and ``max_runs`` is
+        reserved only when a run is created.
+
+        The repository checks the durable planner spec; that the proposal's
+        descriptor identity is the planner this host actually binds is the
+        controller's to check before calling (layering: storage never imports
+        a planner implementation).
+
+        Raises:
+            AggregateNotFoundError: If the experiment does not exist.
+            ProvenanceError: See above.
+            CandidateConflictError: See above.
+            StaleProposalError: See above.
+            BranchRefusedError: See above.
+            LineageError: See above.
+        """
+        with write_transaction(self._connection):
+            aggregates = self.aggregates
+            experiment = aggregates.load_experiment(str(experiment_id))
+            candidate = proposal.candidate
+            identity = candidate.candidate_fingerprint()
+            if identity != proposal.candidate_fingerprint:
+                raise ProvenanceError(
+                    f"the proposal claims candidate {proposal.candidate_fingerprint}, but its "
+                    f"candidate fingerprints as {identity}"
+                )
+            origin = CandidateBranchOrigin.of(proposal)
+            for existing in aggregates.nodes_for_experiment(str(experiment.id)):
+                if existing.candidate.candidate.candidate_fingerprint() != identity:
+                    continue
+                recorded = existing.branch_origin
+                if recorded is not None and recorded.proposal_fingerprint == (
+                    origin.proposal_fingerprint
+                ):
+                    return existing
+                raise CandidateConflictError(
+                    f"experiment {experiment.id} already has candidate {identity} as node "
+                    f"{existing.id}, from "
+                    + (
+                        f"proposal {recorded.proposal_fingerprint}"
+                        if recorded is not None
+                        else "no proposal"
+                    )
+                    + "; the same scientific candidate is never a second node"
+                )
+            if experiment.status is not ExperimentStatus.ACTIVE:
+                raise BranchRefusedError(
+                    f"experiment {experiment.id} is {experiment.status.value}; only an ACTIVE "
+                    f"experiment branches"
+                )
+            self._require_recorded_planner(experiment, proposal.provenance)
+            context = self.planning_context(experiment.id)
+            provenance = proposal.provenance
+            if (
+                provenance.context_identity_version != PLANNING_CONTEXT_IDENTITY_VERSION
+                or provenance.context_fingerprint != context.input_fingerprint()
+            ):
+                raise StaleProposalError(
+                    f"the proposal was planned against context {provenance.context_fingerprint} "
+                    f"(identity v{provenance.context_identity_version}), but experiment "
+                    f"{experiment.id} is now {context.input_fingerprint()} "
+                    f"(v{PLANNING_CONTEXT_IDENTITY_VERSION}); plan again"
+                )
+            if context.budget is not None and context.budget.exhausted:
+                raise BranchRefusedError(
+                    f"experiment {experiment.id} has an exhausted quota "
+                    f"({', '.join(d.dimension.value for d in context.budget.exhausted)}); "
+                    f"no run of a new candidate could follow"
+                )
+            self._require_parent_evidence(proposal)
+
+            node = ExperimentNode(
+                id=ExperimentNodeId.generate(),
+                experiment_id=experiment.id,
+                parent_ids=proposal.parent_ids,
+                hypothesis=proposal.hypothesis,
+                reason=proposal.reason,
+                candidate=CandidateSpecSnapshot(candidate=candidate),
+                candidate_fingerprint=identity,
+                branch_origin=origin,
+                created_by=actor,
+            )
+            self.graph.validate_parents(node)
+            aggregates._insert_node(node)
+            self._emit(
+                node,
+                "NodeCreated",
+                str(experiment.id),
+                actor,
+                destinations,
+                extra={
+                    "proposal_fingerprint": origin.proposal_fingerprint,
+                    "parent_ids": [str(parent) for parent in node.parent_ids],
+                },
+            )
+            planned = node.with_status(ExperimentNodeStatus.PLANNED)
+            aggregates._update_node(planned)
+            self._emit(
+                planned, "ExperimentNodeStatusChanged", str(experiment.id), actor, destinations
+            )
+        return planned
+
+    def _require_recorded_planner(
+        self, experiment: Experiment, provenance: ProposalProvenance
+    ) -> None:
+        """The proposal was made under the experiment's recorded, bound planner spec, exactly."""
+        spec = experiment.planner
+        if spec is None:
+            raise ProvenanceError(
+                f"experiment {experiment.id} records no planner; a proposal cannot be "
+                f"attributed to one"
+            )
+        problems = []
+        if (provenance.planner_spec_kind, provenance.planner_name) != (spec.kind, spec.kind):
+            problems.append(
+                f"names planner {provenance.planner_name!r} "
+                f"(spec {provenance.planner_spec_kind!r}), not the recorded {spec.kind!r}"
+            )
+        if (provenance.planner_spec_version, provenance.planner_version) != (
+            spec.version,
+            spec.version,
+        ):
+            problems.append(
+                f"names version {provenance.planner_version} (spec "
+                f"{provenance.planner_spec_version}), not the recorded {spec.version}"
+            )
+        if provenance.planner_spec_identity_version != PLANNER_SPEC_IDENTITY_VERSION:
+            problems.append(
+                f"uses planner-spec identity v{provenance.planner_spec_identity_version}, "
+                f"not v{PLANNER_SPEC_IDENTITY_VERSION}"
+            )
+        else:
+            assert spec.version is not None
+            expected = fingerprint(
+                planner_spec_identity_v1(
+                    spec,
+                    provider=provenance.planner_provider,
+                    name=spec.kind,
+                    plugin_version=spec.version,
+                    api_version=provenance.planner_api_version,
+                )
+            )
+            if provenance.planner_spec_fingerprint != expected:
+                problems.append(
+                    "its planner-spec fingerprint is not the recorded spec's: it was "
+                    "configured differently"
+                )
+        if problems:
+            raise ProvenanceError(f"proposal for experiment {experiment.id} " + "; ".join(problems))
+
+    def _require_parent_evidence(self, proposal: CandidateProposal) -> None:
+        """Every evidence ref is a durable decision or result of one of the proposal's parents."""
+        decisions: set[str] = set()
+        results: set[str] = set()
+        for parent in proposal.parent_ids:
+            decisions.update(str(d.id) for d in self.aggregates.decisions_for_node(str(parent)))
+            results.update(
+                str(r.id) for r in self.aggregates.evaluation_results_for_node(str(parent))
+            )
+        foreign = [
+            f"{ref.kind}:{ref.id}"
+            for ref in proposal.evidence_refs
+            if ref.id not in (decisions if ref.kind == "decision" else results)
+        ]
+        if foreign:
+            raise ProvenanceError(
+                f"evidence {foreign} is not a decision or evaluation result of the proposal's "
+                f"parents {[str(p) for p in proposal.parent_ids]}"
+            )
 
     # ---- the budget ledger (PR-016) ---------------------------------------
 

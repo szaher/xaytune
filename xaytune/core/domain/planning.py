@@ -44,6 +44,10 @@ from xaytune.core.observability import Finite
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 
 __all__ = [
+    "CANDIDATE_PROPOSAL_IDENTITY_VERSION",
+    "CandidateBranchOrigin",
+    "EvidenceRef",
+    "candidate_proposal_identity_v1",
     "PLANNER_SPEC_IDENTITY_VERSION",
     "PLANNING_CONTEXT_IDENTITY_VERSION",
     "ActionProposal",
@@ -339,6 +343,20 @@ def _decimal(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
+class EvidenceRef(FrozenDomainModel):
+    """A durable record a proposal rests on, by kind and id -- checkable, not decorative.
+
+    ``decision`` names a :class:`~xaytune.core.domain.decision.Decision`,
+    ``evaluation-result`` an
+    :class:`~xaytune.core.domain.evaluation.EvaluationResult`. Branching
+    verifies each one exists and belongs to the proposal's parents, so
+    provenance can never cite evidence from another experiment.
+    """
+
+    kind: Literal["decision", "evaluation-result"]
+    id: str = Field(min_length=1)
+
+
 PLANNER_SPEC_IDENTITY_VERSION = 1
 
 
@@ -406,8 +424,12 @@ class CandidateProposal(FrozenDomainModel):
     hypothesis: str = Field(min_length=1)
     reason: str = Field(min_length=1)
     mutation: FrozenDict = Field(default_factory=FrozenDict)
-    evidence_refs: tuple[str, ...] = ()
+    evidence_refs: tuple[EvidenceRef, ...] = ()
     provenance: ProposalProvenance
+
+    def proposal_fingerprint(self) -> str:
+        """The identity of this proposal: :func:`candidate_proposal_identity_v1`, hashed."""
+        return fingerprint(candidate_proposal_identity_v1(self))
 
     @model_validator(mode="after")
     def _fingerprint_describes_candidate(self) -> CandidateProposal:
@@ -432,7 +454,7 @@ class ActionProposal(FrozenDomainModel):
     kind: Literal["action"] = "action"
     action: SerializeAsAny[ActionSpec]
     reason: str = Field(min_length=1)
-    evidence_refs: tuple[str, ...] = ()
+    evidence_refs: tuple[EvidenceRef, ...] = ()
     provenance: ProposalProvenance
 
     @field_validator("action", mode="before")
@@ -460,3 +482,79 @@ class ActionProposal(FrozenDomainModel):
 
 Proposal = CandidateProposal | ActionProposal
 """What a planner may return: a candidate to explore, or a typed action."""
+
+
+CANDIDATE_PROPOSAL_IDENTITY_VERSION = 1
+
+
+def candidate_proposal_identity_v1(proposal: CandidateProposal) -> Mapping[str, Any]:
+    """What makes two candidate proposals the same, version 1.
+
+    The durable idempotency and provenance key of a branch: materializing the
+    same proposal twice returns the node it made, and a different proposal
+    for a candidate the experiment already has is a conflict. It binds:
+
+    - the candidate -- its current fingerprint and everything a planner can
+      see of it (:func:`planning_candidate_projection_v1`), since the node
+      stores the candidate whole;
+    - the parents, sorted;
+    - hypothesis, reason and the mutation description;
+    - the evidence, sorted by kind and id;
+    - the full provenance: planner identity, bound spec fingerprint and the
+      context fingerprint it was planned against.
+    """
+    provenance = proposal.provenance
+    return {
+        "kind": "candidate-proposal",
+        "identity_version": CANDIDATE_PROPOSAL_IDENTITY_VERSION,
+        "candidate_fingerprint": proposal.candidate_fingerprint,
+        "candidate": planning_candidate_projection_v1(proposal.candidate),
+        "parent_ids": sorted(str(parent) for parent in proposal.parent_ids),
+        "hypothesis": proposal.hypothesis,
+        "reason": proposal.reason,
+        "mutation": thaw(proposal.mutation),
+        "evidence_refs": sorted(
+            ({"kind": ref.kind, "id": ref.id} for ref in proposal.evidence_refs),
+            key=lambda ref: (ref["kind"], ref["id"]),
+        ),
+        "provenance": {
+            "planner_provider": provenance.planner_provider,
+            "planner_name": provenance.planner_name,
+            "planner_version": provenance.planner_version,
+            "planner_api_version": provenance.planner_api_version,
+            "planner_spec_kind": provenance.planner_spec_kind,
+            "planner_spec_version": provenance.planner_spec_version,
+            "planner_spec_identity_version": provenance.planner_spec_identity_version,
+            "planner_spec_fingerprint": provenance.planner_spec_fingerprint,
+            "context_identity_version": provenance.context_identity_version,
+            "context_fingerprint": provenance.context_fingerprint,
+        },
+    }
+
+
+class CandidateBranchOrigin(FrozenDomainModel):
+    """Why a branched node exists: the proposal it materializes, durably (PR-025).
+
+    Kept on the node, so it survives the in-memory proposal. Fields the node
+    already holds authoritatively -- candidate, parents, hypothesis, reason,
+    creator -- are not repeated; this adds what only the proposal knew: its
+    identity, who proposed it under which configuration from which context
+    (``provenance``, whose ``context_fingerprint`` names that context), what
+    changed (``mutation``) and on what evidence.
+    """
+
+    proposal_identity_version: int = Field(ge=1)
+    proposal_fingerprint: str = Field(min_length=1)
+    provenance: ProposalProvenance
+    mutation: FrozenDict = Field(default_factory=FrozenDict)
+    evidence_refs: tuple[EvidenceRef, ...] = ()
+
+    @classmethod
+    def of(cls, proposal: CandidateProposal) -> CandidateBranchOrigin:
+        return cls(
+            proposal_identity_version=CANDIDATE_PROPOSAL_IDENTITY_VERSION,
+            proposal_fingerprint=proposal.proposal_fingerprint(),
+            provenance=proposal.provenance,
+            mutation=proposal.mutation,
+            evidence_refs=proposal.evidence_refs,
+        )

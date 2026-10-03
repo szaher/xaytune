@@ -42,9 +42,26 @@ from xaytune.planning import bind_planner
 from xaytune.storage.control_plane import ControlPlaneRepository, EvaluationReconciliation
 
 
-def _evaluated(repo: ControlPlaneRepository, *, rank: int, value: float) -> Any:
-    """An ACTIVE experiment with one LoRA node, evaluated at *value* and decided adaptively."""
-    experiment = repo.create_experiment(make_experiment(), actor=_ACTOR)
+def _evaluated(
+    repo: ControlPlaneRepository,
+    *,
+    rank: int,
+    value: float,
+    planner: PlannerSpec | None = None,
+    budget: Any = None,
+) -> Any:
+    """An ACTIVE experiment with one LoRA node, evaluated at *value* and decided adaptively.
+
+    *planner* and *budget* are recorded with the experiment when given.
+    """
+    from xaytune.core.domain.experiment import Experiment
+
+    base = make_experiment()
+    if planner is not None or budget is not None:
+        base = Experiment.model_validate(
+            {**base.model_dump(mode="python"), "planner": planner, "budget": budget}
+        )
+    experiment = repo.create_experiment(base, actor=_ACTOR)
     repo.transition_experiment(
         experiment.id, expected_revision=0, new_status=ExperimentStatus.ACTIVE, actor=_ACTOR
     )
@@ -158,7 +175,10 @@ def test_the_exit_criterion_proposes_lora_32_and_writes_nothing(
         n.candidate_fingerprint for n in repo.aggregates.nodes_for_experiment(str(experiment.id))
     }
     assert proposal.provenance.context_fingerprint == context.input_fingerprint()
-    assert proposal.evidence_refs == (f"decision:{decision.id}", f"evaluation-result:{result.id}")
+    assert [(ref.kind, ref.id) for ref in proposal.evidence_refs] == [
+        ("decision", str(decision.id)),
+        ("evaluation-result", str(result.id)),
+    ]
 
     assert _rows(repo) == before, "planning wrote nothing"
     (only,) = repo.aggregates.nodes_for_experiment(str(experiment.id))

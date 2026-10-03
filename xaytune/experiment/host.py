@@ -114,7 +114,7 @@ from xaytune.core.domain.oom_recovery import (
     PriorOOMResize,
 )
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
-from xaytune.core.domain.planning import settled_for_planning
+from xaytune.core.domain.planning import CandidateProposal, settled_for_planning
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.recovery import RecoveryRequest
 from xaytune.core.domain.run import Run, RunAttempt
@@ -173,7 +173,7 @@ from xaytune.experiment.handle import (
     RunOutcome,
 )
 from xaytune.experiment.spec import ExperimentSpec
-from xaytune.planning import PLANNERS, Planner
+from xaytune.planning import PLANNERS, Planner, require_proposed_by
 from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.resilience import IncidentClassifier
 from xaytune.resilience.numerical import NumericalRecoveryPlanner
@@ -2423,6 +2423,32 @@ class EmbeddedControllerHost:
                 f"no planner of kind {spec.kind!r}; this host knows {sorted(self._planners)}"
             )
         return factory(spec)
+
+    def _materialize_candidate_proposal(
+        self, experiment_id: ExperimentId, proposal: CandidateProposal, *, actor: Actor
+    ) -> ExperimentNode:
+        """Branch: the proposal becomes a ``PLANNED`` child node, if it is still valid (PR-025).
+
+        The controller checks what only it can -- that the experiment's
+        recorded planner, bound on this host, is exactly what proposed it --
+        and the repository checks the rest in the transaction that writes the
+        node: freshness, lineage, evidence, duplication, budget. Nothing runs:
+        realizing the node is PR-026's.
+
+        Raises:
+            PlannerConfigurationError: If the bound planner did not make it.
+            ImplementationMismatchError: If the recorded planner is another version here.
+            BranchRefusedError, ProvenanceError, LineageError: From the repository.
+        """
+        experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        planner = self._recorded_planner(experiment)
+        if planner is None:
+            raise ProvenanceError(
+                f"experiment {experiment_id} records no planner; a proposal cannot be "
+                f"attributed to one"
+            )
+        require_proposed_by(planner, proposal)
+        return self.repository.materialize_candidate_proposal(experiment_id, proposal, actor=actor)
 
     def _recorded_planner(self, experiment: Experiment) -> Planner | None:
         """The planner the record names, at the version it names, or ``None`` if it names none.

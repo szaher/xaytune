@@ -1240,7 +1240,67 @@ built:
 ### PR-025 — experiment branching
 
 An alternative candidate creates a new node; an in-run scientific change records a
-`TrainingIntervention` (ADR-011).
+`TrainingIntervention` (ADR-011). As built, branching consumes a
+`CandidateProposal` and creates a node, but **no run**:
+
+- **`ControlPlaneRepository.materialize_candidate_proposal(experiment_id,
+  proposal, actor=...)`** does everything in one write transaction. Either it
+  creates exactly one child node, moves it `CREATED → PLANNED`, writes its
+  edge, `NodeCreated` and `ExperimentNodeStatusChanged`, and returns the node,
+  or it writes nothing. Checks, in order:
+  - the candidate's current fingerprint is the proposal's, else
+    `ProvenanceError`;
+  - the experiment already has this candidate (current v2 identity,
+    recomputed from every stored snapshot): if it came from the **same**
+    proposal, the existing node is returned and nothing is written
+    (idempotent retry); otherwise `CandidateConflictError`;
+  - the experiment is `ACTIVE`, else `BranchRefusedError`;
+  - the proposal was made under the experiment's **recorded** `PlannerSpec`:
+    kind, version and spec identity version must match, and the
+    planner-spec fingerprint is recomputed from the recorded spec, so a
+    factor-4 proposal is refused for a factor-2 experiment. Else
+    `ProvenanceError`;
+  - the current `PlanningContext` fingerprint equals the proposal's, else
+    `StaleProposalError`. It is checked in the same transaction, and the
+    repository never re-plans;
+  - no budget quota is exhausted, else `BranchRefusedError`;
+  - every evidence ref is a decision or evaluation result of one of the
+    proposal's parents, else `ProvenanceError`;
+  - the parents are sound, using the existing graph authority: they exist,
+    are in the same experiment, are not named twice, and form no cycle.
+    Else `LineageError`.
+- **The controller half.** `EmbeddedControllerHost._materialize_candidate_proposal`
+  rebuilds the recorded planner and calls `require_proposed_by`, which
+  compares the full provenance, including the real descriptor provider and
+  plugin API version that storage cannot know. Only then does it call the
+  repository. Storage never imports a planner.
+- **Durable origin.** `ExperimentNode.branch_origin: CandidateBranchOrigin |
+  None` holds the proposal fingerprint (`candidate_proposal_identity_v1`,
+  versioned), the full `ProposalProvenance` (planner, spec fingerprint,
+  context fingerprint), the mutation and **typed** `EvidenceRef`s. Candidate,
+  parents, hypothesis, reason and creator stay on the node itself. Existing
+  nodes load with `None`, and there is no `planning_rounds` table.
+- **Typed evidence.** `EvidenceRef(kind="decision" | "evaluation-result",
+  id)` replaces PR-024's opaque strings, so evidence is validated rather than
+  decorative.
+- **Boundaries.**
+  - The node stops at `PLANNED`. `PLANNED → READY → ACTIVE`, run creation,
+    compilation and submission are PR-026's.
+  - No `max_runs` reservation or ledger entry: a run's quota is reserved only
+    by `create_run()`, and a budget spent between branching and the first run
+    is that run's `BudgetExhaustedError` to report.
+  - A `CandidateProposal` is not an Action and does not pass through
+    PolicyEngine; it cannot grant capabilities.
+  - Candidate governance is the recorded planner, exact provenance, a fresh
+    context, candidate and lineage validation, deduplication, the budget
+    precheck and an explicit actor. Organization-specific candidate approval
+    is a separate future extension point, and `BranchExperiment` is not
+    invented.
+  - Same candidate means no duplicate node. It never means reusing an
+    artifact (ADR-017).
+- **Lineage representation.** `ExperimentNode.parent_ids` (the payload) and
+  `experiment_edges` (the query authority) are written in the same insert,
+  and `validate_parents` refuses any lineage on which they could disagree.
 
 ### PR-026 — end-to-end MVP test
 

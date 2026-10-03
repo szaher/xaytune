@@ -94,7 +94,10 @@ judge the candidate, not the experiment, and what comes next is another
 candidate: a planner's work. Once a planner's proposal is branched into a
 ``PLANNED`` node, the next work is ``"training"`` -- realizing that node's
 first run -- not more planning, and not failure handling: the node has no run
-because nothing has realized it yet (PR-026), not because one failed.
+because nothing has realized it yet, not because one failed. The embedded host
+realizes its own planner's nodes itself (PR-026), so it rests at
+``"training"`` only when it cannot: a node planned some other way, or a
+realization it escalated.
 
 The two action stages come first: an action someone proposed and is waiting
 on is what comes next, before anything the candidates' states suggest -- a

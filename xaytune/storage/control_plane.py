@@ -744,21 +744,27 @@ class ControlPlaneRepository:
         _require_pristine(run, RunStatus.CREATED)
 
         with write_transaction(self._connection):
-            self._require_consistent_run(run)
-            self._require_budget(str(run.experiment_id), new_run=True)
-            self.aggregates._insert_run(run)
-            self._emit(run, "RunCreated", str(run.experiment_id), actor, destinations)
-            self._ledger(
-                str(run.experiment_id),
-                BudgetDimension.RUNS,
-                LedgerEntryKind.RESERVE,
-                Decimal(1),
-                BudgetSubjectKind.RUN,
-                str(run.id),
-                actor,
-                destinations,
-            )
+            self._insert_run_with_reservation(run, actor, destinations)
         return run
+
+    def _insert_run_with_reservation(
+        self, run: Run, actor: Actor, destinations: tuple[str, ...]
+    ) -> None:
+        """:meth:`create_run`'s work, inside a transaction the caller already holds."""
+        self._require_consistent_run(run)
+        self._require_budget(str(run.experiment_id), new_run=True)
+        self.aggregates._insert_run(run)
+        self._emit(run, "RunCreated", str(run.experiment_id), actor, destinations)
+        self._ledger(
+            str(run.experiment_id),
+            BudgetDimension.RUNS,
+            LedgerEntryKind.RESERVE,
+            Decimal(1),
+            BudgetSubjectKind.RUN,
+            str(run.id),
+            actor,
+            destinations,
+        )
 
     def transition_experiment(
         self,
@@ -2356,6 +2362,134 @@ class ControlPlaneRepository:
                 planned, "ExperimentNodeStatusChanged", str(experiment.id), actor, destinations
             )
         return planned
+
+    def realize_planned_node(
+        self,
+        node_id: ExperimentNodeId | str,
+        *,
+        expected_revision: int,
+        run: Run,
+        attempt: RunAttempt,
+        request_digest: str,
+        actor: Actor,
+        destinations: tuple[str, ...] = (),
+    ) -> tuple[ExperimentNode, Run, RunAttempt, RuntimeOperation] | None:
+        """Accept a branched node's first run, and the intent to submit it, in one commit (PR-026).
+
+        The ``PLANNED`` node is the gate. Inside one write transaction:
+
+        ```text
+        the node is still PLANNED                     else None: already realized,
+                                                      or no longer eligible; nothing written
+        its revision is the caller's                  else ConcurrentModificationError
+        it was branched (branch_origin) by the
+          experiment's recorded planner, exactly      else ProvenanceError
+        the experiment is ACTIVE                      else BranchRefusedError
+        the run and attempt are new, the node's,
+          its first; an inherited seed is the
+          source run's, of the node's parent          else StorageError
+        a run is left (max_runs), failures are not
+          used up, a parallel-run slot is free        else BudgetExhaustedError /
+                                                      CapacityUnavailableError
+        ```
+
+        then: node ``PLANNED → READY → ACTIVE``, ``RunCreated`` with its
+        ``max_runs`` reservation, run ``CREATED → ACTIVE``, the attempt
+        ``CREATED`` with its ``INTENDED`` submit and its parallel-run slot --
+        each transition through its state machine, with its event. The runtime
+        is called only after this commits; a crash after it leaves an
+        ``INTENDED`` operation, which reconciliation resolves (ADR-013).
+
+        Returns:
+            The active node, the active run, the attempt and its submit
+            operation -- or ``None`` if the node is no longer ``PLANNED``.
+        """
+        with write_transaction(self._connection):
+            aggregates = self.aggregates
+            node = aggregates.get_node(str(node_id))
+            if node is None:
+                raise AggregateNotFoundError("ExperimentNode", str(node_id))
+            if node.status is not ExperimentNodeStatus.PLANNED:
+                return None
+            if node.revision != expected_revision:
+                raise ConcurrentModificationError("ExperimentNode", str(node_id), expected_revision)
+            if node.branch_origin is None:
+                raise ProvenanceError(
+                    f"node {node.id} was not branched from a planner's proposal; only a "
+                    f"planner-created node is realized automatically"
+                )
+            experiment = aggregates.load_experiment(str(node.experiment_id))
+            if experiment.status is not ExperimentStatus.ACTIVE:
+                raise BranchRefusedError(
+                    f"experiment {experiment.id} is {experiment.status.value}; only an ACTIVE "
+                    f"experiment starts a run"
+                )
+            self._require_recorded_planner(experiment, node.branch_origin.provenance)
+            self._require_first_realization(node, run, attempt)
+
+            operation = RuntimeOperation(
+                id=OperationId.generate(),
+                target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id)),
+                type="submit",
+                request_digest=request_digest,
+            )
+            for status in (ExperimentNodeStatus.READY, ExperimentNodeStatus.ACTIVE):
+                node = self._apply_transition(
+                    "ExperimentNode",
+                    str(node.id),
+                    node.revision,
+                    status,
+                    aggregates.get_node,
+                    aggregates._update_node,
+                    actor,
+                    None,
+                    destinations,
+                )
+            self._insert_run_with_reservation(run, actor, destinations)
+            active = self._apply_transition(
+                "Run",
+                str(run.id),
+                run.revision,
+                RunStatus.ACTIVE,
+                aggregates.get_run,
+                aggregates._update_run,
+                actor,
+                None,
+                destinations,
+            )
+            stored = self._insert_training_attempt_with_intent(
+                attempt, operation, actor, destinations
+            )
+        return node, active, attempt, stored
+
+    def _require_first_realization(
+        self, node: ExperimentNode, run: Run, attempt: RunAttempt
+    ) -> None:
+        """The run and attempt are new, the node's first, and an inherited seed is honest."""
+        _require_pristine(run, RunStatus.CREATED)
+        _require_pristine(attempt, RunAttemptStatus.CREATED)
+        problems = []
+        if run.node_id != node.id or run.experiment_id != node.experiment_id:
+            problems.append(f"run {run.id} is not node {node.id}'s")
+        if self.aggregates.runs_for_node(str(node.id)):
+            problems.append(f"node {node.id} already has a run")
+        if attempt.run_id != run.id or attempt.attempt_number != 1:
+            problems.append(f"attempt {attempt.id} is not run {run.id}'s first")
+        origin = run.seed_origin
+        if origin is not None:
+            source = self.aggregates.get_run(str(origin.source_run_id))
+            if source is None or source.node_id not in node.parent_ids:
+                problems.append(
+                    f"seed source run {origin.source_run_id} is not a run of node "
+                    f"{node.id}'s parents"
+                )
+            elif source.seed != run.seed:
+                problems.append(
+                    f"run {run.id} claims seed {run.seed} from run {source.id}, whose seed is "
+                    f"{source.seed}"
+                )
+        if problems:
+            raise StorageError("; ".join(problems))
 
     def _require_recorded_planner(
         self, experiment: Experiment, provenance: ProposalProvenance
@@ -4590,10 +4724,10 @@ class ControlPlaneRepository:
                 return stored_attempt, existing
 
             if kind == "training-attempt":
-                experiment_id = self._experiment_of_run(str(attempt.run_id))
-                self._require_budget(experiment_id, new_run=False)
-                self._require_capacity(experiment_id)
-                self.aggregates._insert_attempt(attempt)
+                stored = self._insert_training_attempt_with_intent(
+                    attempt, operation, actor, destinations
+                )
+                return attempt, stored
             else:
                 run = self.aggregates.load_evaluation_run(str(attempt.evaluation_run_id))
                 if run.is_terminal:
@@ -4606,22 +4740,44 @@ class ControlPlaneRepository:
                 self.aggregates._insert_evaluation_attempt(attempt)
             stored = self.operations._insert(operation)
             self._emit(attempt, created_event, experiment_id, actor, destinations)
-            if kind == "training-attempt":
-                self._ledger(
-                    experiment_id,
-                    BudgetDimension.PARALLEL_RUNS,
-                    LedgerEntryKind.RESERVE,
-                    Decimal(1),
-                    BudgetSubjectKind.TRAINING_ATTEMPT,
-                    str(attempt.id),
-                    actor,
-                    destinations,
-                )
             self._emit_operation(
                 stored, "RuntimeOperationIntended", experiment_id, actor, destinations
             )
 
         return attempt, stored
+
+    def _insert_training_attempt_with_intent(
+        self,
+        attempt: RunAttempt,
+        operation: RuntimeOperation,
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> RuntimeOperation:
+        """A new training attempt and its ``INTENDED`` submit, in the caller's transaction.
+
+        The one place a training attempt's intent is written, for a first
+        attempt and for a branched node's realization alike: the failure
+        quota, the parallel-run slot, ``RunAttemptCreated`` and
+        ``RuntimeOperationIntended``.
+        """
+        experiment_id = self._experiment_of_run(str(attempt.run_id))
+        self._require_budget(experiment_id, new_run=False)
+        self._require_capacity(experiment_id)
+        self.aggregates._insert_attempt(attempt)
+        stored = self.operations._insert(operation)
+        self._emit(attempt, "RunAttemptCreated", experiment_id, actor, destinations)
+        self._ledger(
+            experiment_id,
+            BudgetDimension.PARALLEL_RUNS,
+            LedgerEntryKind.RESERVE,
+            Decimal(1),
+            BudgetSubjectKind.TRAINING_ATTEMPT,
+            str(attempt.id),
+            actor,
+            destinations,
+        )
+        self._emit_operation(stored, "RuntimeOperationIntended", experiment_id, actor, destinations)
+        return stored
 
     def confirm_operation(
         self,
@@ -5242,25 +5398,60 @@ class ControlPlaneRepository:
             InvalidTransitionError: If the state machine forbids the edge.
         """
         with write_transaction(self._connection):
-            current = loader(aggregate_id)
-            if current is None:
-                raise AggregateNotFoundError(kind, aggregate_id)
-            if current.revision != expected_revision:
-                raise ConcurrentModificationError(kind, aggregate_id, expected_revision)
-
-            moved: AggregateT = current.with_status(new_status)
-            writer(moved)
-            if after_write is not None:
-                after_write(moved)
-            self._settle_budget(moved, actor, destinations)
-            self._emit(
-                moved,
-                event_type or f"{kind}StatusChanged",
-                self._owning_experiment(moved),
+            return self._apply_transition(
+                kind,
+                aggregate_id,
+                expected_revision,
+                new_status,
+                loader,
+                writer,
                 actor,
+                event_type,
                 destinations,
+                after_write=after_write,
                 extra=extra,
             )
+
+    def _apply_transition(
+        self,
+        kind: str,
+        aggregate_id: str,
+        expected_revision: int,
+        new_status: Any,
+        loader: Callable[[str], AggregateT | None],
+        writer: Callable[[AggregateT], None],
+        actor: Actor,
+        event_type: str | None,
+        destinations: tuple[str, ...],
+        *,
+        after_write: Callable[[AggregateT], None] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> AggregateT:
+        """:meth:`_transition`'s work, inside a transaction the caller already holds.
+
+        For a unit that moves several aggregates in one commit -- realizing a
+        planned node moves the node and its new run -- so each move still goes
+        through the state machine, the revision check and its event.
+        """
+        current = loader(aggregate_id)
+        if current is None:
+            raise AggregateNotFoundError(kind, aggregate_id)
+        if current.revision != expected_revision:
+            raise ConcurrentModificationError(kind, aggregate_id, expected_revision)
+
+        moved: AggregateT = current.with_status(new_status)
+        writer(moved)
+        if after_write is not None:
+            after_write(moved)
+        self._settle_budget(moved, actor, destinations)
+        self._emit(
+            moved,
+            event_type or f"{kind}StatusChanged",
+            self._owning_experiment(moved),
+            actor,
+            destinations,
+            extra=extra,
+        )
         return moved
 
     def _settle(

@@ -12,7 +12,6 @@ task_success >= 0.82
 
 Budget:
 maximum 4 runs (one run per candidate in this scenario)
-maximum 8 GPU-hours
 
 Recovery:
 adapt to CUDA OOM while preserving effective batch when possible
@@ -35,7 +34,6 @@ objective:
 
 budget:
   maxRuns: 4
-  maxGpuHours: 8
 
 candidate:
   model:
@@ -85,6 +83,18 @@ is created. This scenario realizes each candidate once, so four runs allow at
 most four candidates. A separate `max_candidates` budget can come later. The
 planner is the bound `PlannerSpec` (PR-024): rule-based planning needs an
 explicit, typed mutation rule, here LoRA-rank growth.
+
+GPU-hour enforcement is deferred because Xaytune does not yet have
+authoritative measured GPU consumption. The eventual implementation must
+consume runtime-reported measured usage; it must not approximate usage as
+requested GPUs × controller wall-clock time. (Spec 15: *Future budget work --
+authoritative GPU-hour metering*.)
+
+**Decision engine.** The PR-026 EmbeddedControllerHost is configured with
+`AdaptiveThresholdDecisionEngine 1.0.0`, so a missed target is `BRANCH`
+rather than `STOP_FAILED`. Persisting a `DecisionEngineSpec` is separate
+ADR-016 follow-up work; until then a host attaching to this experiment must
+be configured with the same engine.
 
 ## 3. Expected execution
 
@@ -166,7 +176,29 @@ parent = node_A
 hypothesis = "Adapter capacity may be limiting task performance."
 ```
 
+The decision engine decides (`BRANCH`); the experiment's recorded planner
+proposes; branching (PR-025) admits node_B as `PLANNED` after its
+candidate-governance checks. This is not PolicyEngine governance: a
+`CandidateProposal` is not an Action.
+
 ### Step E — second candidate
+
+Nobody intervenes between A's `BRANCH` and B's training. The embedded host
+realizes node_B automatically -- only because its `branch_origin` proves the
+experiment's own recorded planner proposed it; a `PLANNED` node planned any
+other way is never run automatically.
+
+Run B is a **new** run (new `RunId`, attempt, execution spec, submission) with
+the **same seed** as Run A: for this comparative search, the seed of the
+parent's single training run is inherited, so A and B differ by the intended
+mutation rather than by chance. The seed stays a `Run` property; Run B records
+`seed_origin = parent-run(Run A)`, which is provenance and enters no
+fingerprint. Same seed never means reuse (ADR-017).
+
+Before Run B is created, the recorded compiler re-checks that it supports the
+branched candidate; `maxRuns` is reserved when Run B is created, not when B
+was planned. If no run is left, the experiment ends `BUDGET_EXHAUSTED` and A's
+`BRANCH` decision stands.
 
 Node B trains successfully.
 
@@ -188,6 +220,33 @@ best_node = node_B
 ```
 
 ## 4. Required output
+
+### PR-026 acceptance result
+
+What `ExperimentResult` returns today, and what the acceptance test asserts
+from it:
+
+```text
+status       SUCCEEDED
+next_stage   None
+nodes        node_A and node_B, with their runs and evaluations
+budget       settled: 2 runs consumed of 4, nothing outstanding
+```
+
+and from the durable record: `experiment.best_node_id == node_B`.
+
+### Durable provenance assertions (PR-026)
+
+The rest is asserted directly from the repository's records: node_B's
+`branch_origin`, decisions, evaluation results, incidents, recovery episodes
+and actions, checkpoints, execution overrides, the budget ledger, Run B's
+`seed_origin`, and the compiler/runtime identities recorded with the
+experiment.
+
+### Future rich result / export projection
+
+The target projection -- not part of PR-026, and not fields of
+`ExperimentResult` today:
 
 ```python
 ExperimentResult(
@@ -219,8 +278,22 @@ Must be able to answer:
 - Which dataset revision was used?
 - Which compiler/runtime versions executed the training?
 - How much budget was consumed?
+
+For the **candidate branch** (candidate governance, PR-025 -- not PolicyEngine):
+
 - Who/what proposed LoRA rank 32?
-- Which policy allowed it?
+- Which `PlannerSpec` and configuration produced it?
+- Which `PlanningContext` did it use?
+- Which decision and evaluation evidence supported it?
+- Which candidate-governance checks admitted it?
+- Which node is its parent?
+
+For the **OOM recovery Action** (Action/Policy governance):
+
+- Which Action proposed the micro-batch resize?
+- Which `PolicyDecision` allowed it?
+- Which incident justified it?
+- Which checkpoint was restored?
 
 ## 6. Demo value
 

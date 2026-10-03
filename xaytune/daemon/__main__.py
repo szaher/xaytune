@@ -20,8 +20,12 @@ import sys
 from collections.abc import Sequence
 
 from xaytune.daemon.config import DaemonConfigurationError, load_config
-from xaytune.daemon.host import LocalDaemonControllerHost
-from xaytune.daemon.lock import DaemonAlreadyRunningError, UnsupportedPlatformError
+from xaytune.daemon.lock import (
+    DaemonAlreadyRunningError,
+    UnsupportedPlatformError,
+    require_locking,
+)
+from xaytune.daemon.server import LocalDaemonControllerServer
 
 EXIT_CONFIGURATION = 2
 EXIT_ALREADY_RUNNING = 3
@@ -49,6 +53,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
+    try:
+        # First: an event loop without signal handlers would otherwise fail
+        # with an unrelated error before the lock is ever tried.
+        require_locking()
+    except UnsupportedPlatformError as exc:
+        print(f"xaytune daemon: {exc}", file=sys.stderr)
+        return EXIT_UNSUPPORTED_PLATFORM
     logging.basicConfig(
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -56,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         config = load_config(args.config)
-        daemon = LocalDaemonControllerHost(
+        daemon = LocalDaemonControllerServer(
             args.state,
             config,
             poll_interval=args.poll_interval,
@@ -76,7 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-async def _serve(daemon: LocalDaemonControllerHost) -> None:
+async def _serve(daemon: LocalDaemonControllerServer) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGTERM, signal.SIGINT):

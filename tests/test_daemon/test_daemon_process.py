@@ -29,7 +29,7 @@ from typing import Any
 import pytest
 
 from tests.test_daemon.file_runtime import calls, finish, workloads
-from tests.test_daemon.test_daemon_host import _file_spec
+from tests.test_daemon.test_daemon_server import _file_spec
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
 from xaytune.daemon import (
     ControllerRequestState,

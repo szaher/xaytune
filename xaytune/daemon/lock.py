@@ -36,6 +36,7 @@ __all__ = [
     "StateDatabaseLock",
     "UnsupportedPlatformError",
     "lock_path",
+    "require_locking",
 ]
 
 
@@ -56,6 +57,19 @@ class DaemonAlreadyRunningError(XaytuneError):
 
 class UnsupportedPlatformError(XaytuneError):
     """This platform has no ``fcntl`` advisory locking; the daemon will not run unlocked."""
+
+
+def require_locking() -> None:
+    """Refuse, before anything else is set up, a platform the lock cannot be taken on.
+
+    Raises:
+        UnsupportedPlatformError: If ``fcntl`` is unavailable.
+    """
+    if fcntl is None:
+        raise UnsupportedPlatformError(
+            "the local daemon needs POSIX fcntl advisory locking to own its state "
+            "database; this platform has none, and an unsafe fallback is refused"
+        )
 
 
 def lock_path(state_path: Path | str) -> Path:
@@ -84,11 +98,8 @@ class StateDatabaseLock:
             DaemonAlreadyRunningError: If another open file holds it.
             UnsupportedPlatformError: If ``fcntl`` is unavailable.
         """
-        if fcntl is None:
-            raise UnsupportedPlatformError(
-                "the local daemon needs POSIX fcntl advisory locking to own its state "
-                "database; this platform has none, and an unsafe fallback is refused"
-            )
+        require_locking()
+        assert fcntl is not None
         if self._fd is not None:
             raise RuntimeError(f"{self.path} is already held by this lock")
         # Not O_TRUNC: the file is opened before the lock is taken, and

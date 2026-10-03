@@ -1426,7 +1426,10 @@ rather than one attempt.
 ### PR-027 — LocalDaemonControllerHost
 
 Persistent process, singleton locking per state database, controlled shutdown.
-Contract: ADR-004 (accepted before this PR).
+Contract: ADR-004 (accepted before this PR). Delivered as the server half,
+`LocalDaemonControllerServer`, and the mailbox client `DaemonClient`; the
+`ControllerHost`-compatible `LocalDaemonControllerHost` is PR-029's (ADR-004
+§1).
 
 - **SQLite mailbox.** `controller_requests` (`submit`, `attach`), idempotent
   by client-generated id; `PENDING → ACCEPTED → COMPLETED`, `PENDING →
@@ -1466,7 +1469,30 @@ Implement:
 
 Idempotent: running it twice changes nothing the first run did not.
 
-### PR-029 — CLI submit/attach/watch
+### PR-029 — LocalDaemonControllerHost + CLI submit/attach/watch
+
+`LocalDaemonControllerHost`, the caller-side `ControllerHost` over the PR-027
+mailbox (ADR-004 §1), and the CLI built on it rather than on a second way of
+talking to the daemon:
+
+```text
+LocalDaemonControllerHost
+  submit(spec) -> ExperimentHandle
+  attach(id)   -> ExperimentHandle
+  approve-action, reject-action        host-level parity with the embedded host
+
+daemon-backed ExperimentHandle
+  status(), actions()                  record reads
+  wait(), events()                     record polling
+  cancel(), propose()                  explicit mailbox request kinds
+
+CLI   submit, attach, status/watch, events/results as appropriate
+```
+
+Every mutation is a request kind the daemon carries out; nothing runs a
+controller in the caller. `pause`/`resume` are **not** in PR-029: the current
+`ExperimentHandle` does not implement them, and they need their own durable
+design (pause semantics, runtime behaviour, transitions, reconciliation).
 
 Exit:
 

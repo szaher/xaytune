@@ -1,4 +1,10 @@
-"""LocalDaemonControllerHost: a persistent local controller over one state database (PR-027).
+"""LocalDaemonControllerServer: the persistent local controller process (PR-027).
+
+The server side of the local daemon. It is not a ``ControllerHost``: callers
+hand it work through :class:`~xaytune.daemon.DaemonClient` and the request
+mailbox, and the caller-side ``LocalDaemonControllerHost`` -- ``submit()`` and
+``attach()`` returning an ``ExperimentHandle`` over that mailbox -- is PR-029's
+(ADR-004 §1).
 
 ```text
 acquire <db>.lock (flock)          another daemon holds it → refuse to start
@@ -37,35 +43,65 @@ from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
+from xaytune.compilation import UnsupportedCandidateError
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.budget import UnsupportedBudgetError
 from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
+from xaytune.core.domain.numerical_recovery import UnsupportedNumericalRecoveryError
 from xaytune.core.errors import XaytuneError
 from xaytune.core.immutable import FrozenDict, thaw
 from xaytune.core.refs import ControllerHostRef
 from xaytune.daemon.config import DaemonConfig
 from xaytune.daemon.lock import StateDatabaseLock
+from xaytune.evaluation import UnsupportedEvaluationError
 from xaytune.experiment.host import (
     EmbeddedControllerHost,
     ImplementationMismatchError,
     UnknownImplementationError,
 )
 from xaytune.experiment.spec import ExperimentSpec
-from xaytune.storage.errors import StorageError
+from xaytune.planning import PlannerConfigurationError
+from xaytune.storage.control_plane import AdmissionRefusedError
+from xaytune.storage.errors import AggregateNotFoundError
 
-__all__ = ["LocalDaemonControllerHost"]
+__all__ = ["LocalDaemonControllerServer"]
 
 _LOG = logging.getLogger("xaytune.daemon")
 
-_DEFINITIVE = (ValueError, UnknownImplementationError, ImplementationMismatchError, StorageError)
-"""Refusals that are final for a request nothing was admitted for: an invalid
-payload or spec (pydantic's ``ValidationError`` is a ``ValueError``), an
-implementation this daemon does not have or has at another version, a
-candidate, evaluation, budget or numerical-recovery policy it cannot run, an
-experiment id already taken. Anything else -- the database busy, an
-unexpected exception -- leaves the request ``PENDING``, to be tried again."""
+_SUBMIT_REFUSALS: tuple[type[Exception], ...] = (
+    ValidationError,
+    UnknownImplementationError,
+    ImplementationMismatchError,
+    UnsupportedCandidateError,
+    UnsupportedEvaluationError,
+    UnsupportedBudgetError,
+    UnsupportedNumericalRecoveryError,
+    PlannerConfigurationError,
+    AdmissionRefusedError,
+)
+"""The refusals that make a submission ``FAILED``, and only before admission.
+
+Each is a definitive answer about the request itself: its payload is not a
+valid spec, or not the canonical form of the spec it parses to; it names an
+implementation this daemon does not have, or has at another version; the
+candidate, evaluation, budget, numerical-recovery policy or planner
+configuration is refused by what would run it; its experiment id is taken.
+Anything else -- a plugin raising a plain ``ValueError``, the database busy,
+an environment problem -- is not a judgement on the request: it stays
+``PENDING`` and is tried again, because ``FAILED`` cannot be undone."""
+
+_ATTACH_REFUSALS: tuple[type[Exception], ...] = (
+    AggregateNotFoundError,
+    UnknownImplementationError,
+    ImplementationMismatchError,
+)
+"""An attach that cannot succeed unchanged: no such experiment, or its
+recorded implementations are absent from this daemon or at other versions."""
 
 
-class LocalDaemonControllerHost:
+class LocalDaemonControllerServer:
     """A foreground controller process's work, over one state database.
 
     Args:
@@ -182,7 +218,7 @@ class LocalDaemonControllerHost:
                 handle = await controller._submit(
                     spec, experiment_id=request.experiment_id, request_id=request.id
                 )
-            except _DEFINITIVE as refusal:
+            except _SUBMIT_REFUSALS as refusal:
                 if self._fail_if_pending(request, refusal):
                     return
                 raise
@@ -204,7 +240,7 @@ class LocalDaemonControllerHost:
     async def _attach(self, request: ControllerRequest) -> None:
         try:
             await self.controller.attach(request.experiment_id)
-        except _DEFINITIVE as refusal:
+        except _ATTACH_REFUSALS as refusal:
             if self._fail_if_pending(request, refusal):
                 return
             raise

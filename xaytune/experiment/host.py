@@ -122,6 +122,7 @@ from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.errors import ConcurrentModificationError, XaytuneError
 from xaytune.core.execution import PythonModuleEntrypoint, ResolvedExecutionPlan
 from xaytune.core.execution_controls import MANAGED_NUMERICAL_RECOVERY, TRAINING_INTERVENTIONS
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import (
     ActionId,
     ControllerRequestId,
@@ -510,6 +511,7 @@ class EmbeddedControllerHost:
             request_digest=plan.request_digest("submit"),
             actor=_ACTOR,
             request_id=request_id,
+            submitted_digest=None if request_id is None else fingerprint(spec.submission_payload()),
         )
         if admission is None:
             return None

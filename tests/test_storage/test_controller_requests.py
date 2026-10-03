@@ -33,6 +33,7 @@ from xaytune.core.state.status import (
     RunStatus,
 )
 from xaytune.storage import ControlPlaneRepository, IdempotencyConflictError, StorageError
+from xaytune.storage.control_plane import AdmissionRefusedError
 
 _ACTOR = Actor(type="system", id="test")
 _SPEC = FrozenDict({"name": "a spec", "seed": 7})
@@ -186,6 +187,7 @@ def test_admission_records_the_whole_submission_and_accepts_its_request(
         request_digest="sha256:r",
         actor=_ACTOR,
         request_id=request.id,
+        submitted_digest=request.payload_digest,
     )
 
     assert admission is not None and admission.operation is not None
@@ -213,7 +215,11 @@ def test_a_request_no_longer_pending_admits_nothing(
     request = repository.record_controller_request(ControllerRequest.submit(_SPEC))
     first = _submission(request.experiment_id)
     repository.admit_experiment(
-        *first, request_digest="sha256:r", actor=_ACTOR, request_id=request.id
+        *first,
+        request_digest="sha256:r",
+        actor=_ACTOR,
+        request_id=request.id,
+        submitted_digest=request.payload_digest,
     )
     before = _counts(connection)
 
@@ -222,13 +228,16 @@ def test_a_request_no_longer_pending_admits_nothing(
         request_digest="sha256:r",
         actor=_ACTOR,
         request_id=request.id,
+        submitted_digest=request.payload_digest,
     )
 
     assert again is None
     assert _counts(connection) == before
 
 
-@pytest.mark.parametrize("problem", ["another-experiment", "attach", "missing", "taken"])
+@pytest.mark.parametrize(
+    "problem", ["another-experiment", "attach", "missing", "taken", "another-spec"]
+)
 def test_a_refused_admission_writes_nothing_and_leaves_the_request_pending(
     repository: ControlPlaneRepository, connection: sqlite3.Connection, problem: str
 ) -> None:
@@ -238,8 +247,13 @@ def test_a_refused_admission_writes_nothing_and_leaves_the_request_pending(
     request = repository.record_controller_request(ControllerRequest.submit(_SPEC))
     request_id = request.id
     submission = _submission(request.experiment_id)
-    expected: type[Exception] = StorageError
-    if problem == "another-experiment":
+    expected: type[Exception] = AdmissionRefusedError
+    digest = request.payload_digest
+    if problem == "another-spec":
+        # The daemon processing request A hands over a submission derived from
+        # spec B: the request must not become ACCEPTED for it.
+        digest = ControllerRequest.submit(FrozenDict({"name": "spec B"})).payload_digest
+    elif problem == "another-experiment":
         submission = _submission()
     elif problem == "attach":
         attach = repository.record_controller_request(
@@ -255,7 +269,11 @@ def test_a_refused_admission_writes_nothing_and_leaves_the_request_pending(
 
     with pytest.raises(expected):
         repository.admit_experiment(
-            *submission, request_digest="sha256:r", actor=_ACTOR, request_id=request_id
+            *submission,
+            request_digest="sha256:r",
+            actor=_ACTOR,
+            request_id=request_id,
+            submitted_digest=digest,
         )
 
     assert _counts(connection) == before
@@ -281,6 +299,7 @@ def test_a_failure_inside_the_admission_rolls_all_of_it_back(
             request_digest="sha256:r",
             actor=_ACTOR,
             request_id=request.id,
+            submitted_digest=request.payload_digest,
         )
 
     assert set(_counts(connection).values()) == {0}
@@ -295,7 +314,11 @@ def test_no_run_left_admits_the_experiment_budget_exhausted(
     submission = _submission(request.experiment_id, budget=BudgetSpec(max_runs=0))
 
     admission = repository.admit_experiment(
-        *submission, request_digest="sha256:r", actor=_ACTOR, request_id=request.id
+        *submission,
+        request_digest="sha256:r",
+        actor=_ACTOR,
+        request_id=request.id,
+        submitted_digest=request.payload_digest,
     )
 
     assert admission is not None
@@ -334,5 +357,19 @@ def test_admission_refuses_anything_but_one_fresh_submission(
             make_attempt(run, attempt_number=2),
             request_digest="sha256:r",
             actor=_ACTOR,
+        )
+    assert set(_counts(connection).values()) == {0}
+
+
+def test_a_request_cannot_be_admitted_without_the_submitted_specs_digest(
+    repository: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    request = repository.record_controller_request(ControllerRequest.submit(_SPEC))
+    with pytest.raises(ValueError, match="digest"):
+        repository.admit_experiment(
+            *_submission(request.experiment_id),
+            request_digest="sha256:r",
+            actor=_ACTOR,
+            request_id=request.id,
         )
     assert set(_counts(connection).values()) == {0}

@@ -1,11 +1,14 @@
-"""The local daemon controller host (ADR-004; PR-027).
+"""The local daemon: a controller process and its mailbox client (ADR-004; PR-027).
 
-A persistent, foreground controller process over one SQLite state database,
-which is also its mailbox::
+:class:`LocalDaemonControllerServer` is the persistent, foreground controller
+process over one SQLite state database, which is also its mailbox::
 
     python -m xaytune.daemon --state state.db --config myproject.xaytune_config:create_config
 
-A client hands it work by committing a request, and reads the durable record:
+:class:`DaemonClient` hands it work by committing a request, and reads the
+durable record. It is the v1 mailbox API, not a ``ControllerHost``: the
+caller-side ``LocalDaemonControllerHost``, whose ``submit()`` and ``attach()``
+return an ``ExperimentHandle`` over the same mailbox, is PR-029's:
 
 ```python
 with DaemonClient("state.db") as client:
@@ -13,7 +16,7 @@ with DaemonClient("state.db") as client:
 ```
 
 One daemon per database, by kernel lock; SIGTERM or SIGINT stops it without
-cancelling a workload. See :mod:`xaytune.daemon.host`.
+cancelling a workload. See :mod:`xaytune.daemon.server`.
 """
 
 from xaytune.core.domain.controller_request import (
@@ -23,13 +26,13 @@ from xaytune.core.domain.controller_request import (
 )
 from xaytune.daemon.client import DaemonClient
 from xaytune.daemon.config import DaemonConfig, DaemonConfigurationError, load_config
-from xaytune.daemon.host import LocalDaemonControllerHost
 from xaytune.daemon.lock import (
     DaemonAlreadyRunningError,
     StateDatabaseLock,
     UnsupportedPlatformError,
     lock_path,
 )
+from xaytune.daemon.server import LocalDaemonControllerServer
 
 __all__ = [
     "ControllerRequest",
@@ -39,7 +42,7 @@ __all__ = [
     "DaemonClient",
     "DaemonConfig",
     "DaemonConfigurationError",
-    "LocalDaemonControllerHost",
+    "LocalDaemonControllerServer",
     "StateDatabaseLock",
     "UnsupportedPlatformError",
     "load_config",

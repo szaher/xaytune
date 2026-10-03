@@ -3,7 +3,7 @@
 ## Status
 Accepted — 2026-10-03.
 
-Gates band H (spec 15 Phase 7): PR-027 `LocalDaemonControllerHost`, PR-028
+Gates band H (spec 15 Phase 7): PR-027 the local daemon process, PR-028
 host leases and whole-controller startup reconciliation, PR-029 CLI
 submit/attach/watch. Expanded before acceptance with the decisions PR-027
 implements, for the reason ADR-005 was: the original text named the hosts
@@ -24,9 +24,25 @@ but nothing drives an experiment while no process hosts it.
 Introduce `ControllerHost`. Implementations:
 
 - `EmbeddedControllerHost` -- in-process; tests, notebooks, local development.
-- `LocalDaemonControllerHost` -- a persistent local process owning one state
-  database (PR-027).
+- `LocalDaemonControllerHost` -- the caller-side host for a local daemon:
+  `submit()` and `attach()` return an `ExperimentHandle` answered from the
+  durable record, with every mutation sent as a mailbox request (PR-029).
 - `RemoteControllerHost` -- future.
+
+The local daemon has two halves, and only the caller's is a `ControllerHost`:
+
+```text
+LocalDaemonControllerServer   the persistent process owning one state
+                              database; serve() drives the controller (PR-027)
+DaemonClient                  the v1 mailbox API: writes requests, reads the
+                              record; returns requests, not handles (PR-027)
+LocalDaemonControllerHost     ControllerHost over DaemonClient (PR-029)
+```
+
+The server is not a `ControllerHost` -- it has no caller to return a handle
+to -- and `DaemonClient` is deliberately not one either: until PR-029 there
+is no handle whose `cancel()`, `propose()` or `wait()` could be honoured
+without a controller in the caller's process, which §6 forbids.
 
 Primary API is `submit() -> ExperimentHandle`; `run()` is synchronous
 convenience. Every experiment records the host that admitted it as a
@@ -71,8 +87,10 @@ ACCEPTED    submit only: the initial control-plane intent exists and the
             request is linked to it
 COMPLETED   the handoff reached the point at which submit()/attach() returns;
             not that the experiment has finished
-FAILED      a definitive failure before anything was admitted: invalid
-            payload, unavailable implementation, unsupported candidate
+FAILED      a definitive refusal of the request before anything was
+            admitted: invalid or non-canonical payload, unavailable
+            implementation, unsupported candidate; an unexpected error
+            leaves the request where it was, to be retried
 ```
 
 ```text
@@ -102,7 +120,10 @@ attempt 1 with its parallel-run reservation
 its submit RuntimeOperation, INTENDED
 ```
 
-and only then is the runtime called, outside the transaction (ADR-013). A crash
+and only then is the runtime called, outside the transaction (ADR-013). The
+request is accepted only for the spec it carries: the admitting caller passes
+the canonical digest of the spec the aggregates were derived from, and the
+transaction refuses it unless it equals the request's `payload_digest`. A crash
 leaves either nothing admitted (`PENDING`) or an `INTENDED` operation that
 reconciliation resolves; never a request that is half-admitted, and never a
 second experiment for one request. The embedded host uses the same admission:

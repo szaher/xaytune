@@ -226,6 +226,7 @@ from xaytune.storage.repository import AggregateStore
 from xaytune.storage.requests import ControllerRequestStore
 
 __all__ = [
+    "AdmissionRefusedError",
     "ApprovalConflictError",
     "ApprovalError",
     "BranchRefusedError",
@@ -386,6 +387,15 @@ class CancellationSagaRequiredError(StorageError):
 
 class ProvenanceError(StorageError):
     """A record would attribute something to a producer that did not make it."""
+
+
+class AdmissionRefusedError(StorageError):
+    """A submission that cannot be admitted as given, however often it is retried.
+
+    The request it names is for another experiment or another kind, its
+    payload is not the spec the submission was derived from, or the
+    experiment id is already taken (ADR-004 §4).
+    """
 
 
 class BranchRefusedError(StorageError):
@@ -811,6 +821,7 @@ class ControlPlaneRepository:
         request_digest: str,
         actor: Actor,
         request_id: ControllerRequestId | str | None = None,
+        submitted_digest: str | None = None,
         destinations: tuple[str, ...] = (),
     ) -> ExperimentAdmission | None:
         """Admit a submitted experiment and the intent to start it, in one commit (ADR-004 §4).
@@ -819,9 +830,9 @@ class ControlPlaneRepository:
         records is everything a restart needs to carry the submission on:
 
         ```text
-        the request, if any, is a PENDING submit
-          for this experiment                      else None if it moved on,
-                                                   StorageError if it is another's
+        the request, if any, is a submit for this
+          experiment, of exactly this spec          else AdmissionRefusedError
+        it is still PENDING                         else None: it moved on
         experiment CREATED → ACTIVE
         root node CREATED → PLANNED → READY → ACTIVE
         its first run CREATED → ACTIVE, max_runs reserved
@@ -835,17 +846,29 @@ class ControlPlaneRepository:
         it leaves an ``INTENDED`` operation, which reconciliation resolves
         (ADR-013), and a crash before it leaves nothing but the request.
 
+        *submitted_digest* is the canonical digest of the ``ExperimentSpec``
+        the aggregates were derived from
+        (:meth:`~xaytune.experiment.ExperimentSpec.submission_payload`), and is
+        required with *request_id*: the request is accepted only for the spec
+        it carries, so a request can never be marked ``ACCEPTED`` for an
+        experiment derived from anything else.
+
         Returns:
             What was admitted -- or ``None`` if the request is no longer
             ``PENDING``: it was admitted, or failed, before; nothing is written.
 
         Raises:
             AggregateNotFoundError: If *request_id* names no request.
+            AdmissionRefusedError: If the request is another kind, for another
+                experiment or of another spec, or the experiment already
+                exists. Nothing is written.
             StorageError: If the aggregates are not one fresh submission -- a
                 root node of this experiment, a run of it with no seed origin,
-                that run's first attempt -- or the request is another kind or
-                for another experiment, or the experiment already exists.
+                that run's first attempt.
+            ValueError: If *request_id* is given without *submitted_digest*.
         """
+        if request_id is not None and submitted_digest is None:
+            raise ValueError("admitting a controller request needs the submitted spec's digest")
         _require_pristine(experiment, ExperimentStatus.CREATED)
         _require_pristine(node, ExperimentNodeStatus.CREATED)
         _require_pristine(run, RunStatus.CREATED)
@@ -880,14 +903,19 @@ class ControlPlaneRepository:
                 if request is None:
                     raise AggregateNotFoundError("ControllerRequest", str(request_id))
                 if request.kind != "submit" or request.experiment_id != experiment.id:
-                    raise StorageError(
+                    raise AdmissionRefusedError(
                         f"controller request {request.id} is a {request.kind} for experiment "
                         f"{request.experiment_id}, not the submission of {experiment.id}"
+                    )
+                if request.payload_digest != submitted_digest:
+                    raise AdmissionRefusedError(
+                        f"controller request {request.id} carries spec {request.payload_digest}; "
+                        f"the submission was derived from {submitted_digest}"
                     )
                 if request.state is not ControllerRequestState.PENDING:
                     return None
             if aggregates.get_experiment(str(experiment.id)) is not None:
-                raise StorageError(f"experiment {experiment.id} is already recorded")
+                raise AdmissionRefusedError(f"experiment {experiment.id} is already recorded")
 
             aggregates._insert_experiment(experiment)
             self._emit(experiment, "ExperimentCreated", str(experiment.id), actor, destinations)

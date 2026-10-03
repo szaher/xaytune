@@ -113,6 +113,8 @@ daemon never falls back to the embedded host's defaults, and since the
 decision engine is not yet recorded with the experiment, keeping it the same
 across daemon restarts is up to you.
 
+The process is `xaytune.daemon.LocalDaemonControllerServer`.
+
 **The database is the mailbox.** A client commits a request and may exit:
 
 ```python
@@ -130,7 +132,13 @@ request again. A submission moves `PENDING → ACCEPTED → COMPLETED`, where
 `COMPLETED` means the handoff is done, not the experiment. A spec the daemon
 cannot run -- an unknown compiler, an invalid spec -- ends `FAILED` with
 nothing admitted. `client.attach(experiment_id)` asks the daemon to adopt an
-experiment already in the record.
+experiment already in the record. `DaemonClient` returns requests, not
+`ExperimentHandle`s; a handle over the daemon, with cancellation and proposals
+sent as requests, comes with the CLI (PR-029).
+
+A request is `FAILED` only for a definitive refusal of the request itself. An
+unexpected error -- a plugin bug, a busy database -- leaves it `PENDING`, and
+the daemon tries it again on its next look.
 
 **One daemon per database.** The daemon holds an exclusive `flock` on
 `<state.db>.lock` for its lifetime; a second exits with status 3. A daemon

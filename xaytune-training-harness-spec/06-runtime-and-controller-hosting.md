@@ -177,7 +177,10 @@ Lifecycle dies with the process.
 
 ### LocalDaemonControllerHost
 
-Persistent process on workstation/server (ADR-004; PR-027).
+Persistent process on workstation/server (ADR-004; PR-027). Two halves: the
+process, `LocalDaemonControllerServer`, and its mailbox client,
+`DaemonClient`. The `ControllerHost` named here -- `submit()`/`attach()`
+returning an `ExperimentHandle` over the mailbox -- is PR-029's.
 
 - **SQLite database**, which is also the command channel: a client commits a
   durable `controller_requests` row (`submit` with a pre-minted

@@ -50,3 +50,19 @@ def test_release_frees_it_and_is_idempotent(tmp_path: Path) -> None:
 def test_an_in_memory_database_has_nothing_to_lock() -> None:
     with pytest.raises(ValueError, match="in-memory"):
         StateDatabaseLock(":memory:")
+
+
+def test_the_entrypoint_refuses_an_unlockable_platform_before_anything_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Before the config, the database or the event loop's signal handlers."""
+    import xaytune.daemon.lock as lock_module
+    from xaytune.daemon.__main__ import EXIT_UNSUPPORTED_PLATFORM, main
+
+    monkeypatch.setattr(lock_module, "fcntl", None)
+    status = main(
+        ["--state", str(tmp_path / "state.db"), "--config", "nowhere.at_all:create_config"]
+    )
+    assert status == EXIT_UNSUPPORTED_PLATFORM
+    assert "fcntl" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []

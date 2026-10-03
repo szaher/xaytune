@@ -23,7 +23,7 @@ from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
-from xaytune.core.immutable import FrozenDomainModel
+from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
 __all__ = ["CompilerSpec", "ExperimentSpec", "PlannerSpec", "RuntimeSpec"]
 
@@ -81,6 +81,14 @@ class ExperimentSpec(FrozenDomainModel):
     budget: BudgetSpec | None = None
     numerical_recovery: NumericalRecoveryPolicyV1 | None = None
     planner: PlannerSpec | None = None
+
+    def submission_payload(self) -> FrozenDict:
+        """The spec as the canonical JSON a daemon request carries (ADR-004 §3).
+
+        A request's ``payload_digest`` is the fingerprint of exactly this, and
+        admission is refused for a submission derived from any other spec.
+        """
+        return FrozenDict(self.model_dump(mode="json"))
 
     @field_validator("compiler", "runtime", "planner")
     @classmethod

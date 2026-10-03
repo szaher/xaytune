@@ -25,7 +25,6 @@ from types import TracebackType
 
 from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
 from xaytune.core.ids import ControllerRequestId, ExperimentId
-from xaytune.core.immutable import FrozenDict
 from xaytune.core.sqlite import connect
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.storage.control_plane import ControlPlaneRepository
@@ -71,9 +70,10 @@ class DaemonClient:
             The committed request; its ``experiment_id`` is the experiment the
             daemon will admit, or has admitted.
         """
-        payload = FrozenDict(spec.model_dump(mode="json"))
         return self.send(
-            ControllerRequest.submit(payload, experiment_id=experiment_id, request_id=request_id)
+            ControllerRequest.submit(
+                spec.submission_payload(), experiment_id=experiment_id, request_id=request_id
+            )
         )
 
     def attach(

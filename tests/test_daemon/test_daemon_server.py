@@ -1,8 +1,8 @@
-"""LocalDaemonControllerHost in one process: the mailbox, admission and provenance (PR-027).
+"""LocalDaemonControllerServer in one process: the mailbox, admission and provenance (PR-027).
 
 The cross-process properties -- a second daemon refused, SIGTERM, SIGKILL, a
 client that dies -- are in :mod:`.test_daemon_process`. These drive
-:meth:`LocalDaemonControllerHost.serve` as a task.
+:meth:`LocalDaemonControllerServer.serve` as a task.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from xaytune.daemon import (
     ControllerRequestState,
     DaemonClient,
     DaemonConfig,
-    LocalDaemonControllerHost,
+    LocalDaemonControllerServer,
 )
 from xaytune.decision import AdaptiveThresholdDecisionEngine, ThresholdDecisionEngine
 from xaytune.experiment import CompilerSpec, RuntimeSpec
@@ -72,7 +72,9 @@ def _config(*, fault: str | None = None, **overrides: Any) -> DaemonConfig:
 
 
 @contextlib.asynccontextmanager
-async def _serving(daemon: LocalDaemonControllerHost) -> AsyncIterator[LocalDaemonControllerHost]:
+async def _serving(
+    daemon: LocalDaemonControllerServer,
+) -> AsyncIterator[LocalDaemonControllerServer]:
     stop = asyncio.Event()
     task = asyncio.create_task(daemon.serve(stop))
     try:
@@ -116,8 +118,8 @@ def _counts(client: DaemonClient) -> dict[str, int]:
     }
 
 
-def _daemon(tmp_path: Path, **config: Any) -> LocalDaemonControllerHost:
-    return LocalDaemonControllerHost(tmp_path / "state.db", _config(**config), poll_interval=0.05)
+def _daemon(tmp_path: Path, **config: Any) -> LocalDaemonControllerServer:
+    return LocalDaemonControllerServer(tmp_path / "state.db", _config(**config), poll_interval=0.05)
 
 
 # ---- submission ---------------------------------------------------------------------
@@ -194,7 +196,24 @@ def test_the_same_id_for_another_request_is_refused(tmp_path: Path) -> None:
             client.send(other)
 
 
-@pytest.mark.parametrize("problem", ["unknown-compiler", "unknown-runtime", "invalid-spec"])
+class _RefusingCompiler(NativeCompiler):
+    def supports(self, candidate: Any) -> Any:
+        from xaytune.compilation import SupportResult
+
+        return SupportResult(supported=False, reasons=("not this candidate",))
+
+
+class _BrokenCompiler(NativeCompiler):
+    """A plugin bug: not a judgement on the request."""
+
+    def supports(self, candidate: Any) -> Any:
+        raise ValueError("the plugin is broken")
+
+
+@pytest.mark.parametrize(
+    "problem",
+    ["unknown-compiler", "unknown-runtime", "invalid-spec", "unsupported", "non-canonical"],
+)
 def test_a_request_that_cannot_run_fails_with_nothing_admitted(
     tmp_path: Path, problem: str
 ) -> None:
@@ -205,9 +224,21 @@ def test_a_request_that_cannot_run_fails_with_nothing_admitted(
             request = client.submit(_file_spec(tmp_path, compiler=CompilerSpec(name="nope")))
         elif problem == "unknown-runtime":
             request = client.submit(_spec(tmp_path))  # kind "local": not configured
-        else:
+        elif problem == "invalid-spec":
             request = client.send(ControllerRequest.submit(FrozenDict({"name": "half a spec"})))
-        async with _serving(_daemon(tmp_path)):
+        elif problem == "unsupported":
+            request = client.submit(_file_spec(tmp_path))
+        else:
+            # A valid spec, but not in the canonical form whose digest the
+            # request must carry: what was asked is not provably what runs.
+            spec = _file_spec(tmp_path)
+            request = client.send(
+                ControllerRequest.submit(
+                    FrozenDict(spec.model_dump(mode="json", exclude_defaults=True))
+                )
+            )
+        compilers = {"native": _RefusingCompiler if problem == "unsupported" else NativeCompiler}
+        async with _serving(_daemon(tmp_path, compilers=compilers)):
             done = await client.wait_for_handoff(request.id, timeout=_TIMEOUT)
         assert done.state is ControllerRequestState.FAILED
         assert done.error is not None
@@ -215,11 +246,37 @@ def test_a_request_that_cannot_run_fails_with_nothing_admitted(
             "unknown-compiler": "UnknownImplementationError",
             "unknown-runtime": "UnknownImplementationError",
             "invalid-spec": "ValidationError",
+            "unsupported": "UnsupportedCandidateError",
+            "non-canonical": "AdmissionRefusedError",
         }[problem]
         assert done.error["type"] == expected
         counts = _counts(client)
         assert counts["experiments"] == counts["runtime_operations"] == 0
         assert workloads(tmp_path / "runtime") == {}
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        client.close()
+
+
+def test_an_unexpected_error_leaves_the_request_pending_to_try_again(tmp_path: Path) -> None:
+    """FAILED cannot be undone, so a plugin's ValueError is not read as a refusal."""
+    client = DaemonClient(tmp_path / "state.db")
+
+    async def scenario() -> None:
+        request = client.submit(_file_spec(tmp_path))
+        broken = _daemon(tmp_path, compilers={"native": _BrokenCompiler})
+        async with _serving(broken):
+            await broken.process_requests()
+            await broken.process_requests()
+        assert _state(client, request) is ControllerRequestState.PENDING
+        assert _counts(client)["experiments"] == 0
+
+        async with _serving(_daemon(tmp_path)):
+            done = await client.wait_for_handoff(request.id, timeout=_TIMEOUT)
+        assert done.state is ControllerRequestState.COMPLETED
+        assert _counts(client)["experiments"] == 1
 
     try:
         asyncio.run(scenario())
@@ -356,7 +413,7 @@ def test_the_daemon_drives_the_adaptive_loop_to_its_end(tmp_path: Path) -> None:
 
     async def scenario() -> None:
         request = client.submit(adaptive_spec(tmp_path))
-        daemon = LocalDaemonControllerHost(tmp_path / "state.db", config, poll_interval=0.05)
+        daemon = LocalDaemonControllerServer(tmp_path / "state.db", config, poll_interval=0.05)
         async with _serving(daemon):
             await client.wait_for_handoff(request.id, timeout=_TIMEOUT)
             await _until(

@@ -109,7 +109,8 @@ explicitly:
   "decision"           a candidate is DECIDING: its decision was deferred
   "evaluation"         a trained candidate is unevaluated, or evaluating
   "training"           an accepted candidate is PLANNED -- branched from a
-                       proposal, say -- and needs its first run
+                       proposal, say -- and needs its first run (the host
+                       starts it itself for its own planner's nodes)
   "planning"           every candidate was rejected on its merits, and the
                        experiment is still ACTIVE: another candidate is needed
   "failure-handling"   training or evaluation failed or was cancelled
@@ -474,7 +475,30 @@ the evidence it cites; that the candidate is new; and that no quota is
 exhausted. It then creates the child node in `PLANNED`, with the proposal's
 provenance kept on it as `branch_origin`. Repeating the same proposal returns
 the same node. A stale or conflicting proposal writes nothing. Branching
-creates no run; running the node is not implemented yet.
+creates no run.
+
+**The adaptive loop.** `EmbeddedControllerHost` moves from planning to
+training by itself: once a decision leaves the experiment open (`BRANCH` or
+`REJECT`), it asks the recorded planner, branches its proposal, and starts the
+new node's first run, with no call from you. `"training"` for a `PLANNED` node
+means that first run. Each step is read from the record, so a host that
+`attach()`es after a crash carries on where the last one stopped.
+
+- Only a node whose `branch_origin` names the experiment's recorded planner,
+  exactly as configured, runs automatically. A `PLANNED` node created any
+  other way waits for whoever planned it.
+- The new run inherits the seed of the parent's single training run, and
+  records where it came from (`Run.seed_origin`), so the two candidates differ
+  by the mutation, not by chance. It is still a new run: nothing is reused.
+- The compiler checks it can run the new candidate before anything is
+  written. The run's `max_runs` reservation is taken when it is created; with
+  no run left, the experiment ends `BUDGET_EXHAUSTED`.
+- A planner returning several proposals, or an action proposal, is not
+  chosen from: `wait()` raises `ReconciliationEscalatedError`. A planner with
+  nothing to propose leaves the experiment `ACTIVE` at `"planning"`.
+- The host's decision engine is not recorded with the experiment yet: use
+  `AdaptiveThresholdDecisionEngine` on every host that drives an adaptive
+  experiment.
 
 ## Local checkpoint bundles
 
@@ -526,5 +550,6 @@ comparison across replicates), lm-eval generation tasks, reusing earlier
 evaluation results, carrying out a proposed action (other than
 cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
 TRL managed checkpoint capture/application,
-running a branched node (the adaptive loop), plateau detection,
+recording the decision engine with the experiment, several proposals or
+parallel branches, plateau detection,
 daemon hosting, and runtimes other than local.

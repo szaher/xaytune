@@ -44,6 +44,7 @@ __all__ = [
     "ExecutionOverrideKind",
     "Run",
     "RunAttempt",
+    "RunSeedOrigin",
     "artifact_lineage_fingerprint",
     "run_history_fingerprint",
 ]
@@ -88,6 +89,23 @@ class ExecutionOverride(FrozenDomainModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class RunSeedOrigin(FrozenDomainModel):
+    """Where a run's seed came from, when it was not chosen for it (PR-026).
+
+    ``parent-run``: inherited from *source_run_id*, the single training run of
+    the node's parent, so a branched candidate and its parent differ by the
+    candidate's mutation rather than by the random seed. The source run names
+    its node; the node is not repeated here, where it could disagree.
+
+    Provenance, not identity: the seed *value* is what enters a run's
+    fingerprints, and where it came from does not make the same execution
+    scientifically different.
+    """
+
+    kind: Literal["parent-run"] = "parent-run"
+    source_run_id: RunId
+
+
 class Run(AggregateModel):
     """A logical execution of a scientific candidate."""
 
@@ -101,6 +119,11 @@ class Run(AggregateModel):
     experiment_id: ExperimentId
 
     seed: int | None = None
+    seed_origin: RunSeedOrigin | None = None
+    """Where ``seed`` came from, if inherited; ``None`` for a seed given directly.
+
+    Every run recorded before PR-026 has none. Not part of any fingerprint.
+    """
     replicate: int | None = None
 
     candidate_fingerprint: str = Field(

@@ -82,6 +82,7 @@ __all__ = [
     "RuleBasedPlannerConfig",
     "bind_planner",
     "require_proposed_by",
+    "require_provenance_of",
 ]
 
 
@@ -153,8 +154,22 @@ def require_proposed_by(planner: Planner, proposal: CandidateProposal) -> None:
     Raises:
         PlannerConfigurationError: Naming every field that disagrees.
     """
-    expected = _provenance_for(planner, proposal.provenance.context_fingerprint)
-    actual = proposal.provenance
+    require_provenance_of(planner, proposal.provenance)
+
+
+def require_provenance_of(planner: Planner, provenance: ProposalProvenance) -> None:
+    """Refuse *provenance* unless it names *planner*, exactly as bound.
+
+    The same check as :func:`require_proposed_by`, for a provenance already
+    recorded -- a branched node's origin -- rather than one on a proposal in
+    hand: before running a node, the controller confirms that the planner it
+    came from is the one this experiment records (PR-026).
+
+    Raises:
+        PlannerConfigurationError: Naming every field that disagrees.
+    """
+    expected = _provenance_for(planner, provenance.context_fingerprint)
+    actual = provenance
     wrong = [
         f"{name}: {getattr(actual, name)!r} is not {getattr(expected, name)!r}"
         for name in type(expected).model_fields

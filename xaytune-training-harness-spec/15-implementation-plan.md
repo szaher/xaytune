@@ -1306,17 +1306,109 @@ An alternative candidate creates a new node; an in-run scientific change records
   `experiment_edges` (the query authority) are written in the same insert,
   and `validate_parents` refuses any lineage on which they could disagree.
 
-### PR-026 — end-to-end MVP test
+### PR-026 — end-to-end adaptive MVP
 
-Reference scenario in `18-mvp-reference-scenario.md`.
+Reference scenario in `18-mvp-reference-scenario.md`. As built:
 
-Before PR-026, settle one known mismatch. The scenario declares
-`maxGpuHours: 8`, but PR-016 refuses `max_gpu_hours` at submission, because
-GPU consumption is not yet measured authoritatively. Either implement
-authoritative GPU-hour metering, or make the first acceptance scenario
-enforce `maxRuns` only and explicitly defer GPU-hour enforcement. Its
-Step D also requires the adaptive decision engine (PR-015b): a missed target
-must `BRANCH`, not `STOP_FAILED`.
+- **One submission, no further calls.** `EmbeddedControllerHost` carries an
+  open experiment from `"planning"` to `"training"` itself, through
+  `_continue_adaptive_experiment`: each round reads `next_stage` from the
+  record, does one durable step, and reads again -- never a callback chain
+  carrying objects from stage to stage. It is invoked after an evaluation
+  settles and its decision is applied, at the end of `attach()`'s
+  reconciliation, and by `wait()` before it calls the experiment settled.
+  `wait()` is a safety net, not the driver: an experiment submitted and never
+  waited on still progresses while the host lives.
+- **Only planning and training are driven.** Evaluation, decision and
+  recovery stay with the paths that own them:
+
+  ```text
+  DecisionEngine decides → planner proposes → branching admits lineage
+    → adaptive controller realizes admitted work → existing compiler,
+      runtime, recovery and evaluation machinery executes it
+  ```
+
+- **Planning.** The experiment's *recorded* `PlannerSpec`, bound again on
+  this host; `planning_context()`; `propose()`. No proposal: the experiment
+  stays `ACTIVE` at `"planning"`. One `CandidateProposal`: branched through
+  PR-025. Several proposals, or an `ActionProposal`: escalated
+  (`wait()` raises `ReconciliationEscalatedError`), nothing chosen, no Action
+  created -- there is no selection or scheduling policy yet. A used-up quota
+  ends the experiment `BUDGET_EXHAUSTED` instead of planning; the decision
+  that asked for another candidate stands.
+- **Only planner-created nodes run automatically.** A `PLANNED` node is
+  realized only if its `branch_origin` names the experiment's recorded
+  planner exactly (`require_provenance_of` on the host; the recorded spec
+  fingerprint again in the repository). A `PLANNED` node with no origin is
+  left for whoever planned it; one whose origin names another planner or
+  configuration is escalated. `created_by`, status or a planner name alone
+  never authorize a run. Because `branch_origin` now authorizes execution,
+  it is repository-issued: `create_node()` refuses one, and only
+  `materialize_candidate_proposal()` mints it.
+- **Seed.** A branched node's first run inherits the seed of its single
+  parent's single successful training run, and records
+  `Run.seed_origin = RunSeedOrigin(kind="parent-run", source_run_id)`.
+  Provenance only: it enters no fingerprint, and existing runs load with
+  `None`. Several parents, or a parent with zero or several runs, is
+  escalated -- v1 has no replicate-selection policy and does not guess.
+  Same seed is never reuse: Run B is a new run, attempt, execution spec and
+  submission (ADR-017).
+- **Revalidation.** Before any write, the recorded compiler (at its recorded
+  version) must `supports()` the branched candidate; otherwise it is
+  escalated with no run, attempt, reservation or effect.
+- **Atomic realization.** `realize_planned_node` re-checks the whole v1
+  seed contract inside its transaction -- one parent with exactly one run,
+  `SUCCEEDED` and seeded, named by the required `seed_origin`, same seed,
+  `replicate == 1` -- so a run added after the host's read is refused, not
+  silently chosen from. It writes, in one transaction:
+  node `PLANNED → READY → ACTIVE`, `RunCreated` with the `max_runs`
+  reservation, run `CREATED → ACTIVE`, the attempt with its `INTENDED`
+  submit and its parallel-run slot -- each through its state machine with
+  its event. The `PLANNED` node is the durable gate: a second caller finds it
+  no longer `PLANNED` and writes nothing. The runtime is called after the
+  commit, through the existing `_issue → submit_or_get → confirm → _adopt →
+  _observe` path. The transactional repository methods were factored into
+  shared in-transaction helpers (`_apply_transition`,
+  `_insert_run_with_reservation`, `_insert_training_attempt_with_intent`);
+  no write transaction nests another.
+- **Budget.** Run B's `max_runs` reservation is the first budget effect of
+  branching. No run left: nothing is written and the experiment ends
+  `BUDGET_EXHAUSTED`. A full `max_parallel_runs` is capacity: nothing is
+  written and realization waits.
+- **Restart.** Crash after `BRANCH` with no child, or with a `PLANNED` child
+  and no run: `attach()` continues from the record. Crash after realization
+  with the submission `INTENDED`: the existing ADR-013 reconciliation adopts
+  or re-issues it; no node or run is created again.
+- **Decision engine.** The acceptance test configures
+  `AdaptiveThresholdDecisionEngine` explicitly; the host's default is
+  unchanged.
+- **Acceptance.** `tests/test_experiment/test_adaptive_mvp.py`: A1 CUDA OOM
+  → A2 restored and resized under the same Run A → 0.79 → `BRANCH` →
+  LoRA 16 → 32 → node_B → Run B (seed inherited) → 0.83 →
+  `STOP_SUCCEEDED` → `SUCCEEDED`, `best_node_id = node_B`, from
+  `handle.wait()` and across both restart gaps.
+
+Out of scope: `DecisionEngineSpec` persistence, GPU-hour metering, LLM
+planner, search providers, multiple proposals or parallel branches,
+replicate scheduling, multi-parent seed selection, candidate approval,
+generic `ActionProposal` execution, daemon hosting and leases (PR-027/028),
+CLI, the rich result/export projection, plateau detection, artifact reuse.
+
+Follow-ups recorded by this PR:
+
+- **`DecisionEngineSpec` persistence under ADR-016.** The host's decision
+  engine is not recorded with the experiment, so a host attaching to an
+  adaptive experiment must be configured with the same engine.
+- **Future budget work -- authoritative GPU-hour metering.** Runtime-reported
+  measured GPU usage; durable resource-usage attribution; conversion into
+  `BudgetLedger` consumption; restart-safe accounting; distributed and
+  multi-worker semantics. Requested resources must never be presented as
+  actual usage. Until then `max_gpu_hours` stays refused at submission and
+  spec 18 enforces `maxRuns` only.
+- **Rich result / provenance export projection.** Spec 18's
+  `best_artifact`, `experiment_graph`, `incidents`, `recovery_history`,
+  `resource_usage`, `provenance_bundle` -- a projection over the durable
+  record, not fields of today's `ExperimentResult`.
 
 Phase exit:
 

@@ -117,9 +117,9 @@ from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarg
 from xaytune.core.domain.planning import CandidateProposal, settled_for_planning
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.recovery import RecoveryRequest
-from xaytune.core.domain.run import Run, RunAttempt
+from xaytune.core.domain.run import Run, RunAttempt, RunSeedOrigin
 from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
-from xaytune.core.errors import XaytuneError
+from xaytune.core.errors import ConcurrentModificationError, XaytuneError
 from xaytune.core.execution import PythonModuleEntrypoint, ResolvedExecutionPlan
 from xaytune.core.execution_controls import MANAGED_NUMERICAL_RECOVERY, TRAINING_INTERVENTIONS
 from xaytune.core.ids import (
@@ -173,7 +173,13 @@ from xaytune.experiment.handle import (
     RunOutcome,
 )
 from xaytune.experiment.spec import ExperimentSpec
-from xaytune.planning import PLANNERS, Planner, require_proposed_by
+from xaytune.planning import (
+    PLANNERS,
+    Planner,
+    PlannerConfigurationError,
+    require_proposed_by,
+    require_provenance_of,
+)
 from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.resilience import IncidentClassifier
 from xaytune.resilience.numerical import NumericalRecoveryPlanner
@@ -193,6 +199,7 @@ from xaytune.storage.control_plane import (
     EvaluationReconciliation,
     ProvenanceError,
     StalePolicyContextError,
+    StaleProposalError,
     StaleRecoveryContextError,
 )
 from xaytune.storage.journal import IdempotencyConflictError
@@ -230,6 +237,10 @@ _LIVE_STATES = frozenset({"pending", "queued", "starting", "running"})
 _OUTCOME_POLL_SECONDS = 0.5
 # How often a training attempt waiting for a parallel-run slot looks again.
 _CAPACITY_POLL_SECONDS = 0.5
+
+# How many planning rounds one continuation may take before it stops: a round
+# whose proposal went stale is planned again, but never without end.
+_ADAPTIVE_ROUNDS = 3
 
 # A candidate whose decision settled what it is: rejected on a constraint, or
 # completed short of the target. A COMPLETED node under an ACTIVE experiment
@@ -290,6 +301,10 @@ class ReconciliationEscalatedError(XaytuneError):
     unresolved -- and a person, or a later and better-informed controller,
     has to decide.
     """
+
+
+class _AdaptiveStopError(XaytuneError):
+    """The adaptive loop cannot safely go on; the reason is escalated, nothing is guessed."""
 
 
 class ControllerNotRunningError(XaytuneError):
@@ -355,8 +370,9 @@ class EmbeddedControllerHost:
             Cancellation is never governed by it.
         planners: Planner factories by kind, each binding a ``PlannerSpec``.
             Defaults to :data:`~xaytune.planning.PLANNERS` (``rule-based`` and
-            ``no-op``). A spec's planner is bound at submission and recorded;
-            nothing invokes it yet.
+            ``no-op``). A spec's planner is bound at submission and recorded,
+            and invoked whenever the experiment's next stage is planning
+            (PR-026).
     """
 
     def __init__(
@@ -398,6 +414,9 @@ class EmbeddedControllerHost:
         # tracked -- for wait() to wait on and close() to stop.
         self._controllers: dict[str, dict[str, asyncio.Task[None]]] = {}
         self._escalations: dict[str, str] = {}
+        # Spares a second caller in this process the work; the record, not
+        # this lock, is what keeps two callers from realizing a node twice.
+        self._adaptive_locks: dict[str, asyncio.Lock] = {}
         self._reference = ControllerHostRef(kind="embedded", id=f"embedded-{uuid.uuid4().hex}")
 
     # ---- the public surface ---------------------------------------------
@@ -671,7 +690,17 @@ class EmbeddedControllerHost:
             observers = self._controllers.get(str(experiment_id), {}).values()
             pending = [task for task in observers if task not in awaited]
             if not pending:
-                break
+                # Nothing left to observe. Give the adaptive loop its chance
+                # before calling the experiment settled: if the record asks
+                # for planning or training it starts the work, and there is
+                # an observer to wait on again. It is not what drives the
+                # loop -- evaluation and reconciliation do -- only a guarantee
+                # that wait() never returns at a stage this host can advance.
+                await self._continue_adaptive_experiment(experiment_id)
+                observers = self._controllers.get(str(experiment_id), {}).values()
+                if all(task in awaited for task in observers):
+                    break
+                continue
             awaited.update(pending)
             await asyncio.gather(*(asyncio.shield(task) for task in pending))
         escalation = self._escalations.get(str(experiment_id))
@@ -1489,6 +1518,11 @@ class EmbeddedControllerHost:
             if action.type == "cancel-experiment" and not action.is_terminal:
                 await self._cancel(experiment.id, reason=action.reason)
 
+        # A crash after a BRANCH, before its candidate was planned, or after the
+        # candidate was planned, before its run: the record says which, and the
+        # adaptive loop carries on from there (PR-026).
+        await self._continue_adaptive_experiment(experiment.id)
+
     async def _reconcile_evaluation(
         self, experiment: Experiment, node_id: ExperimentNodeId
     ) -> None:
@@ -1901,6 +1935,9 @@ class EmbeddedControllerHost:
             return
         self._reconcile_node_of(run_id)
         self._reconcile_cancellations(experiment_id)
+        # The decision is applied; if it left the experiment open -- BRANCH --
+        # the next candidate is planned and started now, not when someone waits.
+        await self._continue_adaptive_experiment(experiment_id)
 
     def _record_evaluation_result(
         self,
@@ -2439,8 +2476,8 @@ class EmbeddedControllerHost:
         The controller checks what only it can -- that the experiment's
         recorded planner, bound on this host, is exactly what proposed it --
         and the repository checks the rest in the transaction that writes the
-        node: freshness, lineage, evidence, duplication, budget. Nothing runs:
-        realizing the node is PR-026's.
+        node: freshness, lineage, evidence, duplication, budget. Nothing runs
+        here: realizing the node is :meth:`_realize_planned_candidate`'s.
 
         Raises:
             PlannerConfigurationError: If the bound planner did not make it.
@@ -2456,6 +2493,230 @@ class EmbeddedControllerHost:
             )
         require_proposed_by(planner, proposal)
         return self.repository.materialize_candidate_proposal(experiment_id, proposal, actor=actor)
+
+    # ---- the adaptive loop (PR-026) ----------------------------------------
+
+    async def _continue_adaptive_experiment(self, experiment_id: ExperimentId) -> None:
+        """Carry an open experiment from ``planning`` to ``training``, from the record alone.
+
+        Each round reads where the experiment stands, does one durable step,
+        and reads again; nothing is carried in memory from one step to the
+        next, so a restarted host continues from exactly where this one
+        stopped:
+
+        ```text
+        next_stage "planning"   the recorded planner proposes; one candidate
+                                proposal is branched into a PLANNED node
+        next_stage "training"   the planner-created PLANNED node gets its first
+                                run, and the run is issued; the run's own
+                                observer carries it on from there
+        anything else           nothing here to do
+        ```
+
+        Evaluation, decision and recovery stay with the controller paths that
+        own them. What cannot go on safely -- several proposals, an action
+        proposal, a node from another planner, a candidate the compiler cannot
+        run, a parent whose seed is ambiguous -- is escalated, and ``wait()``
+        raises it; nothing is chosen on the caller's behalf.
+        """
+        lock = self._adaptive_locks.setdefault(str(experiment_id), asyncio.Lock())
+        async with lock:
+            if str(experiment_id) in self._escalations:
+                return
+            try:
+                for _ in range(_ADAPTIVE_ROUNDS):
+                    experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+                    if experiment.status is not ExperimentStatus.ACTIVE:
+                        return
+                    if self._cancelling(experiment.id):
+                        return
+                    stage = self._result(experiment.id).next_stage
+                    if stage == "training":
+                        await self._realize_planned_candidate(experiment)
+                        return
+                    if stage != "planning":
+                        return
+                    try:
+                        if not await self._plan_next_candidate(experiment):
+                            return
+                    except StaleProposalError:
+                        # Something wrote between the context and the branch:
+                        # plan again against what the record says now.
+                        continue
+            except ConcurrentModificationError:
+                # Another caller moved the node first; the record carries on.
+                return
+            except (_AdaptiveStopError, XaytuneError, PlannerConfigurationError) as stopped:
+                self._escalations[str(experiment_id)] = f"the adaptive loop stopped: {stopped}"
+
+    async def _plan_next_candidate(self, experiment: Experiment) -> bool:
+        """Ask the recorded planner once, and branch its proposal; whether a node was planned.
+
+        No planner recorded: someone proposes by hand, so nothing happens. A
+        used-up quota ends the experiment ``BUDGET_EXHAUSTED`` instead: no run
+        of another candidate could follow. No proposal leaves the experiment
+        planning. One candidate proposal is branched (PR-025). Anything else
+        has no selection policy yet, and is refused rather than chosen from.
+        """
+        if experiment.planner is None:
+            return False
+        budget = self.repository.budget_status(experiment.id)
+        if budget is not None and budget.exhausted:
+            self.repository.exhaust_budget(
+                experiment.id,
+                reasons=tuple(
+                    f"{d.dimension.value}: {d.consumed} consumed and {d.outstanding} reserved "
+                    f"of {d.limit}; no run of another candidate could follow"
+                    for d in budget.exhausted
+                ),
+                actor=_ACTOR,
+            )
+            return False
+        planner = self._recorded_planner(experiment)
+        assert planner is not None
+        proposals = await planner.propose(self.repository.planning_context(experiment.id))
+        if not proposals:
+            return False
+        if len(proposals) > 1:
+            raise _AdaptiveStopError(
+                f"planner {experiment.planner.kind!r} proposed {len(proposals)} things at once; "
+                f"the v1 adaptive driver has no policy for choosing among them"
+            )
+        (proposal,) = proposals
+        if not isinstance(proposal, CandidateProposal):
+            raise _AdaptiveStopError(
+                f"planner {experiment.planner.kind!r} proposed an action "
+                f"({type(proposal.action).__name__}); the adaptive driver does not execute action "
+                f"proposals, so no action was created"
+            )
+        self._materialize_candidate_proposal(experiment.id, proposal, actor=_ACTOR)
+        return True
+
+    async def _realize_planned_candidate(self, experiment: Experiment) -> None:
+        """Give the planner-created ``PLANNED`` node its first run, and issue it.
+
+        Only a node the experiment's own recorded planner proposed, and
+        PR-025 admitted, runs automatically; a node planned some other way
+        waits for whoever planned it. Everything that decides the run is
+        computed first, with no effect -- the recorded compiler's support for
+        the branched candidate, the parent's seed, the plan and its digest --
+        then one commit accepts the node, the run, its attempt and the intent
+        to submit (``realize_planned_node``). Only after that is the runtime
+        called, through the same path as every other submission.
+
+        The seed is the parent's: for comparison, a branched candidate differs
+        from its parent by its mutation, not by chance. A run's seed is the
+        run's, so it is inherited from the parent's single training run and
+        recorded with where it came from.
+        """
+        aggregates = self.repository.aggregates
+        planned = [
+            node
+            for node in aggregates.nodes_for_experiment(str(experiment.id))
+            if node.status is ExperimentNodeStatus.PLANNED and node.branch_origin is not None
+        ]
+        if not planned:
+            return
+        if len(planned) > 1:
+            raise _AdaptiveStopError(
+                f"{len(planned)} planned candidates wait for a run; the v1 adaptive driver "
+                f"runs one at a time and has no policy for choosing"
+            )
+        (node,) = planned
+        assert node.branch_origin is not None
+        planner = self._recorded_planner(experiment)
+        if planner is None:
+            raise _AdaptiveStopError(
+                f"node {node.id} was branched by a planner, but experiment {experiment.id} "
+                f"records none to have proposed it"
+            )
+        require_provenance_of(planner, node.branch_origin.provenance)
+
+        if experiment.compiler is None or experiment.runtime is None:
+            raise _AdaptiveStopError(
+                f"experiment {experiment.id} records no compiler or runtime to run node "
+                f"{node.id} with"
+            )
+        compiler = self._compiler(experiment.compiler.name)
+        _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
+        support = compiler.supports(node.candidate.candidate)
+        if not support:
+            raise _AdaptiveStopError(
+                f"compiler {compiler.descriptor.name!r} cannot run branched node {node.id}: "
+                + "; ".join(support.reasons)
+            )
+        source = self._seed_source(node)
+
+        run = Run(
+            id=RunId.generate(),
+            node_id=node.id,
+            experiment_id=node.experiment_id,
+            seed=source.seed,
+            seed_origin=RunSeedOrigin(source_run_id=source.id),
+            replicate=1,
+            candidate_fingerprint=node.candidate_fingerprint,
+        )
+        attempt_id = RunAttemptId.generate()
+        plan = self._plan(experiment, run, attempt_id, compiler)
+        attempt = RunAttempt(
+            id=attempt_id,
+            run_id=run.id,
+            attempt_number=1,
+            execution_fingerprint=training_execution_fingerprint(plan),
+        )
+        while True:
+            try:
+                realized = self.repository.realize_planned_node(
+                    node.id,
+                    expected_revision=node.revision,
+                    run=run,
+                    attempt=attempt,
+                    request_digest=plan.request_digest("submit"),
+                    actor=_ACTOR,
+                )
+                break
+            except CapacityUnavailableError:
+                # Full is not exhausted: nothing was written; wait for a slot.
+                await asyncio.sleep(_CAPACITY_POLL_SECONDS)
+            except BudgetExhaustedError as exhausted:
+                self.repository.exhaust_budget(
+                    experiment.id, reasons=exhausted.reasons, actor=_ACTOR
+                )
+                return
+        if realized is None:
+            # Realized already, by another caller: its run is in the record.
+            return
+        _, run, attempt, operation = realized
+        runtime = self._recorded_runtime(experiment)
+        await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
+
+    def _seed_source(self, node: ExperimentNode) -> Run:
+        """The parent's single training run, whose seed a branched node's first run inherits.
+
+        Defined only for one parent with one successful, seeded run. Anything
+        else -- several parents, or a parent run several times -- would need a
+        policy saying which run to compare against, and v1 has none: it is
+        refused rather than guessed (not the first, the latest, nor any other).
+        """
+        if len(node.parent_ids) != 1:
+            raise _AdaptiveStopError(
+                f"node {node.id} has {len(node.parent_ids)} parents; the v1 adaptive driver "
+                f"inherits a seed only from a single parent"
+            )
+        (parent,) = node.parent_ids
+        runs = self.repository.aggregates.runs_for_node(str(parent))
+        if len(runs) != 1:
+            raise _AdaptiveStopError(
+                f"parent {parent} of node {node.id} has {len(runs)} training runs; which one's "
+                f"seed to inherit is not defined by the v1 adaptive driver"
+            )
+        (source,) = runs
+        if source.status is not RunStatus.SUCCEEDED or source.seed is None:
+            raise _AdaptiveStopError(
+                f"parent {parent}'s run {source.id} is {source.status.value} with seed "
+                f"{source.seed}; only a successful, seeded run's seed is inherited"
+            )
+        return source
 
     def _recorded_planner(self, experiment: Experiment) -> Planner | None:
         """The planner the record names, at the version it names, or ``None`` if it names none.

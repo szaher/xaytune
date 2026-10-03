@@ -124,6 +124,7 @@ from xaytune.core.execution import PythonModuleEntrypoint, ResolvedExecutionPlan
 from xaytune.core.execution_controls import MANAGED_NUMERICAL_RECOVERY, TRAINING_INTERVENTIONS
 from xaytune.core.ids import (
     ActionId,
+    ControllerRequestId,
     EvaluationAttemptId,
     EvaluationId,
     EvaluationRunId,
@@ -373,6 +374,11 @@ class EmbeddedControllerHost:
             ``no-op``). A spec's planner is bound at submission and recorded,
             and invoked whenever the experiment's next stage is planning
             (PR-026).
+        controller_host: The host recorded on every experiment this one
+            admits. Defaults to a new ``embedded`` reference; a host that
+            delegates its control to this one -- the local daemon (PR-027)
+            -- supplies its own, so the record names the process that
+            actually admitted the experiment.
     """
 
     def __init__(
@@ -387,6 +393,7 @@ class EmbeddedControllerHost:
         checkpoint_manager: CheckpointManager | None = None,
         recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None = None,
         planners: Mapping[str, Callable[[PlannerSpec], Planner]] | None = None,
+        controller_host: ControllerHostRef | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -417,7 +424,9 @@ class EmbeddedControllerHost:
         # Spares a second caller in this process the work; the record, not
         # this lock, is what keeps two callers from realizing a node twice.
         self._adaptive_locks: dict[str, asyncio.Lock] = {}
-        self._reference = ControllerHostRef(kind="embedded", id=f"embedded-{uuid.uuid4().hex}")
+        self._reference = controller_host or ControllerHostRef(
+            kind="embedded", id=f"embedded-{uuid.uuid4().hex}"
+        )
 
     # ---- the public surface ---------------------------------------------
 
@@ -444,6 +453,26 @@ class EmbeddedControllerHost:
         experiment is recorded, and ends ``BUDGET_EXHAUSTED`` without starting
         anything, which the returned handle reports.
         """
+        handle = await self._submit(spec)
+        assert handle is not None
+        return handle
+
+    async def _submit(
+        self,
+        spec: ExperimentSpec,
+        *,
+        experiment_id: ExperimentId | None = None,
+        request_id: ControllerRequestId | None = None,
+    ) -> ExperimentHandle | None:
+        """:meth:`submit`, for the experiment *experiment_id* and the daemon request *request_id*.
+
+        Validates, binds and compiles first, recording nothing; then admits
+        the experiment and the intent to start it in one transaction
+        (:meth:`~xaytune.storage.ControlPlaneRepository.admit_experiment`),
+        moving *request_id* to ``ACCEPTED`` in it; then issues the
+        submission. Returns ``None``, having written nothing, when
+        *request_id* is no longer ``PENDING``.
+        """
         compiler = self._compiler(spec.compiler.name)
         support = compiler.supports(spec.candidate)
         if not support:
@@ -460,24 +489,40 @@ class EmbeddedControllerHost:
         evaluation = None if spec.evaluation is None else self._bind_evaluation(spec.evaluation)
         planner = None if spec.planner is None else self._planner(spec.planner).spec
 
-        experiment = self._record_experiment(spec, compiler, runtime, evaluation, planner)
-        node = self._record_node(experiment, spec)
-        try:
-            run = self._record_run(node, spec.seed)
-            attempt_id = RunAttemptId.generate()
-            plan = self._plan(experiment, run, attempt_id, compiler)
-            attempt = RunAttempt(
-                id=attempt_id,
-                run_id=run.id,
-                attempt_number=1,
-                execution_fingerprint=training_execution_fingerprint(plan),
+        experiment = self._new_experiment(
+            spec, compiler, runtime, evaluation, planner, experiment_id or ExperimentId.generate()
+        )
+        node = self._new_node(experiment, spec)
+        run = self._new_run(node, spec.seed)
+        attempt_id = RunAttemptId.generate()
+        plan = self._plan(experiment, run, attempt_id, compiler, node=node)
+        attempt = RunAttempt(
+            id=attempt_id,
+            run_id=run.id,
+            attempt_number=1,
+            execution_fingerprint=training_execution_fingerprint(plan),
+        )
+        admission = self.repository.admit_experiment(
+            experiment,
+            node,
+            run,
+            attempt,
+            request_digest=plan.request_digest("submit"),
+            actor=_ACTOR,
+            request_id=request_id,
+        )
+        if admission is None:
+            return None
+        if admission.operation is not None:
+            assert admission.run is not None and admission.attempt is not None
+            await self._issue(
+                experiment.id,
+                admission.run.id,
+                admission.attempt.id,
+                admission.operation,
+                plan,
+                runtime,
             )
-            attempt, operation = await self._create_attempt(attempt, plan.request_digest("submit"))
-        except BudgetExhaustedError as exhausted:
-            self.repository.exhaust_budget(experiment.id, reasons=exhausted.reasons, actor=_ACTOR)
-            return ExperimentHandle(experiment.id, self)
-
-        await self._issue(experiment.id, run.id, attempt.id, operation, plan, runtime)
         return ExperimentHandle(experiment.id, self)
 
     def _settled_for_planning(self, node: NodeOutcome) -> bool:
@@ -1311,6 +1356,7 @@ class EmbeddedControllerHost:
         *,
         directives: tuple[InterventionDirective, ...] | None = None,
         restore_action_id: str | None = None,
+        node: ExperimentNode | None = None,
     ) -> ResolvedExecutionPlan:
         """The attempt's execution plan, built from the durable record alone.
 
@@ -1325,9 +1371,11 @@ class EmbeddedControllerHost:
         recorded ``numerical_recovery`` policy, for a compiled plan with managed
         Native checkpoints -- the only worker that honours it. *directives* and
         *restore_action_id* are given only for a successor not yet recorded;
-        otherwise both are read from the record.
+        otherwise both are read from the record. *node* is given only for a
+        submission not yet admitted, whose node is not yet recorded.
         """
-        node = self.repository.aggregates.load_node(str(run.node_id))
+        if node is None:
+            node = self.repository.aggregates.load_node(str(run.node_id))
         assert experiment.runtime is not None and experiment.artifact_root is not None
         assert run.seed is not None
         if isinstance(attempt, RunAttemptId):
@@ -2270,16 +2318,18 @@ class EmbeddedControllerHost:
         )
         return resolved.model_copy(update={"evaluator": bound})
 
-    def _record_experiment(
+    def _new_experiment(
         self,
         spec: ExperimentSpec,
         compiler: TrainerCompiler,
         runtime: RuntimeBackend,
         evaluation: EvaluationSpec | None,
-        planner: PlannerSpec | None = None,
+        planner: PlannerSpec | None,
+        experiment_id: ExperimentId,
     ) -> Experiment:
-        experiment = Experiment(
-            id=ExperimentId.generate(),
+        """The experiment *spec* describes, not yet recorded."""
+        return Experiment(
+            id=experiment_id,
             name=spec.name,
             objective=spec.objective,
             controller_host=self._reference,
@@ -2297,6 +2347,45 @@ class EmbeddedControllerHost:
             evaluation=evaluation,
             planner=planner,
         )
+
+    def _new_node(self, experiment: Experiment, spec: ExperimentSpec) -> ExperimentNode:
+        """The submitted candidate's root node, not yet recorded."""
+        return ExperimentNode(
+            id=ExperimentNodeId.generate(),
+            experiment_id=experiment.id,
+            hypothesis=spec.hypothesis,
+            reason="submitted",
+            candidate=CandidateSpecSnapshot(candidate=spec.candidate),
+            candidate_fingerprint=spec.candidate.candidate_fingerprint(),
+            created_by=_ACTOR,
+        )
+
+    def _new_run(self, node: ExperimentNode, seed: int) -> Run:
+        """The submitted candidate's first run, not yet recorded."""
+        return Run(
+            id=RunId.generate(),
+            node_id=node.id,
+            experiment_id=node.experiment_id,
+            seed=seed,
+            replicate=1,
+            candidate_fingerprint=node.candidate_fingerprint,
+        )
+
+    # Recording outside admission, one aggregate per commit: for a caller
+    # composing a record by hand. submit() never does -- it admits the whole
+    # submission in one transaction.
+
+    def _record_experiment(
+        self,
+        spec: ExperimentSpec,
+        compiler: TrainerCompiler,
+        runtime: RuntimeBackend,
+        evaluation: EvaluationSpec | None,
+        planner: PlannerSpec | None = None,
+    ) -> Experiment:
+        experiment = self._new_experiment(
+            spec, compiler, runtime, evaluation, planner, ExperimentId.generate()
+        )
         self.repository.create_experiment(experiment, actor=_ACTOR)
         return self.repository.transition_experiment(
             experiment.id,
@@ -2306,15 +2395,7 @@ class EmbeddedControllerHost:
         )
 
     def _record_node(self, experiment: Experiment, spec: ExperimentSpec) -> ExperimentNode:
-        node = ExperimentNode(
-            id=ExperimentNodeId.generate(),
-            experiment_id=experiment.id,
-            hypothesis=spec.hypothesis,
-            reason="submitted",
-            candidate=CandidateSpecSnapshot(candidate=spec.candidate),
-            candidate_fingerprint=spec.candidate.candidate_fingerprint(),
-            created_by=_ACTOR,
-        )
+        node = self._new_node(experiment, spec)
         self.repository.create_node(node, actor=_ACTOR)
         for status in _NODE_ACTIVATION:
             node = self.repository.transition_node(
@@ -2323,14 +2404,7 @@ class EmbeddedControllerHost:
         return node
 
     def _record_run(self, node: ExperimentNode, seed: int) -> Run:
-        run = Run(
-            id=RunId.generate(),
-            node_id=node.id,
-            experiment_id=node.experiment_id,
-            seed=seed,
-            replicate=1,
-            candidate_fingerprint=node.candidate_fingerprint,
-        )
+        run = self._new_run(node, seed)
         self.repository.create_run(run, actor=_ACTOR)
         return self.repository.transition_run(
             run.id, expected_revision=run.revision, new_status=RunStatus.ACTIVE, actor=_ACTOR

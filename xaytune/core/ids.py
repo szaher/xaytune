@@ -29,6 +29,7 @@ __all__ = [
     "ActionId",
     "ArtifactId",
     "CheckpointId",
+    "ControllerRequestId",
     "DecisionId",
     "PolicyDecisionId",
     "EvaluationAttemptId",
@@ -296,6 +297,18 @@ class EventId(TypedId):
 
     __slots__ = ()
     prefix = "event_"
+
+
+class ControllerRequestId(TypedId):
+    """Identifies a request handed to a local daemon controller (ADR-004 §3).
+
+    Minted by the client, before the request is written: it is the request's
+    idempotency key, so a client that retries after losing the answer names
+    the same request rather than creating a second.
+    """
+
+    __slots__ = ()
+    prefix = "creq_"
 
 
 class OperationId(TypedId):

@@ -14,7 +14,7 @@ import pytest
 from tests.test_storage.test_branching import GROW_2, GROW_4, _bound
 from tests.test_storage.test_planning_context import _evaluated, _rows
 from xaytune.core.refs import Actor
-from xaytune.core.state.status import ExperimentNodeStatus
+from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 from xaytune.experiment import EmbeddedControllerHost
 from xaytune.planning import PlannerConfigurationError, _provenance_for, require_proposed_by
 from xaytune.storage.control_plane import ProvenanceError
@@ -45,6 +45,25 @@ def test_the_host_branches_a_proposal_of_its_recorded_planner(tmp_path) -> None:
         assert child.status is ExperimentNodeStatus.PLANNED
         assert child.parent_ids == (node.id,)
         assert host.repository.aggregates.runs_for_node(str(child.id)) == ()
+
+    _scenario(tmp_path, check)
+
+
+def test_a_branched_child_with_no_run_is_training_not_failure_handling(tmp_path) -> None:
+    """node_A COMPLETED/BRANCH + node_B PLANNED, no run: the next work is realizing B."""
+
+    def check(host, experiment, node, planner, context, proposal):
+        assert host._result(experiment.id).next_stage == "planning"
+        child = host._materialize_candidate_proposal(experiment.id, proposal, actor=ACTOR)
+        assert host.repository.aggregates.runs_for_node(str(child.id)) == ()
+        result = host._result(experiment.id)
+        assert result.status is ExperimentStatus.ACTIVE
+        statuses = {outcome.node_id: outcome.status for outcome in result.nodes}
+        assert statuses == {
+            node.id: ExperimentNodeStatus.COMPLETED,
+            child.id: ExperimentNodeStatus.PLANNED,
+        }
+        assert result.next_stage == "training"
 
     _scenario(tmp_path, check)
 

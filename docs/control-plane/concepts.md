@@ -108,6 +108,8 @@ explicitly:
   None                 the experiment is terminal
   "decision"           a candidate is DECIDING: its decision was deferred
   "evaluation"         a trained candidate is unevaluated, or evaluating
+  "training"           an accepted candidate is PLANNED -- branched from a
+                       proposal, say -- and needs its first run
   "planning"           every candidate was rejected on its merits, and the
                        experiment is still ACTIVE: another candidate is needed
   "failure-handling"   training or evaluation failed or was cancelled

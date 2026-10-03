@@ -1286,6 +1286,10 @@ An alternative candidate creates a new node; an in-run scientific change records
 - **Boundaries.**
   - The node stops at `PLANNED`. `PLANNED → READY → ACTIVE`, run creation,
     compilation and submission are PR-026's.
+  - `ExperimentResult.next_stage` reports the new `"training"` stage for an
+    open experiment with a `PLANNED` node -- an accepted candidate that needs
+    its first run -- after action, decision and evaluation work and ahead of
+    `"planning"` and `"failure-handling"`.
   - No `max_runs` reservation or ledger entry: a run's quota is reserved only
     by `create_run()`, and a budget spent between branching and the first run
     is that run's `BudgetExhaustedError` to report.

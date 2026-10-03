@@ -692,7 +692,7 @@ class EmbeddedControllerHost:
 
         nodes: list[NodeOutcome] = []
         settled = True
-        trained = deciding = evaluating = False
+        trained = deciding = evaluating = planned = False
         awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
         approval_targets = set()
         for action in awaiting_approval:
@@ -746,6 +746,7 @@ class EmbeddedControllerHost:
                     )
                 )
             deciding = deciding or node.status is ExperimentNodeStatus.DECIDING
+            planned = planned or node.status is ExperimentNodeStatus.PLANNED
             nodes.append(
                 NodeOutcome(
                     node_id=node.id,
@@ -773,6 +774,12 @@ class EmbeddedControllerHost:
             next_stage = "decision"
         elif trained or evaluating:
             next_stage = "evaluation"
+        elif planned:
+            # An accepted candidate -- branched from a proposal, say -- is
+            # waiting for its first run. That is healthy work to do next, not
+            # a reason to plan another candidate, and not a failure: a PLANNED
+            # node has no run because nothing has realized it yet.
+            next_stage = "training"
         elif nodes and all(node.status in _SCIENTIFICALLY_SETTLED for node in nodes):
             if all(self._settled_for_planning(node) for node in nodes):
                 # Every candidate was evaluated and decided on its merits --

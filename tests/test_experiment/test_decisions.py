@@ -317,6 +317,7 @@ def test_the_host_decides_with_the_engine_it_is_given(tmp_path: Path) -> None:
 # ---- what next_stage says, pinned ----------------------------------------------------
 
 _PATHS: dict[ExperimentNodeStatus, tuple[ExperimentNodeStatus, ...]] = {
+    ExperimentNodeStatus.PLANNED: (ExperimentNodeStatus.PLANNED,),
     ExperimentNodeStatus.DECIDING: (
         ExperimentNodeStatus.PLANNED,
         ExperimentNodeStatus.READY,
@@ -444,7 +445,8 @@ def _next_stage(tmp_path: Path, nodes: tuple[Any, ...], experiment: ExperimentSt
     return asyncio.run(scenario())
 
 
-REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
+PLANNED, REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
+    ExperimentNodeStatus.PLANNED,
     ExperimentNodeStatus.REJECTED,
     ExperimentNodeStatus.FAILED,
     ExperimentNodeStatus.DECIDING,
@@ -478,6 +480,12 @@ REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
         ((REJECTED, DECIDING), ExperimentStatus.ACTIVE, "decision"),
         ((REJECTED,), ExperimentStatus.FAILED, None),
         ((DECIDING,), ExperimentStatus.CANCELLED, None),
+        ((COMPLETED, PLANNED), ExperimentStatus.ACTIVE, "training"),
+        ((REJECTED, PLANNED), ExperimentStatus.ACTIVE, "training"),
+        ((PLANNED,), ExperimentStatus.ACTIVE, "training"),
+        ((FAILED, PLANNED), ExperimentStatus.ACTIVE, "training"),
+        ((DECIDING, PLANNED), ExperimentStatus.ACTIVE, "decision"),
+        ((COMPLETED, PLANNED), ExperimentStatus.SUCCEEDED, None),
     ],
     ids=[
         "rejected-is-planning",
@@ -498,6 +506,12 @@ REJECTED, FAILED, DECIDING, CANCELLED, COMPLETED = (
         "a-deferral-beside-a-rejection-is-decision",
         "terminal-is-none",
         "terminal-is-none-even-while-deciding",
+        "a-planned-child-of-a-branch-is-training",
+        "a-planned-child-beside-a-rejection-is-training",
+        "planned-is-training",
+        "a-planned-candidate-is-training-even-beside-a-failure",
+        "a-deferral-comes-before-training",
+        "terminal-is-none-even-with-a-planned-node",
     ],
 )
 def test_next_stage_follows_what_the_record_says(

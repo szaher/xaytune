@@ -41,6 +41,7 @@ from xaytune.core.state.status import (
     RunAttemptStatus,
     RunStatus,
 )
+from xaytune.storage import write_transaction
 from xaytune.storage.control_plane import (
     BranchRefusedError,
     ControlPlaneRepository,
@@ -281,18 +282,19 @@ def test_a_child_of_two_parents_is_refused(repo) -> None:
     w = _planned(repo)
     other = repo.create_node(make_node(w["experiment"], fingerprint="second-parent"), actor=_ACTOR)
     proposal = w["proposal"]
-    child = repo.create_node(
-        ExperimentNode(
-            id=ExperimentNodeId.generate(),
-            experiment_id=w["experiment"].id,
-            parent_ids=(w["node"].id, other.id),
-            candidate=CandidateSpecSnapshot(candidate=proposal.candidate),
-            candidate_fingerprint=proposal.candidate_fingerprint,
-            branch_origin=CandidateBranchOrigin.of(proposal),
-            created_by=_ACTOR,
-        ),
-        actor=_ACTOR,
+    child = ExperimentNode(
+        id=ExperimentNodeId.generate(),
+        experiment_id=w["experiment"].id,
+        parent_ids=(w["node"].id, other.id),
+        candidate=CandidateSpecSnapshot(candidate=proposal.candidate),
+        candidate_fingerprint=proposal.candidate_fingerprint,
+        branch_origin=CandidateBranchOrigin.of(proposal),
+        created_by=_ACTOR,
     )
+    # Stored state no public path writes -- create_node() refuses an origin --
+    # inserted privately, to test that realization defends against it anyway.
+    with write_transaction(repo._connection):
+        repo.aggregates._insert_node(child)
     child = repo.transition_node(
         child.id,
         expected_revision=child.revision,
@@ -301,6 +303,25 @@ def test_a_child_of_two_parents_is_refused(repo) -> None:
     )
     error = _refused(repo, StorageError, child, *_first_run(child, w["source"]))
     assert "has 2 parents" in str(error)
+
+
+def test_generic_create_node_cannot_mint_a_branch_origin(repo) -> None:
+    """branch_origin is what the adaptive loop trusts to run a node: only branching issues it."""
+    w = _planned(repo)
+    proposal = w["proposal"]
+    forged = ExperimentNode(
+        id=ExperimentNodeId.generate(),
+        experiment_id=w["experiment"].id,
+        parent_ids=(w["node"].id,),
+        candidate=CandidateSpecSnapshot(candidate=proposal.candidate),
+        candidate_fingerprint=proposal.candidate_fingerprint,
+        branch_origin=CandidateBranchOrigin.of(proposal),
+        created_by=_ACTOR,
+    )
+    before = _rows(repo)
+    with pytest.raises(ProvenanceError, match="materialize_candidate_proposal"):
+        repo.create_node(forged, actor=_ACTOR)
+    assert _rows(repo) == before, "no node, edge or event"
 
 
 def test_a_first_run_is_replicate_one(repo) -> None:

@@ -718,12 +718,23 @@ class ControlPlaneRepository:
         another experiment, or already descends from this node is refused
         before anything is written.
 
+        A ``branch_origin`` is refused. It is repository-issued provenance --
+        proof that a proposal passed branching's admission, which the adaptive
+        loop trusts enough to run the node (PR-026) -- so only
+        :meth:`materialize_candidate_proposal` mints it.
+
         Raises:
             LineageError: If the node's parents would make the graph unsound.
+            ProvenanceError: If the node carries a ``branch_origin``.
         """
         _require_pristine(node, ExperimentNodeStatus.CREATED)
 
         _require_consistent_candidate(node)
+        if node.branch_origin is not None:
+            raise ProvenanceError(
+                f"node {node.id} carries a branch_origin; that is repository-issued "
+                f"provenance, minted only by materialize_candidate_proposal()"
+            )
 
         with write_transaction(self._connection):
             self.graph.validate_parents(node)

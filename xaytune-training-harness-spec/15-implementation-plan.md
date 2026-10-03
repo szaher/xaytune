@@ -1342,7 +1342,9 @@ Reference scenario in `18-mvp-reference-scenario.md`. As built:
   fingerprint again in the repository). A `PLANNED` node with no origin is
   left for whoever planned it; one whose origin names another planner or
   configuration is escalated. `created_by`, status or a planner name alone
-  never authorize a run.
+  never authorize a run. Because `branch_origin` now authorizes execution,
+  it is repository-issued: `create_node()` refuses one, and only
+  `materialize_candidate_proposal()` mints it.
 - **Seed.** A branched node's first run inherits the seed of its single
   parent's single successful training run, and records
   `Run.seed_origin = RunSeedOrigin(kind="parent-run", source_run_id)`.
@@ -1354,7 +1356,11 @@ Reference scenario in `18-mvp-reference-scenario.md`. As built:
 - **Revalidation.** Before any write, the recorded compiler (at its recorded
   version) must `supports()` the branched candidate; otherwise it is
   escalated with no run, attempt, reservation or effect.
-- **Atomic realization.** `realize_planned_node` writes, in one transaction:
+- **Atomic realization.** `realize_planned_node` re-checks the whole v1
+  seed contract inside its transaction -- one parent with exactly one run,
+  `SUCCEEDED` and seeded, named by the required `seed_origin`, same seed,
+  `replicate == 1` -- so a run added after the host's read is refused, not
+  silently chosen from. It writes, in one transaction:
   node `PLANNED → READY → ACTIVE`, `RunCreated` with the `max_runs`
   reservation, run `CREATED → ACTIVE`, the attempt with its `INTENDED`
   submit and its parallel-run slot -- each through its state machine with

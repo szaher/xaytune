@@ -497,6 +497,49 @@ def test_a_parent_with_two_runs_has_no_seed_to_inherit(tmp_path: Path) -> None:
     assert record["runs"][record["nodes"][1].id] == ()
 
 
+def test_a_parent_run_added_after_the_hosts_read_is_caught_by_the_transaction(
+    tmp_path: Path,
+) -> None:
+    """The host saw one parent run; by the commit there are two. Storage refuses, not the host."""
+    world = _world(tmp_path)
+    experiment_id = _resting_at_training(tmp_path, world)
+
+    def race(host: Any) -> None:
+        from xaytune.core.domain.run import Run
+        from xaytune.core.ids import RunId
+        from xaytune.core.refs import Actor
+
+        realize = host.repository.realize_planned_node
+
+        def second_run_first(node_id: Any, **kwargs: Any) -> Any:
+            node_a = sorted(
+                host.repository.aggregates.nodes_for_experiment(str(experiment_id)),
+                key=lambda n: n.created_at,
+            )[0]
+            host.repository.create_run(
+                Run(
+                    id=RunId.generate(),
+                    node_id=node_a.id,
+                    experiment_id=node_a.experiment_id,
+                    seed=SEED + 1,
+                    replicate=2,
+                    candidate_fingerprint=node_a.candidate_fingerprint,
+                ),
+                actor=Actor(type="system", id="another-writer"),
+            )
+            race.before = _rows(host.repository)  # type: ignore[attr-defined]
+            return realize(node_id, **kwargs)
+
+        host.repository.realize_planned_node = second_run_first
+
+    before, after, escalation, record = _continue(tmp_path, world, experiment_id, race)
+    assert escalation is not None and "has 2 runs" in escalation
+    assert after == race.before, "the realization wrote nothing"  # type: ignore[attr-defined]
+    node_b = record["nodes"][1]
+    assert node_b.status is ExperimentNodeStatus.PLANNED
+    assert record["runs"][node_b.id] == ()
+
+
 def test_a_branched_candidate_the_compiler_cannot_run_is_refused_before_any_effect(
     tmp_path: Path,
 ) -> None:

@@ -417,7 +417,10 @@ PolicyEngine currently governs ActionSpec, not arbitrary CandidateProposal.
 Candidate creation does not already have an Action-based governance contract.
 
 **PR-025/H07 must settle candidate-proposal governance before harness mutation
-execution.** A future `BranchExperiment` Action is one possible design, not a
+execution.** PR-025 settled the generic contract (spec 15, PR-025): the
+recorded planner, exact provenance, a fresh planning context, candidate and
+lineage validation, deduplication, a budget precheck and an explicit actor. H07
+decides what harness mutations add to it. A future `BranchExperiment` Action is one possible design, not a
 decision made here. Generated candidates still require validation, budget checks
 and whatever governance the generic branching contract defines. Search remains
 replaceable; both proposal paths use one controller, decision engine, experiment

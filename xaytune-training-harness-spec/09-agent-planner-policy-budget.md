@@ -222,6 +222,13 @@ Do not provide:
 
 ## 9. Decision recording
 
+**As of PR-025, a consumed `CandidateProposal` is persisted** on the node it
+creates (`ExperimentNode.branch_origin`): its versioned fingerprint, full
+provenance, mutation and typed evidence. That makes "why does this node exist,
+which planner and configuration, from which context, on what evidence"
+answerable from the record. Planning rounds themselves are still not
+persisted. What follows was the PR-024 position.
+
 **As of PR-024, nothing here is persisted yet.** Planners are pure and their
 output is unconsumed. Each proposal carries its own provenance: the planner's
 provider, name and version, the bound `PlannerSpec`, the planning-context

@@ -57,6 +57,7 @@ from xaytune.core.domain.planning import (
     PLANNING_CONTEXT_IDENTITY_VERSION,
     CandidateProposal,
     DecisionSummary,
+    EvidenceRef,
     NodeSummary,
     PlanningContext,
     Proposal,
@@ -80,6 +81,7 @@ __all__ = [
     "RuleBasedPlanner",
     "RuleBasedPlannerConfig",
     "bind_planner",
+    "require_proposed_by",
 ]
 
 
@@ -136,6 +138,33 @@ def _bound_spec(descriptor: PluginDescriptor, spec: PlannerSpec, config: FrozenD
 
 
 def _provenance(planner: Planner, context: PlanningContext) -> ProposalProvenance:
+    return _provenance_for(planner, context.input_fingerprint())
+
+
+def require_proposed_by(planner: Planner, proposal: CandidateProposal) -> None:
+    """Refuse *proposal* unless *planner*, exactly as bound, is what proposed it.
+
+    The controller-side half of branching's provenance check (PR-025): the
+    repository can verify the recorded spec, but only the process holding
+    the bound planner knows its real descriptor -- provider, plugin API
+    version -- so a proposal claiming another planner, version or
+    configuration is refused here, before the repository is asked.
+
+    Raises:
+        PlannerConfigurationError: Naming every field that disagrees.
+    """
+    expected = _provenance_for(planner, proposal.provenance.context_fingerprint)
+    actual = proposal.provenance
+    wrong = [
+        f"{name}: {getattr(actual, name)!r} is not {getattr(expected, name)!r}"
+        for name in type(expected).model_fields
+        if getattr(actual, name) != getattr(expected, name)
+    ]
+    if wrong:
+        raise PlannerConfigurationError(planner.spec.kind, tuple(wrong))
+
+
+def _provenance_for(planner: Planner, context_fingerprint: str) -> ProposalProvenance:
     descriptor, spec = planner.descriptor, planner.spec
     assert spec.version is not None, "a planner always runs under a bound spec"
     return ProposalProvenance(
@@ -156,7 +185,7 @@ def _provenance(planner: Planner, context: PlanningContext) -> ProposalProvenanc
             )
         ),
         context_identity_version=PLANNING_CONTEXT_IDENTITY_VERSION,
-        context_fingerprint=context.input_fingerprint(),
+        context_fingerprint=context_fingerprint,
     )
 
 
@@ -360,8 +389,8 @@ class RuleBasedPlanner:
                     ),
                     mutation=mutation.description,
                     evidence_refs=(
-                        f"decision:{parent.decision.decision_id}",
-                        f"evaluation-result:{parent.evaluation_result_id}",
+                        EvidenceRef(kind="decision", id=str(parent.decision.decision_id)),
+                        EvidenceRef(kind="evaluation-result", id=parent.evaluation_result_id),
                     ),
                     provenance=_provenance(self, context),
                 ),

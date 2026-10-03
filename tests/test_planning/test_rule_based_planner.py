@@ -190,10 +190,10 @@ def test_the_mvp_step_d_proposal() -> None:
         "to": 32,
     }
     (decision,) = parent.decisions
-    assert proposal.evidence_refs == (
-        f"decision:{decision.decision_id}",
-        f"evaluation-result:{parent.evaluations[0].evaluation_result_id}",
-    )
+    assert [(ref.kind, ref.id) for ref in proposal.evidence_refs] == [
+        ("decision", str(decision.decision_id)),
+        ("evaluation-result", str(parent.evaluations[0].evaluation_result_id)),
+    ]
     provenance = proposal.provenance
     assert (provenance.planner_provider, provenance.planner_name) == ("xaytune", "rule-based")
     assert provenance.planner_version == RuleBasedPlanner.descriptor.plugin_version

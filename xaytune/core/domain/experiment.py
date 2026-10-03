@@ -18,6 +18,7 @@ from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
+from xaytune.core.domain.planning import CandidateBranchOrigin
 from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.ids import (
@@ -187,6 +188,13 @@ class ExperimentNode(AggregateModel):
     )
 
     status: ExperimentNodeStatus = ExperimentNodeStatus.CREATED
+
+    branch_origin: CandidateBranchOrigin | None = None
+    """The planner proposal this node materializes, when it was branched (PR-025).
+
+    ``None`` for a node submitted directly, and for every node recorded
+    before branching existed. Set once, at creation, and never changed.
+    """
 
     evaluation_cycle: int = Field(default=0, ge=0)
     """Which evaluation round the node is in, or last was in; 0 before any.

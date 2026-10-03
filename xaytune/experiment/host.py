@@ -114,7 +114,7 @@ from xaytune.core.domain.oom_recovery import (
     PriorOOMResize,
 )
 from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarget
-from xaytune.core.domain.planning import settled_for_planning
+from xaytune.core.domain.planning import CandidateProposal, settled_for_planning
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.recovery import RecoveryRequest
 from xaytune.core.domain.run import Run, RunAttempt
@@ -173,7 +173,7 @@ from xaytune.experiment.handle import (
     RunOutcome,
 )
 from xaytune.experiment.spec import ExperimentSpec
-from xaytune.planning import PLANNERS, Planner
+from xaytune.planning import PLANNERS, Planner, require_proposed_by
 from xaytune.policy import DenyAllPolicy, PolicyEngine
 from xaytune.resilience import IncidentClassifier
 from xaytune.resilience.numerical import NumericalRecoveryPlanner
@@ -692,7 +692,7 @@ class EmbeddedControllerHost:
 
         nodes: list[NodeOutcome] = []
         settled = True
-        trained = deciding = evaluating = False
+        trained = deciding = evaluating = planned = False
         awaiting_approval, awaiting_execution = self.repository.resting_actions(str(experiment_id))
         approval_targets = set()
         for action in awaiting_approval:
@@ -746,6 +746,7 @@ class EmbeddedControllerHost:
                     )
                 )
             deciding = deciding or node.status is ExperimentNodeStatus.DECIDING
+            planned = planned or node.status is ExperimentNodeStatus.PLANNED
             nodes.append(
                 NodeOutcome(
                     node_id=node.id,
@@ -773,6 +774,12 @@ class EmbeddedControllerHost:
             next_stage = "decision"
         elif trained or evaluating:
             next_stage = "evaluation"
+        elif planned:
+            # An accepted candidate -- branched from a proposal, say -- is
+            # waiting for its first run. That is healthy work to do next, not
+            # a reason to plan another candidate, and not a failure: a PLANNED
+            # node has no run because nothing has realized it yet.
+            next_stage = "training"
         elif nodes and all(node.status in _SCIENTIFICALLY_SETTLED for node in nodes):
             if all(self._settled_for_planning(node) for node in nodes):
                 # Every candidate was evaluated and decided on its merits --
@@ -2423,6 +2430,32 @@ class EmbeddedControllerHost:
                 f"no planner of kind {spec.kind!r}; this host knows {sorted(self._planners)}"
             )
         return factory(spec)
+
+    def _materialize_candidate_proposal(
+        self, experiment_id: ExperimentId, proposal: CandidateProposal, *, actor: Actor
+    ) -> ExperimentNode:
+        """Branch: the proposal becomes a ``PLANNED`` child node, if it is still valid (PR-025).
+
+        The controller checks what only it can -- that the experiment's
+        recorded planner, bound on this host, is exactly what proposed it --
+        and the repository checks the rest in the transaction that writes the
+        node: freshness, lineage, evidence, duplication, budget. Nothing runs:
+        realizing the node is PR-026's.
+
+        Raises:
+            PlannerConfigurationError: If the bound planner did not make it.
+            ImplementationMismatchError: If the recorded planner is another version here.
+            BranchRefusedError, ProvenanceError, LineageError: From the repository.
+        """
+        experiment = self.repository.aggregates.load_experiment(str(experiment_id))
+        planner = self._recorded_planner(experiment)
+        if planner is None:
+            raise ProvenanceError(
+                f"experiment {experiment_id} records no planner; a proposal cannot be "
+                f"attributed to one"
+            )
+        require_proposed_by(planner, proposal)
+        return self.repository.materialize_candidate_proposal(experiment_id, proposal, actor=actor)
 
     def _recorded_planner(self, experiment: Experiment) -> Planner | None:
         """The planner the record names, at the version it names, or ``None`` if it names none.

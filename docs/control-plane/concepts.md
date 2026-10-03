@@ -108,6 +108,8 @@ explicitly:
   None                 the experiment is terminal
   "decision"           a candidate is DECIDING: its decision was deferred
   "evaluation"         a trained candidate is unevaluated, or evaluating
+  "training"           an accepted candidate is PLANNED -- branched from a
+                       proposal, say -- and needs its first run
   "planning"           every candidate was rejected on its merits, and the
                        experiment is still ACTIVE: another candidate is needed
   "failure-handling"   training or evaluation failed or was cancelled
@@ -465,7 +467,14 @@ proposes only; it never creates a node or runs anything.
 - It does not judge targets or constraints (the decision engine does), handle
   failures (recovery does) or reuse artifacts (ADR-017).
 
-Turning a proposal into a new node is not implemented yet.
+**Branching** turns a proposal into a node. The repository checks it in one
+transaction: the planner recorded for the experiment, configured exactly as
+recorded; the planning context unchanged since it was planned; the parents and
+the evidence it cites; that the candidate is new; and that no quota is
+exhausted. It then creates the child node in `PLANNED`, with the proposal's
+provenance kept on it as `branch_origin`. Repeating the same proposal returns
+the same node. A stale or conflicting proposal writes nothing. Branching
+creates no run; running the node is not implemented yet.
 
 ## Local checkpoint bundles
 
@@ -517,5 +526,5 @@ comparison across replicates), lm-eval generation tasks, reusing earlier
 evaluation results, carrying out a proposed action (other than
 cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
 TRL managed checkpoint capture/application,
-branching (turning a planner's proposal into a node), plateau detection,
+running a branched node (the adaptive loop), plateau detection,
 daemon hosting, and runtimes other than local.

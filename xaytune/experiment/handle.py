@@ -57,6 +57,7 @@ NextStage = Literal[
     "action-execution",
     "evaluation",
     "decision",
+    "training",
     "planning",
     "failure-handling",
 ]
@@ -71,6 +72,8 @@ None                 the experiment is terminal
                      every candidate is settled, but a STOP decision was not
                      applied (the experiment was paused) or a node has none
 "evaluation"         a trained candidate is unevaluated, or evaluating
+"training"           an accepted scientific candidate exists (PLANNED) and
+                     needs its first Run realization
 "planning"           the experiment is ACTIVE and every candidate was decided on
                      its merits -- rejected, or completed short of the target
                      (BRANCH): another candidate is needed to go on
@@ -88,7 +91,10 @@ node in ``DECIDING`` that the decision engine could not decide -- its
 candidates merely having ended: a failed or cancelled candidate is
 ``"failure-handling"``, even beside a decided one. ``REJECT`` and ``BRANCH``
 judge the candidate, not the experiment, and what comes next is another
-candidate: a planner's work.
+candidate: a planner's work. Once a planner's proposal is branched into a
+``PLANNED`` node, the next work is ``"training"`` -- realizing that node's
+first run -- not more planning, and not failure handling: the node has no run
+because nothing has realized it yet (PR-026), not because one failed.
 
 The two action stages come first: an action someone proposed and is waiting
 on is what comes next, before anything the candidates' states suggest -- a
@@ -140,7 +146,8 @@ class ExperimentResult(FrozenDomainModel):
         next_stage: Advisory controller work that would move the experiment
             on, if it could run -- never a status any aggregate is in:
             ``"decision"`` for a node in ``DECIDING`` the engine could not
-            decide, ``"planning"`` for an active experiment whose candidates
+            decide, ``"training"`` for an accepted ``PLANNED`` candidate
+            that needs its first run, ``"planning"`` for an active experiment whose candidates
             were all decided -- rejected, or completed short of the target --
             and which needs another,
             ``"evaluation"`` for a trained candidate nothing has evaluated (or

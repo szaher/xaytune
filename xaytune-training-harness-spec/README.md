@@ -136,9 +136,9 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-005 – ADR-009, ADR-011 – ADR-017 |
+  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-004, ADR-018 |
+  | Still `Proposed` | ADR-018 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.
@@ -151,8 +151,11 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   aggregates. ADR-008 was accepted on 2026-09-22, which unblocked band C.
   ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for
   band F and the legacy read-surface contract for PR-018. The remaining proposed
-  ADRs gate later work: ADR-004 band H and ADR-018 the separate harness track.
-  ADR-017 was accepted on 2026-10-01, unblocking band G.
+  ADR, ADR-018, gates the separate harness track.
+  ADR-017 was accepted on 2026-10-01, unblocking band G. ADR-004 was accepted on
+  2026-10-03, unblocking band H: it was expanded before acceptance with the
+  local daemon's SQLite request mailbox, atomic initial admission, flock
+  singleton and controlled shutdown, and the PR-027/PR-028 boundary.
 - `schemas/` — proposed YAML and JSON/Python schema examples, and the design
   drafts of migrations 001–003 with their rationale. They are not the schema:
   the shipped migrations are `xaytune/storage/migrations/001`–`006` (core

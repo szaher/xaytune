@@ -90,6 +90,69 @@ process then:
 - **escalates** with `ReconciliationEscalatedError` when the record cannot
   safely answer, for example a workload that ended with no recorded outcome.
 
+Initial submission is **one transaction**: the experiment, its root node,
+the first run and attempt, their budget reservations and the `INTENDED`
+submit commit together before the runtime is called. A crash leaves either
+nothing or an intent that `attach()` resolves, never half a submission.
+
+## The local daemon
+
+`EmbeddedControllerHost` stops driving an experiment when its process exits.
+The local daemon is a persistent controller process over one state database
+(ADR-004):
+
+```bash
+python -m xaytune.daemon --state state.db --config myproject.xaytune_config:create_config
+```
+
+It runs in the foreground; supervise it with systemd, launchd, a container or
+tmux. `--config` names a factory returning a `DaemonConfig` with every
+implementation the controller uses -- compilers, runtimes, evaluators,
+planners, decision engine, policy, checkpoint manager, recovery request. The
+daemon never falls back to the embedded host's defaults, and since the
+decision engine is not yet recorded with the experiment, keeping it the same
+across daemon restarts is up to you.
+
+The process is `xaytune.daemon.LocalDaemonControllerServer`.
+
+**The database is the mailbox.** A client commits a request and may exit:
+
+```python
+from xaytune.daemon import DaemonClient
+
+with DaemonClient("state.db") as client:
+    request = client.submit(spec)          # durable: handed off
+    done = await client.wait_for_handoff(request.id)
+    experiment = client.aggregates.load_experiment(str(request.experiment_id))
+```
+
+A request is idempotent by its id: to retry one, `client.send()` the same
+request again. A submission moves `PENDING → ACCEPTED → COMPLETED`, where
+`ACCEPTED` commits in the same transaction as the experiment it admits and
+`COMPLETED` means the handoff is done, not the experiment. A spec the daemon
+cannot run -- an unknown compiler, an invalid spec -- ends `FAILED` with
+nothing admitted. `client.attach(experiment_id)` asks the daemon to adopt an
+experiment already in the record. `DaemonClient` returns requests, not
+`ExperimentHandle`s; a handle over the daemon, with cancellation and proposals
+sent as requests, comes with the CLI (PR-029).
+
+A request is `FAILED` only for a definitive refusal of the request itself. An
+unexpected error -- a plugin bug, a busy database -- leaves it `PENDING`, and
+the daemon tries it again on its next look.
+
+**One daemon per database.** The daemon holds an exclusive `flock` on
+`<state.db>.lock` for its lifetime; a second exits with status 3. A daemon
+that dies releases it with the process.
+
+**Shutdown and restart.** SIGTERM or SIGINT stops dequeuing requests, stops
+observing, and releases the lock. Workloads keep running and nothing is
+recorded on their behalf. On restart the daemon finishes the requests it had
+not finished -- a submission admitted but not yet confirmed is reconciled,
+never submitted twice -- but it does **not** adopt experiments whose handoff
+already completed: send an `attach` request for those. Recovering every active
+experiment at startup, leases, and deadline or budget re-evaluation after
+downtime come later (PR-028).
+
 ## What `wait()` means
 
 `handle.wait()` returns when the controller is **quiescent**: every piece of
@@ -552,4 +615,5 @@ cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, c
 TRL managed checkpoint capture/application,
 recording the decision engine with the experiment, several proposals or
 parallel branches, plateau detection,
-daemon hosting, and runtimes other than local.
+daemon leases and recovering every active experiment when the daemon starts,
+and runtimes other than local.

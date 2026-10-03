@@ -10,6 +10,7 @@ from xaytune.core.ids import (
     ActionId,
     ArtifactId,
     CheckpointId,
+    ControllerRequestId,
     DecisionId,
     EvaluationAttemptId,
     EvaluationId,
@@ -24,6 +25,7 @@ from xaytune.core.ids import (
 
 ALL_ID_TYPES = [
     (ExperimentId, "exp_"),
+    (ControllerRequestId, "creq_"),
     (ExperimentNodeId, "node_"),
     (RunId, "run_"),
     (RunAttemptId, "attempt_"),

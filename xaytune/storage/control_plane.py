@@ -77,6 +77,7 @@ from xaytune.core.domain.budget import (
     budget_status,
     limits,
 )
+from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
 from xaytune.core.domain.decision import (
     Decision,
     DecisionContext,
@@ -174,6 +175,7 @@ from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import (
     ActionId,
+    ControllerRequestId,
     EvaluationAttemptId,
     EvaluationRunId,
     EventId,
@@ -221,8 +223,10 @@ from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
 from xaytune.storage.recovery_actions import RecoveryActionBindingStore
 from xaytune.storage.recovery_execution import RecoveryExecutionReceiptStore
 from xaytune.storage.repository import AggregateStore
+from xaytune.storage.requests import ControllerRequestStore
 
 __all__ = [
+    "AdmissionRefusedError",
     "ApprovalConflictError",
     "ApprovalError",
     "BranchRefusedError",
@@ -230,6 +234,7 @@ __all__ = [
     "CancellationNotGovernedError",
     "ControlPlaneRepository",
     "DecisionConflictError",
+    "ExperimentAdmission",
     "EvaluationReconciliation",
     "InterventionNotAuthorizedError",
     "ProvenanceError",
@@ -382,6 +387,15 @@ class CancellationSagaRequiredError(StorageError):
 
 class ProvenanceError(StorageError):
     """A record would attribute something to a producer that did not make it."""
+
+
+class AdmissionRefusedError(StorageError):
+    """A submission that cannot be admitted as given, however often it is retried.
+
+    The request it names is for another experiment or another kind, its
+    payload is not the spec the submission was derived from, or the
+    experiment id is already taken (ADR-004 §4).
+    """
 
 
 class BranchRefusedError(StorageError):
@@ -649,6 +663,23 @@ def _require_result_of_run(result: EvaluationResult, run: EvaluationRun) -> None
 
 
 @dataclass(frozen=True)
+class ExperimentAdmission:
+    """What :meth:`ControlPlaneRepository.admit_experiment` committed, in one transaction.
+
+    ``run``, ``attempt`` and ``operation`` are ``None`` when the budget had
+    nothing left for the first run: the experiment was admitted and ended
+    ``BUDGET_EXHAUSTED`` with no effect, for ``exhausted`` reasons.
+    """
+
+    experiment: Experiment
+    node: ExperimentNode
+    run: Run | None
+    attempt: RunAttempt | None
+    operation: RuntimeOperation | None
+    exhausted: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class _BoundRecoveryProposal:
     """A recovery decision's Action binding, checked and written with the Action.
 
@@ -687,6 +718,7 @@ class ControlPlaneRepository:
         self.intervention_directives = InterventionDirectiveStore(connection)
         self.numerical_recovery_executions = NumericalRecoveryExecutionStore(connection)
         self.graph = ExperimentGraph(connection)
+        self.controller_requests = ControllerRequestStore(connection)
 
     # ---- ADR-005 §3 ----------------------------------------------------
 
@@ -776,6 +808,264 @@ class ControlPlaneRepository:
             actor,
             destinations,
         )
+
+    # ---- initial admission and the daemon mailbox (ADR-004 §3-§4) ------------
+
+    def admit_experiment(
+        self,
+        experiment: Experiment,
+        node: ExperimentNode,
+        run: Run,
+        attempt: RunAttempt,
+        *,
+        request_digest: str,
+        actor: Actor,
+        request_id: ControllerRequestId | str | None = None,
+        submitted_digest: str | None = None,
+        destinations: tuple[str, ...] = (),
+    ) -> ExperimentAdmission | None:
+        """Admit a submitted experiment and the intent to start it, in one commit (ADR-004 §4).
+
+        Validation, binding and compilation happen before this; what it
+        records is everything a restart needs to carry the submission on:
+
+        ```text
+        the request, if any, is a submit for this
+          experiment, of exactly this spec          else AdmissionRefusedError
+        it is still PENDING                         else None: it moved on
+        experiment CREATED → ACTIVE
+        root node CREATED → PLANNED → READY → ACTIVE
+        its first run CREATED → ACTIVE, max_runs reserved
+        attempt 1, parallel-run slot, submit INTENDED
+        the request PENDING → ACCEPTED
+        ```
+
+        A budget with no run left for the first run admits the experiment and
+        ends it ``BUDGET_EXHAUSTED`` in the same commit, with no run and no
+        effect. The runtime is called only after this commits; a crash after
+        it leaves an ``INTENDED`` operation, which reconciliation resolves
+        (ADR-013), and a crash before it leaves nothing but the request.
+
+        *submitted_digest* is the canonical digest of the ``ExperimentSpec``
+        the aggregates were derived from
+        (:meth:`~xaytune.experiment.ExperimentSpec.submission_payload`), and is
+        required with *request_id*: the request is accepted only for the spec
+        it carries, so a request can never be marked ``ACCEPTED`` for an
+        experiment derived from anything else.
+
+        Returns:
+            What was admitted -- or ``None`` if the request is no longer
+            ``PENDING``: it was admitted, or failed, before; nothing is written.
+
+        Raises:
+            AggregateNotFoundError: If *request_id* names no request.
+            AdmissionRefusedError: If the request is another kind, for another
+                experiment or of another spec, or the experiment already
+                exists. Nothing is written.
+            StorageError: If the aggregates are not one fresh submission -- a
+                root node of this experiment, a run of it with no seed origin,
+                that run's first attempt.
+            ValueError: If *request_id* is given without *submitted_digest*.
+        """
+        if request_id is not None and submitted_digest is None:
+            raise ValueError("admitting a controller request needs the submitted spec's digest")
+        _require_pristine(experiment, ExperimentStatus.CREATED)
+        _require_pristine(node, ExperimentNodeStatus.CREATED)
+        _require_pristine(run, RunStatus.CREATED)
+        _require_pristine(attempt, RunAttemptStatus.CREATED)
+        _require_consistent_candidate(node)
+        problems = [
+            problem
+            for problem, broken in (
+                ("the node is not the experiment's", node.experiment_id != experiment.id),
+                ("the node is not a root", bool(node.parent_ids)),
+                ("the node carries a branch_origin", node.branch_origin is not None),
+                (
+                    "the run is not the node's",
+                    run.node_id != node.id or run.experiment_id != experiment.id,
+                ),
+                ("the run claims a seed origin", run.seed_origin is not None),
+                (
+                    "the attempt is not the run's first",
+                    attempt.run_id != run.id or attempt.attempt_number != 1,
+                ),
+            )
+            if broken
+        ]
+        if problems:
+            raise StorageError(f"not one fresh submission: {'; '.join(problems)}")
+
+        aggregates = self.aggregates
+        with write_transaction(self._connection):
+            request = None
+            if request_id is not None:
+                request = self.controller_requests.get(str(request_id))
+                if request is None:
+                    raise AggregateNotFoundError("ControllerRequest", str(request_id))
+                if request.kind != "submit" or request.experiment_id != experiment.id:
+                    raise AdmissionRefusedError(
+                        f"controller request {request.id} is a {request.kind} for experiment "
+                        f"{request.experiment_id}, not the submission of {experiment.id}"
+                    )
+                if request.payload_digest != submitted_digest:
+                    raise AdmissionRefusedError(
+                        f"controller request {request.id} carries spec {request.payload_digest}; "
+                        f"the submission was derived from {submitted_digest}"
+                    )
+                if request.state is not ControllerRequestState.PENDING:
+                    return None
+            if aggregates.get_experiment(str(experiment.id)) is not None:
+                raise AdmissionRefusedError(f"experiment {experiment.id} is already recorded")
+
+            aggregates._insert_experiment(experiment)
+            self._emit(experiment, "ExperimentCreated", str(experiment.id), actor, destinations)
+            experiment = self._apply_transition(
+                "Experiment",
+                str(experiment.id),
+                experiment.revision,
+                ExperimentStatus.ACTIVE,
+                aggregates.get_experiment,
+                aggregates._update_experiment,
+                actor,
+                None,
+                destinations,
+            )
+            self.graph.validate_parents(node)
+            aggregates._insert_node(node)
+            self._emit(node, "NodeCreated", str(experiment.id), actor, destinations)
+            for status in (
+                ExperimentNodeStatus.PLANNED,
+                ExperimentNodeStatus.READY,
+                ExperimentNodeStatus.ACTIVE,
+            ):
+                node = self._apply_transition(
+                    "ExperimentNode",
+                    str(node.id),
+                    node.revision,
+                    status,
+                    aggregates.get_node,
+                    aggregates._update_node,
+                    actor,
+                    None,
+                    destinations,
+                )
+
+            admission: ExperimentAdmission
+            try:
+                self._require_budget(str(experiment.id), new_run=True)
+            except BudgetExhaustedError as exhausted:
+                experiment = self._exhaust(experiment, exhausted.reasons, actor, destinations)
+                admission = ExperimentAdmission(
+                    experiment, node, None, None, None, exhausted=exhausted.reasons
+                )
+            else:
+                operation = RuntimeOperation(
+                    id=OperationId.generate(),
+                    target=RuntimeOperationTarget(kind="training-attempt", id=str(attempt.id)),
+                    type="submit",
+                    request_digest=request_digest,
+                )
+                self._insert_run_with_reservation(run, actor, destinations)
+                active = self._apply_transition(
+                    "Run",
+                    str(run.id),
+                    run.revision,
+                    RunStatus.ACTIVE,
+                    aggregates.get_run,
+                    aggregates._update_run,
+                    actor,
+                    None,
+                    destinations,
+                )
+                stored = self._insert_training_attempt_with_intent(
+                    attempt, operation, actor, destinations
+                )
+                admission = ExperimentAdmission(experiment, node, active, attempt, stored)
+
+            if request is not None:
+                self.controller_requests._update(
+                    request.with_state(ControllerRequestState.ACCEPTED)
+                )
+        return admission
+
+    def record_controller_request(self, request: ControllerRequest) -> ControllerRequest:
+        """Commit a client's request to the daemon's mailbox: get-or-create by its id.
+
+        The client's write. Committed, the request is handed off: the client
+        may exit, and the daemon finds it.
+
+        Returns:
+            The recorded request -- the one already there, in whatever state it
+            has reached, if this id was recorded before with the same request.
+
+        Raises:
+            IdempotencyConflictError: If the id was recorded with a different
+                kind, experiment or payload.
+            ValueError: If *request* is not a new ``PENDING`` request.
+        """
+        if request.state is not ControllerRequestState.PENDING or request.revision != 0:
+            raise ValueError("a controller request is recorded PENDING, at revision 0")
+        with write_transaction(self._connection):
+            existing = self.controller_requests.get(str(request.id))
+            if existing is not None:
+                differing = existing.same_request(request)
+                if differing:
+                    raise IdempotencyConflictError(
+                        str(request.id), differing, kind="controller request"
+                    )
+                return existing
+            self.controller_requests._insert(request)
+        return request
+
+    def complete_controller_request(
+        self, request_id: ControllerRequestId | str, *, expected_revision: int
+    ) -> ControllerRequest:
+        """Mark a request's handoff done: submit()/attach() would have returned.
+
+        Raises:
+            AggregateNotFoundError: If no such request exists.
+            ConcurrentModificationError: If it moved since the caller read it.
+            InvalidTransitionError: If its kind does not allow the edge.
+        """
+        return self._move_request(
+            request_id, expected_revision, ControllerRequestState.COMPLETED, None
+        )
+
+    def fail_controller_request(
+        self,
+        request_id: ControllerRequestId | str,
+        *,
+        expected_revision: int,
+        error: FrozenDict,
+    ) -> ControllerRequest:
+        """Record a definitive failure before anything was admitted.
+
+        Only from ``PENDING``: an ``ACCEPTED`` submission has admitted an
+        experiment whose outcome is the operation journal's to settle, never
+        this request's (ADR-004 §3).
+        """
+        return self._move_request(
+            request_id, expected_revision, ControllerRequestState.FAILED, error
+        )
+
+    def _move_request(
+        self,
+        request_id: ControllerRequestId | str,
+        expected_revision: int,
+        new_state: ControllerRequestState,
+        error: FrozenDict | None,
+    ) -> ControllerRequest:
+        with write_transaction(self._connection):
+            request = self.controller_requests.get(str(request_id))
+            if request is None:
+                raise AggregateNotFoundError("ControllerRequest", str(request_id))
+            if request.revision != expected_revision:
+                raise ConcurrentModificationError(
+                    "ControllerRequest", str(request_id), expected_revision
+                )
+            moved = request.with_state(new_state, error=error)
+            self.controller_requests._update(moved)
+        return moved
 
     def transition_experiment(
         self,
@@ -2646,18 +2936,29 @@ class ControlPlaneRepository:
                 return False
             if self._live_attempts(str(experiment_id)):
                 return False
-            moved = experiment.with_status(ExperimentStatus.BUDGET_EXHAUSTED)
-            self.aggregates._update_experiment(moved)
-            self._emit(moved, "ExperimentStatusChanged", str(moved.id), actor, destinations)
-            self._emit(
-                moved,
-                "BudgetExhausted",
-                str(moved.id),
-                actor,
-                destinations,
-                extra={"reasons": list(reasons)},
-            )
+            self._exhaust(experiment, reasons, actor, destinations)
         return True
+
+    def _exhaust(
+        self,
+        experiment: Experiment,
+        reasons: tuple[str, ...],
+        actor: Actor,
+        destinations: tuple[str, ...],
+    ) -> Experiment:
+        """:meth:`exhaust_budget`'s write, inside a transaction the caller already holds."""
+        moved = experiment.with_status(ExperimentStatus.BUDGET_EXHAUSTED)
+        self.aggregates._update_experiment(moved)
+        self._emit(moved, "ExperimentStatusChanged", str(moved.id), actor, destinations)
+        self._emit(
+            moved,
+            "BudgetExhausted",
+            str(moved.id),
+            actor,
+            destinations,
+            extra={"reasons": list(reasons)},
+        )
+        return moved
 
     def settle_budget(
         self,

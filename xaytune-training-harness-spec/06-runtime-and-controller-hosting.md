@@ -177,15 +177,37 @@ Lifecycle dies with the process.
 
 ### LocalDaemonControllerHost
 
-Persistent process on workstation/server.
+Persistent process on workstation/server (ADR-004; PR-027). Two halves: the
+process, `LocalDaemonControllerServer`, and its mailbox client,
+`DaemonClient`. The `ControllerHost` named here -- `submit()`/`attach()`
+returning an `ExperimentHandle` over the mailbox -- is PR-029's.
 
-Requirements:
+- **SQLite database**, which is also the command channel: a client commits a
+  durable `controller_requests` row (`submit` with a pre-minted
+  `ExperimentId`, or `attach`), idempotent by its client-generated id, and the
+  daemon polls for it. No socket, HTTP or gRPC listener; the database's
+  filesystem permissions are the security boundary.
+- **Atomic admission.** A submission's experiment, root node, first run,
+  first attempt, reservations and `INTENDED` submit are recorded, and the
+  request moved `PENDING → ACCEPTED`, in one transaction; the runtime is called
+  after it commits. The embedded host admits through the same transaction.
+- **Reconciliation after restart** of *unfinished requests* only: `PENDING`
+  ones are processed, `ACCEPTED` ones resumed through the existing attach
+  path. An experiment whose request is `COMPLETED` is driven again only by an
+  explicit `attach` request until PR-028's startup sweep.
+- **Foreground process**, `python -m xaytune.daemon --state … --config
+  module:factory`, with every implementation from the explicit configuration;
+  supervision is the operator's (systemd, launchd, a container, tmux).
+- **Controlled shutdown** on SIGTERM/SIGINT: stop dequeuing, cancel
+  observers, close runtimes and the database, release the lock last.
+  Workloads keep running; nothing synthetic is recorded.
+- **Singleton locking per state database**: an exclusive `fcntl.flock` on
+  `<resolved path>.lock`, held for the process lifetime; its content is
+  diagnostic only. POSIX only; no fallback.
 
-- SQLite database
-- experiment reconciliation after restart
-- PID/socket or local API
-- controlled shutdown
-- singleton locking per state database
+Experiments it admits record `ControllerHostRef(kind="local_daemon",
+id=<instance id>)`. Leases, the whole-database startup sweep and deadline or
+budget re-evaluation after downtime are PR-028.
 
 ### RemoteControllerHost
 

@@ -250,23 +250,17 @@ def test_the_first_evaluation_is_replicate_one_whatever_training_was(tmp_path: P
     """The evaluation's replicate numbering is its own, not training's."""
     from xaytune.core.domain.run import Run
     from xaytune.core.ids import RunId
-    from xaytune.core.state.status import RunStatus as Status
     from xaytune.experiment import EmbeddedControllerHost
-    from xaytune.experiment.host import _ACTOR
 
     class SecondReplicate(EmbeddedControllerHost):
-        def _record_run(self, node: Any, seed: int) -> Run:
-            run = Run(
+        def _new_run(self, node: Any, seed: int) -> Run:
+            return Run(
                 id=RunId.generate(),
                 node_id=node.id,
                 experiment_id=node.experiment_id,
                 seed=seed,
                 replicate=2,
                 candidate_fingerprint=node.candidate_fingerprint,
-            )
-            self.repository.create_run(run, actor=_ACTOR)
-            return self.repository.transition_run(
-                run.id, expected_revision=0, new_status=Status.ACTIVE, actor=_ACTOR
             )
 
     result, experiment, _ = _drive(tmp_path, _evaluated(tmp_path), host_class=SecondReplicate)

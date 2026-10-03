@@ -113,15 +113,15 @@ matter of record rather than of review:
 | ADR-015 — durable evaluation lifecycle | PR-005 evaluation tables |
 | ADR-016 — specs versus implementations | PR-005 experiment record |
 | ADR-017 — reuse policy | band G; accepted 2026-10-01 with v1 training-artifact reuse disabled |
+| ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary |
 
 ### Still Proposed, and what each actually blocks
 
-These remain `Proposed`. Each names the work it gates, so nothing is blocked
+This remains `Proposed`. It names the work it gates, so nothing is blocked
 that does not depend on it:
 
 | ADR | Blocks |
 |---|---|
-| ADR-004 — durable controller hosting | band H (daemon, kill/restart) |
 | ADR-018 — agent harness candidates | future H02–H12 harness track; does not gate Phase 5/6 |
 
 ### Superseded
@@ -151,7 +151,8 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** The remaining `Proposed`
-ones gate later bands: ADR-004 band H and ADR-018 the separate harness track.
+one, ADR-018, gates the separate harness track. ADR-004 was accepted on
+2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
 ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for band F
@@ -1425,6 +1426,34 @@ rather than one attempt.
 ### PR-027 — LocalDaemonControllerHost
 
 Persistent process, singleton locking per state database, controlled shutdown.
+Contract: ADR-004 (accepted before this PR). Delivered as the server half,
+`LocalDaemonControllerServer`, and the mailbox client `DaemonClient`; the
+`ControllerHost`-compatible `LocalDaemonControllerHost` is PR-029's (ADR-004
+§1).
+
+- **SQLite mailbox.** `controller_requests` (`submit`, `attach`), idempotent
+  by client-generated id; `PENDING → ACCEPTED → COMPLETED`, `PENDING →
+  FAILED`; no `PROCESSING` state. No socket, HTTP or gRPC.
+- **Atomic admission.** The submission's experiment, root node, run 1,
+  attempt 1, reservations and `INTENDED` submit -- and the request's
+  `ACCEPTED` -- commit in one transaction before the runtime is called. The
+  embedded host's `submit()` uses the same admission.
+- **Unfinished requests only** are recovered at daemon start: `PENDING`
+  processed, `ACCEPTED` resumed through `attach()`/ADR-013 reconciliation.
+  A `COMPLETED` request's experiment is not adopted again without an explicit
+  `attach` request.
+- **Singleton.** `fcntl.flock(LOCK_EX | LOCK_NB)` on `<resolved db>.lock`,
+  held for the process lifetime; diagnostic content only; POSIX only.
+- **Process.** Foreground `python -m xaytune.daemon --state … --config
+  module:factory`; every implementation from the explicit configuration.
+- **Provenance.** `ControllerHostRef(kind="local_daemon", id=<instance id>)`,
+  injected into the delegated embedded controller.
+- **Shutdown.** SIGTERM/SIGINT: stop dequeuing, cancel observers, close
+  runtimes and the database, release the lock last; workloads keep running.
+
+Out of scope: leases and heartbeats, the whole-database startup sweep,
+deadline/budget re-evaluation after downtime (PR-028); the user CLI (PR-029);
+HTTP/Unix-socket/gRPC; `DecisionEngineSpec` persistence; Windows locking.
 
 ### PR-028 — host leases and whole-controller startup reconciliation
 
@@ -1440,7 +1469,30 @@ Implement:
 
 Idempotent: running it twice changes nothing the first run did not.
 
-### PR-029 — CLI submit/attach/watch
+### PR-029 — LocalDaemonControllerHost + CLI submit/attach/watch
+
+`LocalDaemonControllerHost`, the caller-side `ControllerHost` over the PR-027
+mailbox (ADR-004 §1), and the CLI built on it rather than on a second way of
+talking to the daemon:
+
+```text
+LocalDaemonControllerHost
+  submit(spec) -> ExperimentHandle
+  attach(id)   -> ExperimentHandle
+  approve-action, reject-action        host-level parity with the embedded host
+
+daemon-backed ExperimentHandle
+  status(), actions()                  record reads
+  wait(), events()                     record polling
+  cancel(), propose()                  explicit mailbox request kinds
+
+CLI   submit, attach, status/watch, events/results as appropriate
+```
+
+Every mutation is a request kind the daemon carries out; nothing runs a
+controller in the caller. `pause`/`resume` are **not** in PR-029: the current
+`ExperimentHandle` does not implement them, and they need their own durable
+design (pause semantics, runtime behaviour, transitions, reconciliation).
 
 Exit:
 

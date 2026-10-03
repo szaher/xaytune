@@ -210,9 +210,23 @@ Materialized SQLite state is authoritative.
 
 Events are the durable audit/provenance stream.
 
-## 10. Controller leases
+## 10. Controller requests and leases
 
-For LocalDaemon:
+**Requests (PR-027, ADR-004 §2–§4).** `controller_requests` is the local
+daemon's mailbox: `id` (client-generated, the idempotency key), `kind`
+(`submit` | `attach`), `state` (`PENDING`, `ACCEPTED`, `COMPLETED`, `FAILED`),
+`revision`, `experiment_id`, `payload_json` and `payload_digest` (immutable),
+`error_json`, `created_at`, `updated_at`. Triggers hold the allowed edges
+(`submit`: `PENDING → ACCEPTED → COMPLETED`, `PENDING → FAILED`; `attach`:
+`PENDING → COMPLETED | FAILED`) and require an `ACCEPTED` submission's
+experiment to exist. The `PENDING → ACCEPTED` edge commits in the same
+transaction as the experiment, node, run, attempt, reservations and `INTENDED`
+submit it admits.
+
+On one machine the daemon's singleton is an OS advisory lock, not a row
+(ADR-004 §5).
+
+**Leases (PR-028).** For LocalDaemon:
 
 ```text
 controller_id

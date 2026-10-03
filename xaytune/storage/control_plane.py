@@ -2386,8 +2386,9 @@ class ControlPlaneRepository:
           experiment's recorded planner, exactly      else ProvenanceError
         the experiment is ACTIVE                      else BranchRefusedError
         the run and attempt are new, the node's,
-          its first; an inherited seed is the
-          source run's, of the node's parent          else StorageError
+          its first, replicate 1; one parent with
+          one SUCCEEDED, seeded run, named as the
+          seed origin, whose seed the run has         else StorageError
         a run is left (max_runs), failures are not
           used up, a parallel-run slot is free        else BudgetExhaustedError /
                                                       CapacityUnavailableError
@@ -2465,7 +2466,23 @@ class ControlPlaneRepository:
     def _require_first_realization(
         self, node: ExperimentNode, run: Run, attempt: RunAttempt
     ) -> None:
-        """The run and attempt are new, the node's first, and an inherited seed is honest."""
+        """The v1 contract for a branched node's first run, nothing inferred.
+
+        ```text
+        the run and attempt are new; the run is the node's (and its first);
+          the attempt is the run's first
+        the node has exactly one parent, and that parent exactly one run
+        the new run names that run as its seed source (seed_origin required),
+          has its seed, and is replicate 1
+        the source run SUCCEEDED, with a seed
+        ```
+
+        The comparison the adaptive loop draws -- the child against its parent,
+        differing by the mutation and not by chance -- holds only under these;
+        a caller that would have to choose a parent or a run, or supply a
+        seed of its own, is refused rather than trusted. That the seed claimed
+        is honest is checked again, for any run, by ``_require_consistent_run``.
+        """
         _require_pristine(run, RunStatus.CREATED)
         _require_pristine(attempt, RunAttemptStatus.CREATED)
         problems = []
@@ -2475,19 +2492,43 @@ class ControlPlaneRepository:
             problems.append(f"node {node.id} already has a run")
         if attempt.run_id != run.id or attempt.attempt_number != 1:
             problems.append(f"attempt {attempt.id} is not run {run.id}'s first")
-        origin = run.seed_origin
-        if origin is not None:
-            source = self.aggregates.get_run(str(origin.source_run_id))
-            if source is None or source.node_id not in node.parent_ids:
+        if run.replicate != 1:
+            problems.append(f"run {run.id} is replicate {run.replicate}, not 1")
+        if len(node.parent_ids) != 1:
+            problems.append(
+                f"node {node.id} has {len(node.parent_ids)} parents; a first run inherits "
+                f"its seed from a single parent"
+            )
+        else:
+            (parent,) = node.parent_ids
+            parent_runs = self.aggregates.runs_for_node(str(parent))
+            if len(parent_runs) != 1:
                 problems.append(
-                    f"seed source run {origin.source_run_id} is not a run of node "
-                    f"{node.id}'s parents"
+                    f"parent {parent} has {len(parent_runs)} runs; which one's seed to "
+                    f"inherit is not defined"
                 )
-            elif source.seed != run.seed:
-                problems.append(
-                    f"run {run.id} claims seed {run.seed} from run {source.id}, whose seed is "
-                    f"{source.seed}"
-                )
+            else:
+                (source,) = parent_runs
+                if run.seed_origin is None:
+                    problems.append(
+                        f"run {run.id} records no seed origin; a branched node's first run "
+                        f"inherits its parent run's seed"
+                    )
+                elif run.seed_origin.source_run_id != source.id:
+                    problems.append(
+                        f"run {run.id} names seed source {run.seed_origin.source_run_id}, not "
+                        f"parent {parent}'s run {source.id}"
+                    )
+                if source.status is not RunStatus.SUCCEEDED or source.seed is None:
+                    problems.append(
+                        f"parent run {source.id} is {source.status.value} with seed "
+                        f"{source.seed}; only a successful, seeded run's seed is inherited"
+                    )
+                elif run.seed != source.seed:
+                    problems.append(
+                        f"run {run.id} has seed {run.seed}, not parent run {source.id}'s "
+                        f"{source.seed}"
+                    )
         if problems:
             raise StorageError("; ".join(problems))
 
@@ -5549,9 +5590,15 @@ class ControlPlaneRepository:
         realization of its node's candidate, so a run claiming a different
         fingerprint is claiming to realize something the node never proposed.
 
+        An inherited seed is checked for honesty wherever a run is created:
+        the source run exists, is a run of one of the node's parents, and has
+        the seed claimed. Which source is *allowed* is stricter, and the
+        caller's: see :meth:`_require_first_realization`.
+
         Raises:
             AggregateNotFoundError: If the node does not exist.
-            StorageError: If the node's experiment or fingerprint disagrees.
+            StorageError: If the node's experiment, fingerprint or seed
+                provenance disagrees.
         """
         node = self.aggregates.get_node(str(run.node_id))
         if node is None:
@@ -5572,6 +5619,20 @@ class ControlPlaneRepository:
                 f"but its node proposes {node.candidate_fingerprint!r}: a run "
                 f"realizes its node's candidate, not a different one"
             )
+
+        origin = run.seed_origin
+        if origin is not None:
+            source = self.aggregates.get_run(str(origin.source_run_id))
+            if source is None or source.node_id not in node.parent_ids:
+                raise StorageError(
+                    f"run {run.id} inherits its seed from run {origin.source_run_id}, which "
+                    f"is not a run of node {node.id}'s parents"
+                )
+            if source.seed != run.seed:
+                raise StorageError(
+                    f"run {run.id} claims seed {run.seed} from run {source.id}, whose seed is "
+                    f"{source.seed}"
+                )
 
     def _experiment_of_action_target(self, target: ActionTarget) -> str:
         """Resolve the experiment an action's target belongs to."""

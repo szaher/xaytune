@@ -31,7 +31,13 @@ Options:
 - SQLite polling
 - gRPC
 
-Recommendation: local HTTP/Unix socket after MVP; embedded first.
+**Resolved for the local v1 daemon (ADR-004 §2, 2026-10-03): SQLite polling.**
+The state database is the mailbox: a client commits a durable
+`controller_requests` row, the daemon polls for it. The request is as durable
+as the state it changes, and there is no second protocol to secure. A Unix
+socket or localhost HTTP may be added later as a transport over the same
+request semantics; gRPC is not needed for the local daemon. A remote
+controller's protocol remains open (§4).
 
 ## 4. Remote controller deployment
 
@@ -116,7 +122,7 @@ The global gate has been replaced with per-ADR gates in
 implementation; ADR-011 through ADR-017 are accepted; ADR-003 is superseded in
 substance by ADR-011.
 
-ADR-004 remains proposed, gating its dependent work.
+ADR-004 was accepted on 2026-10-03, before PR-027, unblocking band H.
 ADR-017 was accepted on 2026-10-01: v1 disables training artifact reuse, which
 unblocks band G. ADR-001 and ADR-007 were accepted because accepted ADRs already
 depend on them, and ADR-006's open reuse half was split into ADR-017 so no

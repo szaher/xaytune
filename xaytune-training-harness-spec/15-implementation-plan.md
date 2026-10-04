@@ -1612,9 +1612,14 @@ provider SDKs and HTTP clients out).
   canonical encoding.
 - **Fail closed.** Callers go through `invoke_agent_model()`. It refuses an
   adapter on an unsupported plugin API before asking. It wraps an adapter's
-  own exception in `AgentModelInvocationError` whose message names only the
-  exception's type -- SDK text can carry URLs, headers or keys -- keeping
-  the original as `__cause__`, which is never to be serialized. It refuses
+  own exception in `AgentModelInvocationError`: provider/adapter exception
+  text and chaining are discarded at the boundary (no `__cause__`, no
+  `__context__`), and only the exception type and the logical request
+  fingerprint cross it, since SDK text can carry URLs, headers or keys
+  (PR-030a). An adapter with a deliberately sanitized diagnostic raises
+  `AgentModelInvocationError` itself. PR-032 never persists or serializes
+  provider SDK exception objects, `__cause__`, `__context__`, traceback
+  locals or raw provider error payloads. It refuses
   the whole answer (`AgentModelOutputError`) if it is not an
   `AgentModelResponse`, if it reports a revision other than a pinned one (a
   missing reported revision is accepted; a more specific model name, an

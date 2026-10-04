@@ -649,8 +649,10 @@ a model through. An agent model only answers requests for structured output:
   conforms. Otherwise it raises `AgentModelOutputError`, listing every
   violation, and none of the answer is used. An answer reporting a revision
   other than the model's pinned `revision` is refused the same way. A model
-  failure raises `AgentModelInvocationError`, whose message names the
-  adapter's exception type but never repeats its text.
+  failure raises `AgentModelInvocationError`, which carries only the
+  adapter's exception type and the request fingerprint. The adapter's
+  exception, its text and its chain are discarded, so not even a traceback
+  shows them.
 - `request.fingerprint(model.descriptor.model)` identifies the logical
   request: the model, prompts, schema and generation parameters. Token usage,
   latency and provider request ids are not part of it.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from typing import Any
 
 import pytest
@@ -282,11 +283,26 @@ def test_an_adapter_returning_something_else_is_refused() -> None:
         invoke(RawProvider([]), request())
 
 
-def test_an_adapter_failure_is_an_invocation_error_carrying_its_cause() -> None:
+def test_an_adapter_failure_keeps_no_reference_to_the_adapters_exception() -> None:
     cause = ConnectionError("provider unreachable")
+    with pytest.raises(AgentModelInvocationError, match="ConnectionError$") as caught:
+        invoke(ScriptedAgentModel([cause]), request())
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_an_adapter_failure_traceback_never_exposes_provider_error_text() -> None:
+    secret = "Authorization: Bearer sk-live-0123456789abcdef"
+    cause = RuntimeError(f"POST https://user:pw@api.vendor.test/v1 failed; {secret}")
     with pytest.raises(AgentModelInvocationError) as caught:
         invoke(ScriptedAgentModel([cause]), request())
-    assert caught.value.__cause__ is cause
+    rendered = "".join(
+        traceback.format_exception(type(caught.value), caught.value, caught.value.__traceback__)
+    )
+    assert "RuntimeError" in rendered
+    assert "sk-live" not in rendered
+    assert "api.vendor.test" not in rendered
+    assert "user:pw" not in rendered
 
 
 def test_an_adapter_failure_message_names_the_type_and_never_the_text() -> None:

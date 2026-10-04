@@ -1,10 +1,10 @@
-"""LocalDaemonControllerServer: the persistent local controller process (PR-027, PR-028).
+"""LocalDaemonControllerServer: the persistent local controller process (PR-027-PR-029).
 
 The server side of the local daemon. It is not a ``ControllerHost``: callers
-hand it work through :class:`~xaytune.daemon.DaemonClient` and the request
-mailbox, and the caller-side ``LocalDaemonControllerHost`` -- ``submit()`` and
-``attach()`` returning an ``ExperimentHandle`` over that mailbox -- is PR-029's
-(ADR-004 §1).
+hand it work through the request mailbox -- with
+:class:`~xaytune.daemon.LocalDaemonControllerHost`, whose ``submit()`` and
+``attach()`` return an ``ExperimentHandle`` over it, or the lower-level
+:class:`~xaytune.daemon.DaemonClient` (ADR-004 §1).
 
 ```text
 acquire <db>.lock (flock)          another daemon holds it → refuse to start
@@ -23,6 +23,14 @@ poll controller_requests           renewing the lease every TTL/3
           ACCEPTED  admitted by an earlier session: attach(), which
                     reconciles its INTENDED submit (ADR-013); → COMPLETED
   attach  PENDING   attach(); → COMPLETED, or FAILED if it cannot be
+  cancel, propose-action, approve-action, reject-action
+          PENDING   record the intent the request names -- FAILED if that
+                    is refused, having written nothing -- then attach() and
+                    carry it on; → COMPLETED. Once the intent is recorded
+                    nothing fails the request: it stays PENDING to retry
+after each request and each swept experiment
+                    wait for the controller to come to rest on it, and
+                    record that rest for clients' wait()
 SIGTERM / SIGINT   stop dequeuing, cancel observers, close the runtimes,
                    stop renewing, expire the lease, release the flock last
 lease lost         the same, without touching the lease; LeaseLostError
@@ -40,6 +48,24 @@ from an epoch that is no longer current, or whose lease expired, raises
 wherever it is raised, in a mailbox request, an observer, recovery or the
 sweep, it stops the daemon: it no longer has authority over the database.
 While the lease is live an embedded host can read the database, not write it.
+
+**Every mutation is a request** (PR-029). A client cancels, proposes,
+approves and rejects by mailbox request, never by writing the record or
+calling a runtime itself. Each carries the identity of what it records -- the
+``cancel-experiment`` or proposed action's id, minted by the client, or the
+action it resolves -- so carrying it out again, after a crash or a retry,
+finds what the first attempt recorded. The intent is recorded first, and is
+the only step that can fail the request; the experiment is then attached, so
+the daemon observes the effects it causes and owns the experiment from then
+on, and only then are the effects carried out. A ``FAILED`` request has
+changed nothing, not even ownership.
+
+**Rest.** A client cannot run the controller's ``wait()``, and the record
+alone cannot tell an experiment at rest from one between two steps. So once
+the controller has nothing left it can do for an experiment, the daemon
+records that rest at the experiment's latest event
+(:meth:`~xaytune.storage.ControlPlaneRepository.record_controller_rest`); a
+client's ``wait()`` returns while that is still the latest event.
 
 **Restart.** Unfinished requests are carried over first -- ``PENDING`` ones
 processed, ``ACCEPTED`` ones resumed. Then every nonterminal experiment the
@@ -68,25 +94,39 @@ from pydantic import ValidationError
 
 from xaytune.compilation import UnsupportedCandidateError
 from xaytune.core.clock import utc_now
+from xaytune.core.domain.action import Action, ActionTarget, UnknownActionTypeError
+from xaytune.core.domain.actions import ActionPayloadError, UnsupportedActionError, spec_of
 from xaytune.core.domain.budget import UnsupportedBudgetError
-from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
+from xaytune.core.domain.controller_request import (
+    ControllerRequest,
+    ControllerRequestState,
+    MisdirectedRequestError,
+)
 from xaytune.core.domain.numerical_recovery import UnsupportedNumericalRecoveryError
-from xaytune.core.errors import XaytuneError
+from xaytune.core.errors import IdempotencyConflictError, XaytuneError
 from xaytune.core.ids import ExperimentId
 from xaytune.core.immutable import FrozenDict, thaw
-from xaytune.core.refs import ControllerHostRef
+from xaytune.core.refs import Actor, ControllerHostRef
 from xaytune.core.sqlite import connect
 from xaytune.daemon.config import DaemonConfig
 from xaytune.daemon.lock import StateDatabaseLock
 from xaytune.evaluation import UnsupportedEvaluationError
 from xaytune.experiment.host import (
+    ControllerNotRunningError,
     EmbeddedControllerHost,
     ImplementationMismatchError,
+    ReconciliationEscalatedError,
     UnknownImplementationError,
 )
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.planning import PlannerConfigurationError
-from xaytune.storage.control_plane import AdmissionRefusedError
+from xaytune.storage.control_plane import (
+    AdmissionRefusedError,
+    ApprovalConflictError,
+    ApprovalError,
+    CancellationInFlightError,
+    CancellationNotGovernedError,
+)
 from xaytune.storage.errors import AggregateNotFoundError
 from xaytune.storage.leases import (
     ControllerLease,
@@ -130,6 +170,39 @@ _ATTACH_REFUSALS: tuple[type[Exception], ...] = (
 """An attach that cannot succeed unchanged: no such experiment, or its
 recorded implementations are absent from this daemon or at other versions."""
 
+_ACTION_REFUSALS: tuple[type[Exception], ...] = (
+    AggregateNotFoundError,
+    UnknownImplementationError,
+    ImplementationMismatchError,
+    ValidationError,
+    MisdirectedRequestError,
+    IdempotencyConflictError,
+    CancellationInFlightError,
+    CancellationNotGovernedError,
+    UnknownActionTypeError,
+    ActionPayloadError,
+    UnsupportedActionError,
+    ApprovalError,
+    ApprovalConflictError,
+)
+"""The refusals that make a cancel, propose or approval request ``FAILED``.
+
+Raised only by the step that records the request's intent, which writes
+nothing when it raises: no such experiment or action, a runtime this daemon
+cannot judge a proposal against, a payload that is not an actor or a
+well-formed action, an action of another experiment, an id already recorded
+for something else, another cancellation in flight, a cancellation proposed
+as a governed action, a type or spec nothing registered accepts, an approval
+by a non-human, of an action not awaiting one, or that a human already
+resolved otherwise. Nothing after the intent is recorded -- the attach, the
+effects -- is caught here."""
+
+_ESCALATIONS: tuple[type[Exception], ...] = (
+    ReconciliationEscalatedError,
+    ControllerNotRunningError,
+)
+"""Why the controller's ``wait()`` stops short; recorded with the rest."""
+
 
 class LocalDaemonControllerServer:
     """A foreground controller process's work, over one state database.
@@ -170,6 +243,10 @@ class LocalDaemonControllerServer:
         self._controller: EmbeddedControllerHost | None = None
         self._lease: ControllerLease | None = None
         self._lost: LeaseLostError | None = None
+        # Experiments a request is being carried out for, whose rest must
+        # wait until it is; and the task waiting for each experiment's rest.
+        self._busy: set[str] = set()
+        self._resting: dict[str, asyncio.Task[None]] = {}
 
     @property
     def controller(self) -> EmbeddedControllerHost:
@@ -266,6 +343,11 @@ class LocalDaemonControllerServer:
             # running, and every uncertain effect stays in the journal. Only
             # then does the lease go, so nothing of this controller writes
             # once another may own the database.
+            resting = list(self._resting.values())
+            for task in resting:
+                task.cancel()
+            await asyncio.gather(*resting, return_exceptions=True)
+            self._resting.clear()
             if self._controller is not None:
                 await self._controller.close()
                 self._controller = None
@@ -346,6 +428,7 @@ class LocalDaemonControllerServer:
         for experiment_id in controller.repository.daemon_responsibilities():
             if stop is not None and stop.is_set():
                 break
+            self._busy.add(str(experiment_id))
             try:
                 controller._settle_ledger(experiment_id)
                 await controller.attach(experiment_id)
@@ -354,7 +437,10 @@ class LocalDaemonControllerServer:
             except Exception:
                 _LOG.exception("experiment %s could not be reconciled at startup", experiment_id)
                 continue
+            finally:
+                self._busy.discard(str(experiment_id))
             swept.append(experiment_id)
+            self._rest_when_settled(experiment_id)
         if swept:
             _LOG.info("xaytune daemon %s reconciled %d experiment(s)", self.instance_id, len(swept))
         return tuple(swept)
@@ -372,11 +458,15 @@ class LocalDaemonControllerServer:
         return len(requests)
 
     async def _process(self, request: ControllerRequest) -> None:
+        experiment_id = str(request.experiment_id)
+        self._busy.add(experiment_id)
         try:
             if request.kind == "submit":
                 await self._submit(request)
-            else:
+            elif request.kind == "attach":
                 await self._attach(request)
+            else:
+                await self._act(request)
         except (asyncio.CancelledError, LeaseLostError):
             raise
         except Exception:
@@ -384,6 +474,9 @@ class LocalDaemonControllerServer:
             # admitted experiment whose outcome the journal settles -- never
             # this request.
             _LOG.exception("controller request %s left %s", request.id, self._state_of(request))
+        finally:
+            self._busy.discard(experiment_id)
+        self._rest_when_settled(request.experiment_id)
 
     async def _submit(self, request: ControllerRequest) -> None:
         controller = self.controller
@@ -425,6 +518,129 @@ class LocalDaemonControllerServer:
                 current.id, expected_revision=current.revision
             )
 
+    async def _act(self, request: ControllerRequest) -> None:
+        """Carry out a cancel, propose-action, approve-action or reject-action request.
+
+        Record the intent the request names -- the only step whose refusal
+        fails it, and one that calls no runtime. Then attach the experiment,
+        so the daemon observes what follows and owns it, and carry the intent
+        on: issue a cancellation's effects, drive a recovery an approval
+        released. Anything that goes wrong after the intent is recorded
+        leaves the request ``PENDING``; repeating it finds the intent
+        already recorded, by the identity the request carries.
+        """
+        controller = self.controller
+        try:
+            carry_on = await self._record(request)
+        except _ACTION_REFUSALS as refusal:
+            if self._fail_if_pending(request, refusal):
+                return
+            raise
+        await controller.attach(request.experiment_id)
+        await carry_on()
+        current = self._current(request)
+        if current.state is ControllerRequestState.PENDING:
+            controller.repository.complete_controller_request(
+                current.id, expected_revision=current.revision
+            )
+
+    async def _record(self, request: ControllerRequest) -> Callable[[], Awaitable[Any]]:
+        """Record the intent *request* names; return what carries it on."""
+        controller = self.controller
+        payload = thaw(request.payload)
+        action_id = request.action_id
+        assert action_id is not None
+        if request.kind == "cancel":
+            controller._request_cancellation(
+                request.experiment_id, reason=payload["reason"], action_id=action_id
+            )
+            # Carried on from the saga as the record has it then -- the attach
+            # in between may have moved its operations -- replayed by its id.
+            return lambda: controller._cancel(
+                request.experiment_id, reason=payload["reason"], action_id=action_id
+            )
+        if request.kind == "propose-action":
+            proposed_by = Actor.model_validate(payload["proposed_by"])
+            proposed = Action(
+                id=action_id,
+                experiment_id=request.experiment_id,
+                type=payload["type"],
+                target=ActionTarget.model_validate(payload["target"]),
+                proposed_by=proposed_by,
+                reason=payload["reason"],
+                payload=payload["payload"],
+            )
+            await controller._propose(
+                request.experiment_id,
+                spec_of(proposed),
+                reason=payload["reason"],
+                proposed_by=proposed_by,
+                action_id=action_id,
+            )
+            return _nothing
+        approver = Actor.model_validate(payload["approver"])
+        action = controller.repository.actions.get(str(action_id))
+        if action is None:
+            raise AggregateNotFoundError("Action", str(action_id))
+        if action.experiment_id != request.experiment_id:
+            raise MisdirectedRequestError(
+                f"action {action_id} belongs to experiment {action.experiment_id}, "
+                f"not {request.experiment_id}"
+            )
+        if request.kind == "approve-action":
+            controller.repository.approve_action(
+                action_id, approver=approver, reason=payload["reason"]
+            )
+            return lambda: controller._carry_on_approval(action_id)
+        controller.repository.reject_action(action_id, approver=approver, reason=payload["reason"])
+        return lambda: controller._carry_on_rejection(
+            action_id, approver=approver, reason=payload["reason"]
+        )
+
+    def _rest_when_settled(self, experiment_id: ExperimentId) -> None:
+        """Make sure something will record the experiment's next rest.
+
+        A task already waiting for it will: its last look comes after
+        whatever was just started. Otherwise start one.
+        """
+        task = self._resting.get(str(experiment_id))
+        if task is not None and not task.done():
+            return
+        if task is not None and not task.cancelled() and task.exception() is not None:
+            # A lost lease, reported to the server already; retrieved here so
+            # it is not reported again as never retrieved.
+            _LOG.debug("rest of %s ended: %s", experiment_id, task.exception())
+        if self.controller.repository.aggregates.get_experiment(str(experiment_id)) is None:
+            return
+        self._resting[str(experiment_id)] = asyncio.ensure_future(self._rest(experiment_id))
+
+    async def _rest(self, experiment_id: ExperimentId) -> None:
+        """Wait until the controller has nothing left it can do for the experiment; record it.
+
+        The controller's own ``wait()``, then the record, with no await
+        between them: nothing this daemon does can start in between, so the
+        rest names exactly the state it waited for. Skipped while a request
+        for the experiment is being carried out, or the sweep is attaching it
+        -- it is halfway, not at rest -- and that work's end starts the next
+        wait.
+        """
+        controller = self.controller
+        escalation: dict[str, Any] | None = None
+        try:
+            await controller._wait(experiment_id)
+        except _ESCALATIONS as stopped:
+            escalation = {"type": type(stopped).__name__, "message": str(stopped)}
+        except (asyncio.CancelledError, LeaseLostError):
+            raise
+        except Exception:
+            _LOG.exception("could not wait for experiment %s to come to rest", experiment_id)
+            return
+        if str(experiment_id) in self._busy:
+            return
+        controller.repository.record_controller_rest(
+            experiment_id, controller_id=self.instance_id, escalation=escalation
+        )
+
     def _fail_if_pending(self, request: ControllerRequest, refusal: Exception) -> bool:
         """FAILED, if nothing was admitted for it -- it is still PENDING. Whether it was."""
         current = self._current(request)
@@ -448,6 +664,10 @@ class LocalDaemonControllerServer:
             return self._current(request).state.value
         except (XaytuneError, AssertionError, RuntimeError):
             return "unknown"
+
+
+async def _nothing() -> None:
+    """Nothing to carry on: the intent was all the request asked for."""
 
 
 async def _until(work: Awaitable[Any], stop: asyncio.Event) -> None:

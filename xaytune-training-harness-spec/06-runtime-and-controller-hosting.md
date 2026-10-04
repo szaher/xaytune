@@ -177,16 +177,26 @@ Lifecycle dies with the process.
 
 ### LocalDaemonControllerHost
 
-Persistent process on workstation/server (ADR-004; PR-027). Two halves: the
-process, `LocalDaemonControllerServer`, and its mailbox client,
-`DaemonClient`. The `ControllerHost` named here -- `submit()`/`attach()`
-returning an `ExperimentHandle` over the mailbox -- is PR-029's.
+Persistent process on workstation/server (ADR-004; PR-027-PR-029). The
+process is `LocalDaemonControllerServer`; the `ControllerHost` a caller uses
+is `LocalDaemonControllerHost` (PR-029), over the mailbox client
+`DaemonClient`. Its `submit()`/`attach()` return an `ExperimentHandle` whose
+reads come from the record and whose mutations are mailbox requests; the
+caller runs no controller, and the `xaytune submit`/`attach`/`status`/`watch`/
+`events`/`results`/`actions`/`cancel`/`approve`/`reject` commands are the same
+host on the command line.
 
 - **SQLite database**, which is also the command channel: a client commits a
-  durable `controller_requests` row (`submit` with a pre-minted
-  `ExperimentId`, or `attach`), idempotent by its client-generated id, and the
-  daemon polls for it. No socket, HTTP or gRPC listener; the database's
-  filesystem permissions are the security boundary.
+  durable `controller_requests` row -- `submit` with a pre-minted
+  `ExperimentId`, `attach`, and one kind per mutation: `cancel`,
+  `propose-action`, `approve-action`, `reject-action`, each carrying the id of
+  the action it records or resolves -- idempotent by its client-generated id,
+  and the daemon polls for it. No socket, HTTP or gRPC listener; the
+  database's filesystem permissions are the security boundary.
+- **Rest for clients' `wait()`** (PR-029): after each request and each swept
+  experiment, the daemon waits for its controller to come to rest on the
+  experiment and records that rest at the experiment's latest event; a client's
+  `wait()` returns while that is still the latest event.
 - **Atomic admission.** A submission's experiment, root node, first run,
   first attempt, reservations and `INTENDED` submit are recorded, and the
   request moved `PENDING → ACCEPTED`, in one transaction; the runtime is called
@@ -194,7 +204,7 @@ returning an `ExperimentHandle` over the mailbox -- is PR-029's.
 - **Reconciliation after restart**: *unfinished requests* first -- `PENDING`
   ones processed, `ACCEPTED` ones resumed through the existing attach path --
   then the startup sweep (PR-028): every nonterminal experiment a daemon
-  admitted, or adopted by a `COMPLETED` attach request, is attached and
+  admitted, or adopted by carrying out a request for it, is attached and
   reconciled from the record. `PAUSED` ones are swept and start nothing new.
 - **Foreground process**, `python -m xaytune.daemon --state … --config
   module:factory`, with every implementation from the explicit configuration;

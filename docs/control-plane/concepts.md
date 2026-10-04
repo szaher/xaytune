@@ -115,26 +115,57 @@ across daemon restarts is up to you.
 
 The process is `xaytune.daemon.LocalDaemonControllerServer`.
 
-**The database is the mailbox.** A client commits a request and may exit:
+**The database is the mailbox.** A caller never runs the controller. It
+uses `LocalDaemonControllerHost`, whose handles read the durable record and
+send every mutation to the daemon as a request it carries out:
 
 ```python
-from xaytune.daemon import DaemonClient
+from xaytune.core.refs import Actor
+from xaytune.daemon import LocalDaemonControllerHost
 
-with DaemonClient("state.db") as client:
-    request = client.submit(spec)          # durable: handed off
-    done = await client.wait_for_handoff(request.id)
-    experiment = client.aggregates.load_experiment(str(request.experiment_id))
+async with LocalDaemonControllerHost("state.db") as host:
+    handle = await host.submit(spec)       # admitted and issued by the daemon
+    await handle.status()                  # the record
+    result = await handle.wait()           # polls the record
+    await handle.cancel()                  # a cancel request
+    await host.approve_action(action_id, approver=Actor(type="human", id="ana"), reason="ok")
 ```
 
-A request is idempotent by its id: to retry one, `client.send()` the same
-request again. A submission moves `PENDING → ACCEPTED → COMPLETED`, where
-`ACCEPTED` commits in the same transaction as the experiment it admits and
-`COMPLETED` means the handoff is done, not the experiment. A spec the daemon
-cannot run -- an unknown compiler, an invalid spec -- ends `FAILED` with
-nothing admitted. `client.attach(experiment_id)` asks the daemon to adopt an
-experiment already in the record. `DaemonClient` returns requests, not
-`ExperimentHandle`s; a handle over the daemon, with cancellation and proposals
-sent as requests, comes with the CLI (PR-029).
+`submit()` returns once the daemon has admitted the experiment and issued its
+first run -- not once the experiment has finished -- and the caller may exit
+at any point after that, or before: a request is durable once sent. Later,
+`host.attach(experiment_id)` asks the daemon to adopt an experiment already in
+the record, and `host.handle(experiment_id)` is a handle to one it already
+owns, sending nothing. `handle.cancel()`, `handle.propose()`,
+`host.approve_action()` and `host.reject_action()` are requests too: the
+daemon records the intent, judges proposals with *its* policy and calls the
+runtime. A request the daemon refuses raises `ControllerRequestFailedError`
+with what it raised, having changed nothing.
+
+The same host is on the command line:
+
+```bash
+export XAYTUNE_STATE=state.db
+xaytune submit experiment.yaml            # prints the experiment id, and exits
+xaytune status <experiment-id>
+xaytune watch <experiment-id>             # events, until the daemon is at rest
+xaytune events <experiment-id> --follow
+xaytune results <experiment-id>           # the ExperimentResult as JSON
+xaytune actions <experiment-id>           # pending approvals among them
+xaytune approve <action-id> --reason "agreed"
+xaytune cancel <experiment-id>
+```
+
+Every request is idempotent by its id. Each mutating command prints its
+request id before sending it; if the command is killed, running it again with
+`--request-id` is the same request -- the same experiment, the same
+cancellation -- and is never carried out twice. A submission moves `PENDING →
+ACCEPTED → COMPLETED`, where `ACCEPTED` commits in the same transaction as the
+experiment it admits; every other request moves `PENDING → COMPLETED`, carrying
+the id of the action it records or resolves. `COMPLETED` means the handoff is
+done, not the experiment. A spec the daemon cannot run -- an unknown compiler,
+an invalid spec -- ends `FAILED` with nothing admitted. Underneath is
+`DaemonClient`, which writes and reads the mailbox itself.
 
 A request is `FAILED` only for a definitive refusal of the request itself. An
 unexpected error -- a plugin bug, a busy database -- leaves it `PENDING`, and
@@ -169,8 +200,9 @@ the lease before it starts.
 On restart the daemon first finishes the requests it had not finished -- a
 submission admitted but not yet confirmed is reconciled, never submitted
 twice. Then it **sweeps** every experiment it is responsible for that has not
-ended: those a daemon admitted, and those it adopted through an `attach`
-request. Each is reconciled from the record, exactly as `attach()` does: a
+ended: those a daemon admitted, and those it adopted by carrying out a
+request for them -- `attach`, or a cancellation, proposal or approval, each of
+which attaches the experiment once it has recorded its intent. Each is reconciled from the record, exactly as `attach()` does: a
 workload still running is adopted, not resubmitted, and control continues
 from where it stopped. An experiment an embedded host submitted, and nobody
 attached to a daemon, is left alone. A paused experiment is swept too, but only
@@ -213,6 +245,15 @@ explicitly:
   or was cancelled did not establish a result, so it leads to
   `"failure-handling"`, even beside a rejected one.
 - `nodes`: each candidate with its runs, attempts, artifacts and evaluations.
+
+Through the daemon, `wait()` cannot ask the controller: it reads the record.
+The record alone cannot tell an experiment at rest from one between two steps
+-- a trained candidate whose evaluation is about to begin looks settled for a
+moment -- so the daemon records each time its controller comes to rest on an
+experiment, stamped with the experiment's latest event. `wait()` returns once
+that is still the latest event and no request for the experiment is waiting,
+or once the experiment has ended. It raises what the daemon's controller
+raised, if it stopped short.
 
 ## Cancellation
 

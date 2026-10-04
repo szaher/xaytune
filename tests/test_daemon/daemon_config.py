@@ -12,6 +12,8 @@ named, as the daemon requires. ``XAYTUNE_TEST_FAULT`` injects a crash:
 
 ``XAYTUNE_TEST_LEASE_TTL`` sets the lease TTL in seconds, so a test that
 kills a daemon waits seconds, not the default 30, for its lease to expire.
+``XAYTUNE_TEST_POLICY=review`` makes every applicable proposal await a
+human's approval.
 """
 
 from __future__ import annotations
@@ -25,8 +27,9 @@ from tests.test_daemon.file_runtime import FileRuntime
 from xaytune.compilation.native import NativeCompiler
 from xaytune.daemon import DaemonConfig
 from xaytune.decision import ThresholdDecisionEngine
+from xaytune.experiment import PolicyVerdict
 from xaytune.planning import PLANNERS
-from xaytune.policy import DenyAllPolicy
+from xaytune.policy import DenyAllPolicy, RulePolicyEngine
 
 
 def create_config() -> DaemonConfig:
@@ -43,7 +46,11 @@ def create_config() -> DaemonConfig:
         evaluators={},
         planners=PLANNERS,
         decision_engine=ThresholdDecisionEngine(),
-        policy=DenyAllPolicy(),
+        policy=(
+            RulePolicyEngine(default=PolicyVerdict.REQUIRE_APPROVAL)
+            if os.environ.get("XAYTUNE_TEST_POLICY") == "review"
+            else DenyAllPolicy()
+        ),
         checkpoint_manager=None,
         recovery_request_for_incident=None,
         lease_ttl_seconds=float(os.environ.get("XAYTUNE_TEST_LEASE_TTL", "30")),

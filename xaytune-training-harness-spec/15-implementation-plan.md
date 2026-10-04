@@ -113,7 +113,7 @@ matter of record rather than of review:
 | ADR-015 — durable evaluation lifecycle | PR-005 evaluation tables |
 | ADR-016 — specs versus implementations | PR-005 experiment record |
 | ADR-017 — reuse policy | band G; accepted 2026-10-01 with v1 training-artifact reuse disabled |
-| ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04 |
+| ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
 
@@ -1509,34 +1509,77 @@ fencing tokens; the event actor rename; mailbox retry backoff.
 ### PR-029 — LocalDaemonControllerHost + CLI submit/attach/watch
 
 `LocalDaemonControllerHost`, the caller-side `ControllerHost` over the PR-027
-mailbox (ADR-004 §1), and the CLI built on it rather than on a second way of
-talking to the daemon:
+mailbox (ADR-004 §1, §9), and the CLI built on it rather than on a second way
+of talking to the daemon. As built:
 
 ```text
 LocalDaemonControllerHost
-  submit(spec) -> ExperimentHandle
-  attach(id)   -> ExperimentHandle
-  approve-action, reject-action        host-level parity with the embedded host
+  submit(spec) -> ExperimentHandle     submit request, until COMPLETED
+  attach(id)   -> ExperimentHandle     attach request, until COMPLETED
+  handle(id)   -> ExperimentHandle     no request: an experiment it owns
+  approve_action, reject_action        approve-action, reject-action requests
+  cancel(id, request_id=...)           what handle.cancel() sends, retryable
 
-daemon-backed ExperimentHandle
-  status(), actions()                  record reads
-  wait(), events()                     record polling
-  cancel(), propose()                  explicit mailbox request kinds
+daemon-backed ExperimentHandle         the embedded host's handle, over a
+  status(), actions(), events()        host protocol: record reads
+  wait()                               record polling, until the controller's
+                                       recorded rest is the latest event
+  cancel(), propose()                  cancel, propose-action requests
 
-CLI   submit, attach, status/watch, events/results as appropriate
+CLI   submit, attach, status, watch, events, results, actions, cancel,
+      approve, reject -- over that host, nothing else
 ```
 
+- **Mutation kinds.** `cancel`, `propose-action`, `approve-action`,
+  `reject-action`, each `PENDING → COMPLETED | FAILED` with exactly its
+  payload (migration 018 rebuilds `controller_requests` for the kind
+  `CHECK`). Each carries the identity of what it records or resolves -- a
+  client-minted `cancel-experiment` or proposed action id, or the action it
+  resolves -- so a crash between its intent and its effects, or a resend, is
+  finished rather than repeated. `FAILED` only for a refusal before anything
+  was recorded; the host's cancel, approve and reject are split into a
+  recording step and a carry-on step so the daemon can tell the two apart.
+- **Record, attach, carry on.** The daemon records the intent (the only
+  refusable step, calling no runtime), then attaches the experiment so it
+  observes the effects, then carries the intent on; after the intent nothing
+  fails the request. A `COMPLETED` request of any kind but `submit` counts as
+  adoption for the sweep, and a `FAILED` one adopted nothing.
+- **One Action per request.** A cancel request is carried out through the
+  Action it names or refused (`CancellationInFlightError`) -- never answered
+  with another cancellation in flight. `propose()` takes a `request_id` too,
+  reusing the recorded Action id: a lost answer is retried as the same
+  request, judged once. A daemon-backed `cancel()` beside another
+  cancellation joins it by a separate `attach` request -- adopting the
+  experiment and carrying that cancellation on -- and returns only if the
+  experiment is then cancelled or cancelling; otherwise it raises the
+  refusal.
+- **Rest.** A client cannot run the controller's `wait()`, and the record
+  cannot tell rest from the instant between two steps (a trained run whose
+  evaluation cycle is about to begin). After each request and swept
+  experiment the daemon awaits its controller's `wait()` and records a
+  `controller_rests` row at the experiment's latest event sequence, with any
+  escalation; a client's `wait()` returns once, in one snapshot, that is still
+  the latest event, no request for it is unfinished and the result is
+  quiescent -- or the experiment is terminal and settled.
+- **Retry.** Every mutating CLI command prints its request id before sending
+  it and takes `--request-id`; the host reuses the recorded experiment or
+  action id for a request id it has seen. A request waits in the mailbox when
+  no daemon runs; `--timeout` bounds the wait for its handoff.
+
 Every mutation is a request kind the daemon carries out; nothing runs a
-controller in the caller. `pause`/`resume` are **not** in PR-029: the current
-`ExperimentHandle` does not implement them, and they need their own durable
-design (pause semantics, runtime behaviour, transitions, reconciliation).
+controller or calls a runtime in the caller. `pause`/`resume` are **not** in
+PR-029: the current `ExperimentHandle` does not implement them, and they need
+their own durable design (pause semantics, runtime behaviour, transitions,
+reconciliation). No HTTP, socket or remote daemon; no LLM planner work.
 
-Exit:
+Exit (`tests/test_daemon/test_daemon_cli.py`, against a daemon process):
 
-- submit experiment
-- kill client
-- controller continues
-- reconnect and inspect
+- submit experiment from the CLI, which exits
+- kill a client mid-watch, and one mid-submission with no daemon running
+- controller continues; the killed submission is carried out once a daemon
+  starts, and retried by its request id without a second experiment
+- reconnect and inspect: watch, results, actions; approve a pending action;
+  cancel, with the runtime called by the daemon
 
 ---
 

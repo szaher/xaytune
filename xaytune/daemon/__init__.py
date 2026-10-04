@@ -1,19 +1,25 @@
-"""The local daemon: a controller process and its mailbox client (ADR-004; PR-027, PR-028).
+"""The local daemon: a controller process, and the caller's side of it (ADR-004; PR-027-PR-029).
 
 :class:`LocalDaemonControllerServer` is the persistent, foreground controller
 process over one SQLite state database, which is also its mailbox::
 
     python -m xaytune.daemon --state state.db --config myproject.xaytune_config:create_config
 
-:class:`DaemonClient` hands it work by committing a request, and reads the
-durable record. It is the v1 mailbox API, not a ``ControllerHost``: the
-caller-side ``LocalDaemonControllerHost``, whose ``submit()`` and ``attach()``
-return an ``ExperimentHandle`` over the same mailbox, is PR-029's:
+:class:`LocalDaemonControllerHost` is the ``ControllerHost`` a caller uses
+with it: ``submit()`` and ``attach()`` return an ``ExperimentHandle`` that
+reads the durable record, and every mutation -- submit, attach, cancel,
+propose, approve, reject -- is a mailbox request the daemon carries out. The
+caller runs no controller, and may exit at any point:
 
 ```python
-with DaemonClient("state.db") as client:
-    request = client.submit(spec)
+async with LocalDaemonControllerHost("state.db") as host:
+    handle = await host.submit(spec)         # admitted and issued by the daemon
+    result = await handle.wait()             # polls the record
 ```
+
+:class:`DaemonClient` is the mailbox underneath it. ``xaytune submit``,
+``attach``, ``status``, ``watch``, ``events``, ``results``, ``actions``,
+``cancel``, ``approve`` and ``reject`` are the same host on the command line.
 
 One daemon per database, by kernel lock, and one controller, by a durable
 lease whose epoch every controller write proves (PR-028); a restarted daemon
@@ -25,9 +31,11 @@ from xaytune.core.domain.controller_request import (
     ControllerRequest,
     ControllerRequestKind,
     ControllerRequestState,
+    MisdirectedRequestError,
 )
 from xaytune.daemon.client import DaemonClient
 from xaytune.daemon.config import DaemonConfig, DaemonConfigurationError, load_config
+from xaytune.daemon.host import ControllerRequestFailedError, LocalDaemonControllerHost
 from xaytune.daemon.lock import (
     DaemonAlreadyRunningError,
     StateDatabaseLock,
@@ -38,13 +46,16 @@ from xaytune.daemon.server import LocalDaemonControllerServer
 
 __all__ = [
     "ControllerRequest",
+    "ControllerRequestFailedError",
     "ControllerRequestKind",
     "ControllerRequestState",
     "DaemonAlreadyRunningError",
     "DaemonClient",
     "DaemonConfig",
     "DaemonConfigurationError",
+    "LocalDaemonControllerHost",
     "LocalDaemonControllerServer",
+    "MisdirectedRequestError",
     "StateDatabaseLock",
     "UnsupportedPlatformError",
     "load_config",

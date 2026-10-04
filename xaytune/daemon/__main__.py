@@ -7,7 +7,12 @@ a container or tmux. SIGTERM and SIGINT shut it down in a controlled way
 
 Exit status: 0 after a controlled shutdown; 2 for a configuration error; 3 when
 another daemon already holds the state database; 4 on a platform without
-``fcntl`` locking.
+``fcntl`` locking; 5 when the daemon lost its controller lease while serving
+-- another epoch owns the database, or its own lease expired unrenewed -- and
+stopped without writing anything more (ADR-004 §8).
+
+The lease TTL is the configuration's ``lease_ttl_seconds`` (default 30); it is
+not a command-line option.
 """
 
 from __future__ import annotations
@@ -26,10 +31,12 @@ from xaytune.daemon.lock import (
     require_locking,
 )
 from xaytune.daemon.server import LocalDaemonControllerServer
+from xaytune.storage.leases import LeaseLostError
 
 EXIT_CONFIGURATION = 2
 EXIT_ALREADY_RUNNING = 3
 EXIT_UNSUPPORTED_PLATFORM = 4
+EXIT_LEASE_LOST = 5
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -84,6 +91,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except UnsupportedPlatformError as exc:
         print(f"xaytune daemon: {exc}", file=sys.stderr)
         return EXIT_UNSUPPORTED_PLATFORM
+    except LeaseLostError as exc:
+        print(f"xaytune daemon: {exc}", file=sys.stderr)
+        return EXIT_LEASE_LOST
     return 0
 
 

@@ -350,8 +350,8 @@ def test_attaching_an_unknown_experiment_fails(tmp_path: Path) -> None:
         client.close()
 
 
-def test_a_restarted_daemon_adopts_only_what_it_is_asked_to(tmp_path: Path) -> None:
-    """COMPLETED handoffs are not swept on restart; an attach request adopts one."""
+def test_a_restarted_daemon_adopts_what_it_owns_without_being_asked(tmp_path: Path) -> None:
+    """A COMPLETED handoff is swept on restart: its workload adopted, not resubmitted."""
     client = DaemonClient(tmp_path / "state.db")
     root = tmp_path / "runtime"
 
@@ -364,18 +364,9 @@ def test_a_restarted_daemon_adopts_only_what_it_is_asked_to(tmp_path: Path) -> N
         finish(root, operation_id)
         (node,) = client.aggregates.nodes_for_experiment(str(request.experiment_id))
         (run,) = client.aggregates.runs_for_node(str(node.id))
-        watched = len(calls(root, "watch"))
+        before = _counts(client)
 
-        daemon = _daemon(tmp_path)
-        async with _serving(daemon):
-            await daemon.process_requests()
-            await asyncio.sleep(0.3)
-            assert len(calls(root, "watch")) == watched, "nothing adopted it"
-            assert client.aggregates.load_run(str(run.id)).status is RunStatus.ACTIVE
-
-            attach = client.attach(request.experiment_id)
-            done = await client.wait_for_handoff(attach.id, timeout=_TIMEOUT)
-            assert done.state is ControllerRequestState.COMPLETED
+        async with _serving(_daemon(tmp_path)):
             await _until(
                 lambda: client.aggregates.load_run(str(run.id)).status is RunStatus.SUCCEEDED
             )
@@ -383,6 +374,9 @@ def test_a_restarted_daemon_adopts_only_what_it_is_asked_to(tmp_path: Path) -> N
         assert attempt.status is RunAttemptStatus.SUCCEEDED
         assert len(calls(root, "submit")) == 1
         assert calls(root, "cancel") == []
+        after = _counts(client)
+        for table in ("experiments", "runs", "run_attempts", "runtime_operations"):
+            assert after[table] == before[table], table
 
     try:
         asyncio.run(scenario())

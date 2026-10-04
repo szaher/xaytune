@@ -109,7 +109,7 @@ def test_a_conforming_value_has_no_violations() -> None:
         ({"kind": "proposal", "rank": 1, "tags": ["a", "b", "c"]}, "at most 2 items"),
         ({"kind": "proposal", "rank": 1, "tags": ["a", 2]}, "$.tags[1]: expected string"),
         ({"kind": "proposal", "rank": 1, "tags": "a"}, "$.tags: expected array, got string"),
-        ({"kind": "proposal", "rank": 1, "note": ""}, "$.note: matches none of the 2"),
+        ({"kind": "proposal", "rank": 1, "note": ""}, "$.note: at least 1 characters, got 0"),
         ({"kind": "proposal", "rank": 1, "flag": 0}, "$.flag: expected boolean, got integer"),
         ({"kind": "proposal", "rank": 1, "nested": {"x": True}}, "$.nested.x: expected integer"),
         ({"kind": "proposal", "rank": 1, "nested": {"x": 3}}, "$.nested.x: must be one of"),
@@ -129,3 +129,44 @@ def test_enum_and_const_compare_by_type_not_python_equality() -> None:
     schema = FrozenDict(obj({"a": either}))
     assert schema_violations(schema, FrozenDict({"a": 1})) == ()
     assert schema_violations(schema, FrozenDict({"a": True})) == ("$.a: must be one of [1]",)
+
+
+UNION = obj(
+    {
+        "pick": {
+            "anyOf": [
+                {"type": "null"},
+                obj({"kind": {"type": "string", "const": "a"}, "n": {"type": "integer"}}, ["kind"]),
+                obj({"kind": {"type": "string", "const": "b"}, "s": {"type": "string"}}, ["kind"]),
+            ]
+        }
+    },
+    ["pick"],
+)
+
+
+@pytest.mark.parametrize(
+    ("pick", "violations"),
+    [
+        # the const discriminator names one alternative: its own violations are reported
+        ({"kind": "a", "n": "x"}, ("$.pick.n: expected integer, got string",)),
+        (
+            {"kind": "b", "s": 1, "n": 2},
+            ("$.pick: unexpected 'n'", "$.pick.s: expected string, got integer"),
+        ),
+        # nothing to go on, or several candidates: the value matches none
+        ({"kind": "c"}, ("$.pick: matches none of the 3 alternatives",)),
+        ("text", ("$.pick: matches none of the 3 alternatives",)),
+    ],
+)
+def test_a_failed_alternative_is_explained_when_the_value_says_which_it_meant(
+    pick: Any, violations: tuple[str, ...]
+) -> None:
+    assert schema_violations(FrozenDict(UNION), FrozenDict({"pick": pick})) == violations
+
+
+def test_a_value_meant_as_null_or_a_typed_scalar_is_explained_too() -> None:
+    schema = FrozenDict(
+        obj({"n": {"anyOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]}})
+    )
+    assert schema_violations(schema, FrozenDict({"n": 0})) == ("$.n: must be >= 1",)

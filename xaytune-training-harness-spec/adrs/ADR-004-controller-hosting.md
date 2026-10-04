@@ -2,7 +2,8 @@
 
 ## Status
 Accepted — 2026-10-03. §8 settled for PR-028 on 2026-10-04: the lease model,
-its fences, and the startup sweep.
+its fences, and the startup sweep. §3's mutation kinds and §9, the caller-side
+host, settled for PR-029 on 2026-10-04.
 
 Gates band H (spec 15 Phase 7): PR-027 the local daemon process, PR-028
 host leases and whole-controller startup reconciliation, PR-029 CLI
@@ -41,9 +42,11 @@ LocalDaemonControllerHost     ControllerHost over DaemonClient (PR-029)
 ```
 
 The server is not a `ControllerHost` -- it has no caller to return a handle
-to -- and `DaemonClient` is deliberately not one either: until PR-029 there
-is no handle whose `cancel()`, `propose()` or `wait()` could be honoured
-without a controller in the caller's process, which §6 forbids.
+to -- and `DaemonClient` is deliberately not one either: it returns requests.
+`LocalDaemonControllerHost` is the host, because PR-029 made every handle
+operation answerable without a controller in the caller's process, which §6
+forbids: reads from the record, mutations as request kinds (§3), `wait()`
+from the controller's recorded rest (§9).
 
 Primary API is `submit() -> ExperimentHandle`; `run()` is synchronous
 convenience. Every experiment records the host that admitted it as a
@@ -74,11 +77,41 @@ payload and its digest, and an error when it failed. Repeating an id with the
 same kind, experiment and payload is the same request; with anything else it is
 an idempotency conflict.
 
-Kinds in v1: `submit` (the payload is the `ExperimentSpec`; the client
-pre-mints the `ExperimentId`) and `attach` (names an existing experiment).
-This is not a generic command bus. A later mutating operation exposed through
-the daemon becomes an explicit request kind; a client never runs controller
-logic itself (§6).
+Kinds: `submit` (the payload is the `ExperimentSpec`; the client pre-mints
+the `ExperimentId`) and `attach` (names an existing experiment), from PR-027;
+and from PR-029 one kind per mutation a handle or host exposes:
+
+```text
+cancel           {action_id, reason}            the cancel-experiment Action's id
+propose-action   {action_id, type, target,      the Action as action_from_spec
+                  payload, reason, proposed_by}  builds it: the typed envelope
+approve-action   {action_id, approver, reason}  an action awaiting approval,
+reject-action    {action_id, approver, reason}  under the experiment it is of
+```
+
+This is not a generic command bus: every mutating operation exposed through
+the daemon is an explicit kind with exactly its payload, and a client never
+runs controller logic itself (§6). Each mutation kind carries the identity of
+what it records or resolves -- an action id the client mints, or the action
+it resolves, approved or rejected idempotently by the same human and reason --
+so carrying it out again, after a crash between its intent and its effects or
+a retried send, finds the first attempt's record and finishes it. That is why
+they need no `ACCEPTED`: a submission's admission is what names its
+experiment, but these name theirs from the start. A request is carried out
+through the Action it names or not at all: a cancellation request whose
+Action is not recorded while another cancellation of the experiment is in
+flight is refused (`CancellationInFlightError`), never answered with the
+other one -- so a request cannot mean one saga now and another after a
+restart. (Without an id, as an embedded caller asks, a second cancellation
+still joins the one in flight.)
+
+The daemon carries each out in order: **record the intent** -- the only step
+that can refuse it, and one that calls no runtime -- then **attach** the
+experiment, so it observes the effects and owns the experiment from then on
+(§8), then **carry the intent on**, then `COMPLETED`. Once the intent is
+recorded nothing makes the request `FAILED`: an attach or an effect that
+fails leaves it `PENDING`, and an unfinished request is carried out again
+first thing after a restart, finding its intent by its identity.
 
 States:
 
@@ -97,9 +130,22 @@ FAILED      a definitive refusal of the request before anything was
 ```text
 submit   PENDING → ACCEPTED → COMPLETED
          PENDING → FAILED
-attach   PENDING → COMPLETED
+others   PENDING → COMPLETED
          PENDING → FAILED
 ```
+
+A mutation request is `FAILED` only for a refusal by the step that records
+its intent, which writes nothing -- not even ownership, since the attach comes
+after it: no such experiment or action, a payload that is not a well-formed
+actor or action, an action of another experiment, an id recorded for something
+else, another cancellation in flight, a cancellation proposed as a governed action,
+a type or spec nothing accepts, an approval by a non-human, of an action not
+awaiting one, or one a human already resolved otherwise. What follows a
+recorded intent -- a cancellation's runtime effects, the recovery an approval
+releases -- is never caught as a refusal: it leaves the request `PENDING`, to
+be carried out again by its identity. SQLite cannot alter the kind `CHECK`, so
+migration 018 rebuilds `controller_requests` with every row, index and trigger
+it had.
 
 There is no durable `PROCESSING` state: one daemon consumes the database, and a
 daemon that died holding `PROCESSING` would need a lease or timeout to release
@@ -255,8 +301,11 @@ heartbeat loop. A crash anywhere in it is safe: the next epoch repeats it from
 the record.
 
 **The sweep.** Every nonterminal experiment the daemon is responsible for:
-`controller_host.kind == "local_daemon"`, or a `COMPLETED` attach request for
-it -- durable adoption, with no adoption table. An experiment an embedded host
+`controller_host.kind == "local_daemon"`, or a `COMPLETED` request of any
+kind but `submit` for it -- an attach, or since PR-029 a cancellation,
+proposal or approval, each of which attached it once its intent was
+recorded: durable adoption, with
+no adoption table. An experiment an embedded host
 admitted and no daemon attached is not swept: that host may still be driving
 it. Each is reconciled through `attach()` and ADR-013; there is no
 startup-specific recovery of runs, attempts, operations or planning. Sweeping
@@ -283,6 +332,61 @@ paused.
 
 Distributed or remote controller ownership remains future work.
 
+### 9. The caller-side host (PR-029)
+
+`LocalDaemonControllerHost` runs no controller. `submit()` and `attach()`
+send their request and return an `ExperimentHandle` once it is `COMPLETED` --
+handed off, not finished; `handle()` returns one with no request, for an
+experiment the daemon already owns. The handle is the embedded host's, over a
+different host:
+
+```text
+status(), actions(), events()   reads of the record
+cancel(), propose()             cancel and propose-action requests
+wait()                          polling of the record, until the daemon's
+                                controller is at rest on the experiment
+host.approve_action(),          approve-action and reject-action requests
+host.reject_action()
+```
+
+A request the daemon refuses raises `ControllerRequestFailedError`, carrying
+the name and message of what the daemon raised. A caller can exit or be killed
+at any point: a sent request is the daemon's, and waiting again, from any
+process, reads the same record. Retrying a request whose answer was lost means
+sending the same request id, which reuses the experiment or action id it
+minted: `submit`, `attach`, `cancel`, `approve_action`, `reject_action` and
+`propose` -- on the host and on the handle -- all take one. A daemon-backed
+`cancel()` while another cancellation is in flight joins it, as the embedded
+one does, without a second one -- but truthfully: its own request is refused
+and records nothing, and joining is a separate `attach` request, after which
+the daemon owns the experiment and its reconciliation has carried the other
+cancellation on. It returns only if the experiment is then cancelled or a
+cancellation is still in flight; otherwise -- the other cancellation ended
+without cancelling it, as on a retry of the refused request -- the refusal is
+raised.
+
+**Rest.** The embedded `wait()` waits for the controller's own tasks; a client
+has none to wait for, and the record alone cannot tell rest from the instant
+between two steps -- a training run has succeeded and its evaluation cycle is
+about to begin, and every run is terminal with no operation unsettled. So the
+daemon records, per experiment, when its controller came to rest on it: after
+each request it carries out and each experiment it sweeps, it waits for the
+controller's `wait()`, and in the same event-loop step records a
+`controller_rests` row (migration 018) stamped with the experiment's latest
+event sequence -- with the error, if `wait()` raised one. A rest is skipped
+while a request for the experiment is being carried out. The client's
+`wait()` returns once, in one read snapshot, the rest's sequence is still the
+experiment's latest event, no request for it is unfinished and the result is
+quiescent -- or once the experiment is terminal with nothing unsettled -- and
+raises the recorded error otherwise. The rest is a fenced controller write
+like any other.
+
+**The CLI** (`xaytune submit`, `attach`, `status`, `watch`, `events`,
+`results`, `actions`, `cancel`, `approve`, `reject`) is a thin layer over this
+host: it has no database or runtime code of its own. Each mutating command
+prints its request id before sending, and takes `--request-id` to retry.
+Pause and resume are not exposed: they need their own durable design.
+
 ## Rationale
 
 The client process cannot be assumed to live as long as remote training.
@@ -304,3 +408,8 @@ with the record. Polling latency is acceptable for a local host.
 - one controller per state database, by a durable epoch-fenced lease; an
   embedded host cannot write beside a live daemon
 - a restarted daemon reconciles everything it owns from the record
+- every mutation through the daemon is an explicit request kind, idempotent by
+  the identity it carries; a client never runs controller logic or calls a
+  runtime
+- a client's `wait()` is answered by the controller's recorded rest, not by
+  inferring rest from the record

@@ -157,7 +157,9 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   local daemon's SQLite request mailbox, atomic initial admission, flock
   singleton and controlled shutdown, and the PR-027/PR-028 boundary. Its §8
   was settled on 2026-10-04 for PR-028: the durable, epoch-fenced controller
-  lease, embedded-host exclusion, and the startup sweep.
+  lease, embedded-host exclusion, and the startup sweep. Its §3 mutation
+  kinds and §9, the caller-side `LocalDaemonControllerHost` with the rest
+  record its clients' `wait()` reads, were settled the same day for PR-029.
 - `schemas/` — proposed YAML and JSON/Python schema examples, and the design
   drafts of migrations 001–003 with their rationale. They are not the schema:
   the shipped migrations are `xaytune/storage/migrations/001`–`006` (core

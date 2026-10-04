@@ -78,11 +78,12 @@ class AgentModelInvocationError(AgentModelError):
     """The model could not be asked, or did not answer: transport, provider or adapter failure.
 
     Its message is safe to log and record. One raised by
-    :func:`invoke_agent_model` for an adapter's own exception names only that
-    exception's type: SDK and adapter messages can carry URLs, headers,
-    configuration or provider payloads. The original stays as ``__cause__``
-    for local debugging, and is never to be serialized. An adapter with a
-    message it knows is safe raises this error itself.
+    :func:`invoke_agent_model` for an adapter's own exception carries only
+    that exception's type and the request fingerprint: SDK and adapter text
+    can hold URLs, headers, credentials or provider payloads. The exception
+    itself is discarded at the boundary -- neither ``__cause__`` nor
+    ``__context__`` holds it, so no traceback can print it. An adapter with
+    a diagnostic it has deliberately sanitized raises this error itself.
     """
 
 
@@ -250,23 +251,29 @@ async def invoke_agent_model(model: AgentModel, request: AgentModelRequest) -> A
         IncompatiblePluginError: The adapter speaks a plugin API this build
             does not implement.
         AgentModelInvocationError: The model gave no answer. For an adapter's
-            own exception the message names only its type; the exception is
-            the cause.
+            own exception, only its type crosses the boundary: not its text,
+            and not the exception (no cause, no context).
         AgentModelOutputError: The answer is not an :class:`AgentModelResponse`,
             it reports a revision other than the pinned one, or its content
             violates the request's schema anywhere.
     """
     require_supported_plugin(model.descriptor.plugin)
     request_fingerprint = request.fingerprint(model.descriptor.model)
+    failure: str | None = None
     try:
         response = await model.generate(request)
     except AgentModelError:
         raise
     except Exception as error:
+        failure = type(error).__name__
+    if failure is not None:
+        # Raised outside the except block, so the adapter's exception is
+        # neither the cause nor the context: ``from None`` would only hide
+        # the context from tracebacks, and still keep the object reachable.
         raise AgentModelInvocationError(
             f"agent model {model.descriptor.model.name!r} failed on request "
-            f"{request_fingerprint}: {type(error).__name__}"
-        ) from error
+            f"{request_fingerprint}: {failure}"
+        )
     if not isinstance(response, AgentModelResponse):
         raise AgentModelOutputError(
             request_fingerprint,

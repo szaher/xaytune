@@ -212,6 +212,14 @@ the versioned `planning_context_identity_v1`. Allowed-action schemas,
 capability summaries and cross-experiment memory arrive with the planners that
 need them, such as an LLM planner.
 
+An LLM planner asks its model through `xaytune.agent` (PR-030): an
+`AgentModelRequest` with a mandatory response schema in a closed, fully
+checked JSON Schema subset, answered by an `AgentModelResponse` that
+`invoke_agent_model()` refuses whole if it violates that schema. The request
+has a versioned identity (`agent_model_request_identity_v1`). The agent model
+knows nothing of planning; building the request from the context and turning
+the answer into proposals is the planner's (PR-031).
+
 Do not provide:
 
 - secrets

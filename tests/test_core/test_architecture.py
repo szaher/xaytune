@@ -44,6 +44,7 @@ FORBIDDEN_ROOTS = frozenset(
 # direction. The core may not reach back into them.
 FORBIDDEN_XAYTUNE_MODULES = frozenset(
     {
+        "xaytune.agent",
         "xaytune.cli",
         "xaytune.checkpoints",
         "xaytune.compilation",
@@ -297,5 +298,48 @@ assert 'xaytune.runtimes' not in sys.modules
 assert 'xaytune.storage' not in sys.modules
 assert 'xaytune.resilience' not in sys.modules
 assert 'xaytune.policy' not in sys.modules
+""")
+    assert result.returncode == 0, result.stderr
+
+
+# The agent-model boundary (PR-030) knows how to ask a model for structured
+# output, and nothing about what the answer is for: no experiment, planner,
+# policy, storage, runtime or controller, and no provider SDK or HTTP client.
+AGENT_MAY_IMPORT = ("xaytune.agent", "xaytune.core", "xaytune._version")
+AGENT_FORBIDDEN_ROOTS = FORBIDDEN_ROOTS | {
+    "anthropic",
+    "httpx",
+    "openai",
+    "requests",
+    "aiohttp",
+    "urllib3",
+    "vllm",
+}
+
+
+def test_agent_models_import_only_the_core():
+    offenders: list[str] = []
+    for path in sorted((CORE_DIR.parent / "agent").rglob("*.py")):
+        for module in _imported_modules(ast.parse(path.read_text())):
+            if module.split(".")[0] in AGENT_FORBIDDEN_ROOTS:
+                offenders.append(f"{path.name}: {module}")
+            elif module.startswith("xaytune") and not module.startswith(AGENT_MAY_IMPORT):
+                offenders.append(f"{path.name}: {module}")
+    assert not offenders, f"xaytune.agent must depend on the core alone: {offenders}"
+
+
+def test_agent_models_load_nothing_above_the_core():
+    result = _run_isolated(f"""
+import xaytune  # the package's own eager imports are not the agent's
+
+before = set(sys.modules)
+import xaytune.agent
+loaded = sorted(
+    m for m in set(sys.modules) - before
+    if m.startswith("xaytune.") and not m.startswith({AGENT_MAY_IMPORT!r})
+)
+assert not loaded, loaded
+network = sorted(m for m in sys.modules if m.split(".")[0] in {sorted(AGENT_FORBIDDEN_ROOTS)!r})
+assert not network, network
 """)
     assert result.returncode == 0, result.stderr

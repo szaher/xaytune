@@ -1,21 +1,46 @@
-"""The local daemon's request mailbox (ADR-004 §2-§3; migration 016).
+"""The local daemon's request mailbox, and where its controller came to rest (ADR-004 §2-§3).
 
-Rows are read here and written only through
+Migrations 016 and 018. Rows are read here and written only through
 :class:`~xaytune.storage.ControlPlaneRepository`, inside its transactions: a
-submission's ``ACCEPTED`` commits with the experiment it admits.
+submission's ``ACCEPTED`` commits with the experiment it admits, and a rest
+is fenced like every other controller write.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
 from xaytune.core.errors import ConcurrentModificationError
+from xaytune.core.ids import ExperimentId
 from xaytune.core.immutable import thaw
 from xaytune.storage.journal import _require_transaction
 
-__all__ = ["ControllerRequestStore"]
+__all__ = ["ControllerRest", "ControllerRequestStore"]
+
+
+@dataclass(frozen=True)
+class ControllerRest:
+    """The daemon's controller had nothing left it could do for an experiment (PR-029).
+
+    Attributes:
+        sequence: The experiment's latest event when it came to rest. While
+            that is still its latest event, the experiment is at rest; any
+            later event means the controller has moved it since.
+        escalation: Why it stopped short, if it did: ``{"type", "message"}``
+            of the error its ``wait()`` raised.
+    """
+
+    experiment_id: ExperimentId
+    controller_id: str
+    sequence: int
+    escalation: dict[str, Any] | None
+    recorded_at: datetime
+
 
 _COLUMNS = (
     "id, kind, state, revision, experiment_id, payload_json, payload_digest, error_json, "
@@ -63,6 +88,42 @@ class ControllerRequestStore:
             (experiment_id,),
         ).fetchall()
         return tuple(_load(row) for row in rows)
+
+    def rest(self, experiment_id: str) -> ControllerRest | None:
+        """Where the daemon's controller last came to rest on the experiment, if it has."""
+        row = self._connection.execute(
+            "SELECT experiment_id, controller_id, sequence, escalation_json, recorded_at "
+            "FROM controller_rests WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ControllerRest(
+            experiment_id=ExperimentId(row["experiment_id"]),
+            controller_id=row["controller_id"],
+            sequence=row["sequence"],
+            escalation=(
+                None if row["escalation_json"] is None else json.loads(row["escalation_json"])
+            ),
+            recorded_at=datetime.fromisoformat(row["recorded_at"]),
+        )
+
+    def _put_rest(self, rest: ControllerRest) -> None:
+        _require_transaction(self._connection, "controller rests")
+        self._connection.execute(
+            "INSERT INTO controller_rests "
+            "(experiment_id, controller_id, sequence, escalation_json, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (experiment_id) DO UPDATE SET "
+            "controller_id = excluded.controller_id, sequence = excluded.sequence, "
+            "escalation_json = excluded.escalation_json, recorded_at = excluded.recorded_at",
+            (
+                str(rest.experiment_id),
+                rest.controller_id,
+                rest.sequence,
+                None if rest.escalation is None else json.dumps(rest.escalation, sort_keys=True),
+                rest.recorded_at.isoformat(),
+            ),
+        )
 
     def _insert(self, request: ControllerRequest) -> None:
         _require_transaction(self._connection, "controller requests")

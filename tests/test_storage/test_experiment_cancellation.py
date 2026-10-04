@@ -24,6 +24,7 @@ from xaytune.core.state.status import (
     RunStatus,
 )
 from xaytune.storage import ControlPlaneRepository
+from xaytune.storage.control_plane import CancellationInFlightError
 from xaytune.storage.journal import IdempotencyConflictError
 
 from .conftest import make_attempt, make_experiment, make_node, make_run
@@ -193,6 +194,31 @@ def test_a_second_request_in_flight_returns_the_first(repo: ControlPlaneReposito
     assert again.id == parent.id
     assert [c.id for c, _ in again_children] == [c.id for c, _ in children]
     assert len(repo.actions.for_target("experiment", str(world["experiment"].id))) == 1
+
+
+def test_a_cancellation_naming_its_own_action_is_never_answered_with_another(
+    repo: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    """A daemon request's Action id is the Action it records, or it records nothing (PR-029)."""
+    world = _live_experiment(repo)
+    first, _ = repo.request_experiment_cancellation(
+        world["experiment"].id, reason="stop", actor=ACTOR
+    )
+    before = connection.execute("SELECT COUNT(*) FROM actions").fetchone()[0]
+    named = ActionId.generate()
+
+    with pytest.raises(CancellationInFlightError) as refused:
+        repo.request_experiment_cancellation(
+            world["experiment"].id, reason="stop", actor=ACTOR, action_id=named
+        )
+
+    assert (refused.value.action_id, refused.value.in_flight) == (str(named), str(first.id))
+    assert connection.execute("SELECT COUNT(*) FROM actions").fetchone()[0] == before
+    assert repo.actions.get(str(named)) is None
+    joined, _ = repo.request_experiment_cancellation(
+        world["experiment"].id, reason="stop", actor=ACTOR
+    )
+    assert joined.id == first.id, "without an id, a second request still joins the first"
 
 
 def test_a_replay_with_a_different_request_is_refused(repo: ControlPlaneRepository) -> None:

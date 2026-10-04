@@ -6,43 +6,80 @@ state it changes: a client that dies after committing it has handed it off,
 and a daemon that dies part-way finds it again.
 
 ```text
-submit   PENDING ─► ACCEPTED ─► COMPLETED      ACCEPTED commits with the
-            └─────► FAILED                     experiment it admits
-attach   PENDING ─► COMPLETED
-            └─────► FAILED
+submit           PENDING ─► ACCEPTED ─► COMPLETED   ACCEPTED commits with the
+                    └─────► FAILED                  experiment it admits
+attach           PENDING ─► COMPLETED
+cancel              └─────► FAILED
+propose-action
+approve-action
+reject-action
 ```
 
-``COMPLETED`` means the handoff reached the point at which
-:meth:`~xaytune.experiment.EmbeddedControllerHost.submit` or ``attach()``
-returns -- not that the experiment has finished. ``FAILED`` is only for a
-definitive failure before anything was admitted. There is no ``PROCESSING``:
-one daemon consumes the database, and a daemon that died holding one would
-need a lease to release it (PR-028).
+``COMPLETED`` means the handoff reached the point at which the matching
+:class:`~xaytune.experiment.EmbeddedControllerHost` call returns --
+``submit()``, ``attach()``, ``ExperimentHandle.cancel()`` once its effects are
+issued, ``propose()`` once the action is judged, ``approve_action()`` -- not
+that the experiment has finished. ``FAILED`` is only for a definitive refusal
+before the request changed anything. There is no ``PROCESSING``: one daemon
+consumes the database, under a lease (PR-028).
+
+**Every mutation is its own kind** (PR-029), never a generic command. The
+four after ``attach`` carry the identity of what they create or resolve --
+the ``cancel-experiment`` or proposed action's id, minted by the client, or
+the action being approved -- so carrying one out again finds what the first
+attempt recorded instead of recording it twice. That is why they need no
+``ACCEPTED``: unlike a submission, whose admission is what names its
+experiment, each is idempotent by an identity it carries from the start.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field
 
 from xaytune.core.clock import utc_now
 from xaytune.core.errors import DomainError, InvalidTransitionError
 from xaytune.core.fingerprint import fingerprint
-from xaytune.core.ids import ControllerRequestId, ExperimentId
+from xaytune.core.ids import ActionId, ControllerRequestId, ExperimentId
 from xaytune.core.immutable import AggregateModel, FrozenDict
+from xaytune.core.refs import Actor
+
+if TYPE_CHECKING:
+    from xaytune.core.domain.action import Action
 
 __all__ = [
     "ControllerRequest",
     "ControllerRequestKind",
     "ControllerRequestState",
+    "MisdirectedRequestError",
 ]
 
-ControllerRequestKind = Literal["submit", "attach"]
-"""What a request asks of the daemon. Not a generic command bus: a later
-mutating operation becomes an explicit kind of its own."""
+ControllerRequestKind = Literal[
+    "submit", "attach", "cancel", "propose-action", "approve-action", "reject-action"
+]
+"""What a request asks of the daemon. Not a generic command bus: every
+mutating operation is an explicit kind of its own, with its own payload."""
+
+_ACTION_KINDS = ("cancel", "propose-action", "approve-action", "reject-action")
+
+_PAYLOAD_KEYS: dict[str, frozenset[str]] = {
+    "attach": frozenset(),
+    "cancel": frozenset({"action_id", "reason"}),
+    "propose-action": frozenset(
+        {"action_id", "type", "target", "payload", "reason", "proposed_by"}
+    ),
+    "approve-action": frozenset({"action_id", "approver", "reason"}),
+    "reject-action": frozenset({"action_id", "approver", "reason"}),
+}
+"""Exactly what each kind's payload holds. ``submit`` carries an
+``ExperimentSpec``, which validates itself when the daemon reads it."""
+
+
+class MisdirectedRequestError(DomainError):
+    """A request names an action under an experiment the action does not belong to."""
 
 
 class ControllerRequestState(str, Enum):
@@ -63,13 +100,16 @@ _ALLOWED: dict[str, dict[ControllerRequestState, frozenset[ControllerRequestStat
         ControllerRequestState.COMPLETED: frozenset(),
         ControllerRequestState.FAILED: frozenset(),
     },
-    "attach": {
-        ControllerRequestState.PENDING: frozenset(
-            {ControllerRequestState.COMPLETED, ControllerRequestState.FAILED}
-        ),
-        ControllerRequestState.ACCEPTED: frozenset(),
-        ControllerRequestState.COMPLETED: frozenset(),
-        ControllerRequestState.FAILED: frozenset(),
+    **{
+        kind: {
+            ControllerRequestState.PENDING: frozenset(
+                {ControllerRequestState.COMPLETED, ControllerRequestState.FAILED}
+            ),
+            ControllerRequestState.ACCEPTED: frozenset(),
+            ControllerRequestState.COMPLETED: frozenset(),
+            ControllerRequestState.FAILED: frozenset(),
+        }
+        for kind in ("attach", *_ACTION_KINDS)
     },
 }
 
@@ -83,9 +123,11 @@ class ControllerRequest(AggregateModel):
             with anything else, an idempotency conflict.
         experiment_id: For ``submit``, pre-minted by the client, so the client
             knows which experiment its request becomes before the daemon has
-            touched it; for ``attach``, the experiment to adopt.
+            touched it; for every other kind, the experiment it acts on --
+            for an approval, the action's.
         payload: Canonical JSON. For ``submit``, the ``ExperimentSpec``; for
-            ``attach``, empty.
+            ``attach``, empty; for the action kinds, the action's id and what
+            the matching host call takes (see the constructors).
         payload_digest: The payload's canonical fingerprint, set from it.
         error: Why a ``FAILED`` request failed.
     """
@@ -133,6 +175,87 @@ class ControllerRequest(AggregateModel):
             payload_digest=fingerprint(empty),
         )
 
+    @classmethod
+    def cancel(
+        cls,
+        experiment_id: ExperimentId,
+        *,
+        reason: str,
+        action_id: ActionId | None = None,
+        request_id: ControllerRequestId | None = None,
+    ) -> ControllerRequest:
+        """A ``cancel`` request; *action_id* is the ``cancel-experiment`` Action it records."""
+        return cls._carrying(
+            "cancel",
+            experiment_id,
+            {"action_id": str(action_id or ActionId.generate()), "reason": reason},
+            request_id,
+        )
+
+    @classmethod
+    def propose(
+        cls, action: Action, *, request_id: ControllerRequestId | None = None
+    ) -> ControllerRequest:
+        """A ``propose-action`` request for *action*, built by ``action_from_spec``.
+
+        Carries the action's id, type, target, typed payload envelope, reason
+        and proposer: everything the daemon needs to rebuild the spec, and
+        nothing it decides -- status and policy are the daemon's.
+        """
+        return cls._carrying(
+            "propose-action",
+            action.experiment_id,
+            {
+                "action_id": str(action.id),
+                "type": action.type,
+                "target": action.target.model_dump(mode="json"),
+                "payload": action.payload,
+                "reason": action.reason,
+                "proposed_by": action.proposed_by.model_dump(mode="json"),
+            },
+            request_id,
+        )
+
+    @classmethod
+    def resolve(
+        cls,
+        kind: Literal["approve-action", "reject-action"],
+        action_id: ActionId,
+        experiment_id: ExperimentId,
+        *,
+        approver: Actor,
+        reason: str,
+        request_id: ControllerRequestId | None = None,
+    ) -> ControllerRequest:
+        """An ``approve-action`` or ``reject-action`` request for an action awaiting approval."""
+        return cls._carrying(
+            kind,
+            experiment_id,
+            {
+                "action_id": str(action_id),
+                "approver": approver.model_dump(mode="json"),
+                "reason": reason,
+            },
+            request_id,
+        )
+
+    @classmethod
+    def _carrying(
+        cls,
+        kind: ControllerRequestKind,
+        experiment_id: ExperimentId,
+        payload: dict[str, Any],
+        request_id: ControllerRequestId | None,
+    ) -> ControllerRequest:
+        frozen = FrozenDict(payload)
+        return cls(
+            id=request_id or ControllerRequestId.generate(),
+            kind=kind,
+            experiment_id=experiment_id,
+            payload=frozen,
+            payload_digest=fingerprint(frozen),
+        )
+
     def model_post_init(self, _context: object) -> None:
         if self.payload_digest != fingerprint(self.payload):
             raise DomainError(
@@ -140,8 +263,21 @@ class ControllerRequest(AggregateModel):
             )
         if self.kind == "attach" and self.payload:
             raise DomainError("an attach request carries no payload; it names its experiment")
+        expected = _PAYLOAD_KEYS.get(self.kind)
+        if expected is not None and set(self.payload) != expected:
+            raise DomainError(
+                f"a {self.kind} request carries {', '.join(sorted(expected))}; "
+                f"got {', '.join(sorted(self.payload)) or 'nothing'}"
+            )
         if (self.state is ControllerRequestState.FAILED) != (self.error is not None):
             raise DomainError("a request carries an error exactly when it FAILED")
+
+    @property
+    def action_id(self) -> ActionId | None:
+        """The action an action kind creates or resolves; ``None`` for ``submit`` and ``attach``."""
+        if self.kind not in _ACTION_KINDS:
+            return None
+        return ActionId(self.payload["action_id"])
 
     @property
     def is_unfinished(self) -> bool:

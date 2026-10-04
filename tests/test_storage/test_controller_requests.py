@@ -8,33 +8,50 @@ admit_experiment             experiment, root node, first run, first attempt,
                              ACCEPTED -- in one commit, or nothing
 migration 016                what a request asks is immutable; state moves
                              forward along its kind's edges only
+migration 018 (PR-029)       cancel, propose-action, approve-action and
+                             reject-action, each PENDING → COMPLETED | FAILED,
+                             with exactly its payload; the rebuilt table keeps
+                             every earlier row and rule; controller rests
 ```
 """
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from tests.test_storage.conftest import make_attempt, make_experiment, make_node, make_run
+from xaytune.core.domain.action import ActionTarget
+from xaytune.core.domain.actions import RejectCandidate, action_from_spec
 from xaytune.core.domain.budget import BudgetDimension
 from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
 from xaytune.core.domain.experiment import Experiment
 from xaytune.core.domain.objective import BudgetSpec
 from xaytune.core.errors import DomainError, InvalidTransitionError
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import ExperimentId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, ControllerHostRef
+from xaytune.core.sqlite import connect
 from xaytune.core.state.status import (
     ExperimentNodeStatus,
     ExperimentStatus,
     RunAttemptStatus,
     RunStatus,
 )
-from xaytune.storage import ControlPlaneRepository, IdempotencyConflictError, StorageError
+from xaytune.storage import (
+    ControllerLeaseHeldError,
+    ControllerLeaseStore,
+    ControlPlaneRepository,
+    IdempotencyConflictError,
+    NoLiveLeaseFence,
+    StorageError,
+)
 from xaytune.storage.control_plane import AdmissionRefusedError
+from xaytune.storage.migrations import MIGRATIONS_DIR, migrate
 
 _ACTOR = Actor(type="system", id="test")
 _SPEC = FrozenDict({"name": "a spec", "seed": 7})
@@ -430,3 +447,180 @@ def test_a_daemon_is_responsible_for_what_it_admitted_or_adopted_and_has_not_end
     assert embedded not in owned, "an embedded experiment nobody attached stays its host's"
     assert asked not in owned, "an attach not yet completed is not adoption"
     assert ended not in owned and ended_adopted not in owned
+
+
+def test_completing_a_request_of_any_kind_but_submit_is_adoption(
+    repository: ControlPlaneRepository,
+) -> None:
+    """A recorded cancellation, proposal or approval is attached before it is carried on."""
+    cancelled = _experiment_at(repository, "embedded", ExperimentStatus.ACTIVE)
+    asked = _experiment_at(repository, "embedded", ExperimentStatus.ACTIVE)
+    refused = _experiment_at(repository, "embedded", ExperimentStatus.ACTIVE)
+    for experiment_id, outcome in ((cancelled, "complete"), (asked, None), (refused, "fail")):
+        request = repository.record_controller_request(
+            ControllerRequest.cancel(experiment_id, reason="stop")
+        )
+        if outcome == "complete":
+            repository.complete_controller_request(request.id, expected_revision=0)
+        elif outcome == "fail":
+            repository.fail_controller_request(
+                request.id, expected_revision=0, error=FrozenDict({"type": "X", "message": "no"})
+            )
+
+    assert repository.daemon_responsibilities() == (cancelled,)
+
+
+# ---- the mutation kinds (PR-029) -------------------------------------------------------
+
+
+_HUMAN = Actor(type="human", id="ana")
+
+
+def _action_kinds(experiment_id: ExperimentId) -> list[ControllerRequest]:
+    action = action_from_spec(
+        RejectCandidate(target=ActionTarget(kind="node", id="node_1")),
+        experiment_id=experiment_id,
+        proposed_by=_HUMAN,
+        reason="off target",
+    )
+    return [
+        ControllerRequest.cancel(experiment_id, reason="stop"),
+        ControllerRequest.propose(action),
+        ControllerRequest.resolve(
+            "approve-action", action.id, experiment_id, approver=_HUMAN, reason="agreed"
+        ),
+        ControllerRequest.resolve(
+            "reject-action", action.id, experiment_id, approver=_HUMAN, reason="no"
+        ),
+    ]
+
+
+@pytest.mark.parametrize("index", range(4), ids=["cancel", "propose", "approve", "reject"])
+def test_a_mutation_request_completes_or_fails_from_pending_and_is_never_accepted(
+    repository: ControlPlaneRepository, connection: sqlite3.Connection, index: int
+) -> None:
+    experiment_id = _experiment_at(repository, "local_daemon", ExperimentStatus.ACTIVE)
+    completed, failed = (
+        repository.record_controller_request(_action_kinds(experiment_id)[index]) for _ in range(2)
+    )
+    assert completed.action_id is not None
+    assert repository.controller_requests.get(str(completed.id)) == completed, "round-trips"
+    with pytest.raises(InvalidTransitionError):
+        completed.with_state(ControllerRequestState.ACCEPTED)
+    with pytest.raises(sqlite3.IntegrityError, match="forward"):
+        connection.execute(
+            "UPDATE controller_requests SET state = 'accepted', revision = 1 WHERE id = ?",
+            (str(completed.id),),
+        )
+    done = repository.complete_controller_request(completed.id, expected_revision=0)
+    assert done.state is ControllerRequestState.COMPLETED
+    refused = repository.fail_controller_request(
+        failed.id, expected_revision=0, error=FrozenDict({"type": "X", "message": "no"})
+    )
+    assert refused.state is ControllerRequestState.FAILED
+
+
+def test_a_mutation_request_carries_exactly_its_payload() -> None:
+    request = ControllerRequest.cancel(ExperimentId.generate(), reason="stop")
+    assert request.payload["reason"] == "stop"
+    assert request.action_id is not None, "minted by the client, before it is sent"
+    fields = request.model_dump()
+    fields["payload"] = {"reason": "stop"}
+    fields["payload_digest"] = fingerprint(FrozenDict(fields["payload"]))
+    with pytest.raises(DomainError, match="action_id, reason"):
+        ControllerRequest(**fields)
+    assert ControllerRequest.attach(ExperimentId.generate()).action_id is None
+
+
+def test_the_rebuilt_mailbox_keeps_every_earlier_request_and_rule(tmp_path: Path) -> None:
+    """Migration 018 rebuilds controller_requests to admit the new kinds, losing nothing."""
+    earlier = tmp_path / "migrations"
+    earlier.mkdir()
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        if int(path.name[:3]) <= 17:
+            (earlier / path.name).write_text(path.read_text())
+    connection = connect(tmp_path / "state.db")
+    migrate(connection, earlier)
+    old = ControlPlaneRepository(connection)
+    submitted = old.record_controller_request(ControllerRequest.submit(_SPEC))
+    attached = old.record_controller_request(ControllerRequest.attach(ExperimentId.generate()))
+    old.complete_controller_request(attached.id, expected_revision=0)
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+        connection.execute(
+            "INSERT INTO controller_requests VALUES "
+            "('creq_y', 'cancel', 'pending', 0, 'exp_x', '{}', 'd', NULL, 't', 't')"
+        )
+
+    assert migrate(connection) == (18,)
+    repository = ControlPlaneRepository(connection)
+    assert repository.controller_requests.get(str(submitted.id)) == submitted
+    assert repository.controller_requests.get(str(attached.id)).state is (
+        ControllerRequestState.COMPLETED
+    )
+    assert repository.controller_requests.unfinished() == (submitted,)
+    cancel = repository.record_controller_request(
+        ControllerRequest.cancel(ExperimentId.generate(), reason="stop")
+    )
+    assert repository.controller_requests.get(str(cancel.id)) == cancel
+    for statement, message in (
+        ("UPDATE controller_requests SET payload_json = '{}'" + _LEGAL_MOVE, "immutable"),
+        ("UPDATE controller_requests SET state = 'completed', revision = 7", "forward"),
+        ("DELETE FROM controller_requests", "permanent"),
+    ):
+        with pytest.raises(sqlite3.IntegrityError, match=message):
+            connection.execute(statement)
+    with pytest.raises(sqlite3.IntegrityError, match="PENDING"):
+        connection.execute(
+            "INSERT INTO controller_requests VALUES "
+            "('creq_z', 'cancel', 'completed', 0, 'exp_x', '{}', 'd', NULL, 't', 't')"
+        )
+    indexes = {
+        row["name"]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE tbl_name = 'controller_requests' "
+            "AND type = 'index' AND name LIKE 'idx_%'"
+        )
+    }
+    assert indexes == {"idx_controller_requests_unfinished", "idx_controller_requests_experiment"}
+    connection.close()
+
+
+# ---- controller rests (PR-029) -----------------------------------------------------------
+
+
+def test_a_rest_is_stamped_with_the_experiments_latest_event(
+    repository: ControlPlaneRepository,
+) -> None:
+    experiment_id = _experiment_at(repository, "local_daemon", ExperimentStatus.ACTIVE)
+    latest = repository.events.latest_sequence_for_experiment(str(experiment_id))
+    assert latest > 0
+
+    rest = repository.record_controller_rest(experiment_id, controller_id="daemon-1")
+    assert (rest.sequence, rest.escalation) == (latest, None)
+    assert repository.controller_requests.rest(str(experiment_id)) == rest
+    assert repository.record_controller_rest(experiment_id, controller_id="daemon-1") == rest, (
+        "the same rest again rewrites nothing"
+    )
+
+    repository.transition_experiment(
+        experiment_id, expected_revision=1, new_status=ExperimentStatus.PAUSED, actor=_ACTOR
+    )
+    assert repository.events.latest_sequence_for_experiment(str(experiment_id)) > rest.sequence
+    escalated = repository.record_controller_rest(
+        experiment_id,
+        controller_id="daemon-1",
+        escalation={"type": "ReconciliationEscalatedError", "message": "unknown outcome"},
+    )
+    assert escalated.sequence > rest.sequence
+    assert repository.controller_requests.rest(str(experiment_id)) == escalated
+
+
+def test_a_rest_is_a_fenced_controller_write(
+    repository: ControlPlaneRepository, connection: sqlite3.Connection
+) -> None:
+    experiment_id = _experiment_at(repository, "local_daemon", ExperimentStatus.ACTIVE)
+    ControllerLeaseStore(connection).acquire("daemon-1", timedelta(seconds=30))
+    embedded = ControlPlaneRepository(connection, fence=NoLiveLeaseFence())
+    with pytest.raises(ControllerLeaseHeldError):
+        embedded.record_controller_rest(experiment_id, controller_id="embedded")
+    assert repository.controller_requests.rest(str(experiment_id)) is None

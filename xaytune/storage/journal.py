@@ -121,6 +121,14 @@ class EventJournal:
         ).fetchall()
         return tuple(_event_from_row(row) for row in rows)
 
+    def latest_sequence_for_experiment(self, experiment_id: str) -> int:
+        """The sequence of the experiment's latest event; 0 if it has none."""
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) AS latest FROM events WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchone()
+        return int(row["latest"])
+
     def pending_outbox(self) -> tuple[OutboxRecord, ...]:
         """Return undelivered outbox records, oldest first."""
         rows = self._connection.execute(

@@ -205,6 +205,7 @@ from xaytune.storage.control_plane import (
     StaleRecoveryContextError,
 )
 from xaytune.storage.journal import IdempotencyConflictError
+from xaytune.storage.leases import ControllerLeaseFence, NoLiveLeaseFence
 from xaytune.storage.migrations import migrate
 
 __all__ = [
@@ -380,6 +381,14 @@ class EmbeddedControllerHost:
             delegates its control to this one -- the local daemon (PR-027)
             -- supplies its own, so the record names the process that
             actually admitted the experiment.
+        lease_fence: The daemon lease this host writes under (PR-028). Only
+            the local daemon passes one: each write then proves that lease
+            and epoch, or raises
+            :class:`~xaytune.storage.leases.LeaseLostError` having written
+            nothing. Without one, the host is embedded: it reads freely, and
+            every write it attempts while a daemon holds a live lease on the
+            database -- taken before this host opened or after -- raises
+            :class:`~xaytune.storage.leases.ControllerLeaseHeldError`.
     """
 
     def __init__(
@@ -395,6 +404,7 @@ class EmbeddedControllerHost:
         recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None = None,
         planners: Mapping[str, Callable[[PlannerSpec], Planner]] | None = None,
         controller_host: ControllerHostRef | None = None,
+        lease_fence: ControllerLeaseFence | None = None,
     ) -> None:
         if str(state_path) != ":memory:":
             # A new state database is a normal first run, not an error: SQLite
@@ -402,7 +412,9 @@ class EmbeddedControllerHost:
             Path(state_path).parent.mkdir(parents=True, exist_ok=True)
         self._connection = connect(state_path)
         migrate(self._connection)
-        self.repository = ControlPlaneRepository(self._connection)
+        self.repository = ControlPlaneRepository(
+            self._connection, fence=lease_fence or NoLiveLeaseFence()
+        )
         # ``None`` means the defaults; an empty mapping means none. Treating an
         # empty registry as "use the defaults" would hand a caller who removed
         # every compiler the built-in ones anyway.
@@ -1528,6 +1540,13 @@ class EmbeddedControllerHost:
         evaluation finished but which never moved on. Each is carried forward
         from the record; none is guessed.
 
+        A ``PAUSED`` experiment is reconciled too -- a workload it already
+        owns still needs an owner -- but only its existing work: a recorded
+        operation is looked up, adopted or settled, and a cancellation in
+        flight carried on, while nothing new starts. No evaluation cycle
+        begins, no evaluation run gets its first attempt, no candidate is
+        planned or realized, and recovery waits for review.
+
         Each implementation is resolved, and its version checked, only on a
         path that uses it: the runtime where an external effect is looked up,
         adopted or cancelled; the compiler or evaluator only where a request
@@ -1606,8 +1625,11 @@ class EmbeddedControllerHost:
             if not attempts:
                 # No attempt means no intent was ever recorded, so nothing can
                 # have been started: issuing now is the first issue, not a
-                # re-issue.
-                await self._start_evaluation_run(experiment, evaluation_run)
+                # re-issue -- new work, so only for an experiment that is not
+                # paused. A paused one keeps the run waiting for it to resume.
+                current = aggregates.load_experiment(str(experiment.id))
+                if current.status is ExperimentStatus.ACTIVE:
+                    await self._start_evaluation_run(current, evaluation_run)
             elif not live:
                 # Every attempt ended and the run was never settled: the crash
                 # fell between the two. Settle it from the attempt's outcome.
@@ -1732,11 +1754,13 @@ class EmbeddedControllerHost:
     ) -> None:
         """Begin the node's next evaluation cycle, if its training is done and asks for one.
 
-        Only once every training run of the node has ended, one succeeded, and
-        no cancellation is in flight: evaluating a node whose experiment is
-        being cancelled would start a workload the cancellation must then
-        chase. The trained model -- the successful run's ``model`` artifact --
-        is the subject. A successful run with no model is still recorded as a
+        Only for an ``ACTIVE`` experiment, once every training run of the node
+        has ended, one succeeded, and no cancellation is in flight: evaluating
+        a node whose experiment is being cancelled would start a workload the
+        cancellation must then chase, and a paused experiment starts no new
+        work -- its trained node waits, ``ACTIVE``, for it to resume. The
+        trained model -- the successful run's ``model`` artifact -- is the
+        subject. A successful run with no model is still recorded as a
         cycle, with no run in it, so reconciliation reports it stalled rather
         than the node sitting ``ACTIVE`` with nobody saying why.
 
@@ -1748,7 +1772,7 @@ class EmbeddedControllerHost:
         """
         aggregates = self.repository.aggregates
         experiment = aggregates.load_experiment(str(experiment_id))
-        if experiment.evaluation is None or experiment.is_terminal:
+        if experiment.evaluation is None or experiment.status is not ExperimentStatus.ACTIVE:
             return
         if self._cancelling(experiment_id):
             return
@@ -2624,6 +2648,18 @@ class EmbeddedControllerHost:
                 return
             except (_AdaptiveStopError, XaytuneError, PlannerConfigurationError) as stopped:
                 self._escalations[str(experiment_id)] = f"the adaptive loop stopped: {stopped}"
+
+    def _settle_ledger(self, experiment_id: ExperimentId) -> int:
+        """Repair the budget ledger after downtime; how many entries it wrote (PR-028).
+
+        Accounting only. Nothing is charged for the downtime itself -- no
+        budget dimension measures time -- and nothing is exhausted here: the
+        state a restart finds is not an effect. Whether a used-up quota stops
+        anything is decided where the controller is about to create one --
+        a run, an evaluation cycle, an evaluation attempt, a recovery
+        successor -- by the same code before a restart as after it.
+        """
+        return self.repository.settle_budget(experiment_id, actor=_ACTOR)
 
     async def _plan_next_candidate(self, experiment: Experiment) -> bool:
         """Ask the recorded planner once, and branch its proposal; whether a node was planned.

@@ -634,6 +634,31 @@ means that first run. Each step is read from the record, so a host that
   `AdaptiveThresholdDecisionEngine` on every host that drives an adaptive
   experiment.
 
+**Agent models** (`xaytune.agent`) are the boundary a future LLM planner asks
+a model through. An agent model only answers requests for structured output:
+
+- An `AgentModelRequest` carries a system prompt, messages and a mandatory
+  `response_schema`. The schema is xaytune's closed response-schema subset,
+  written in JSON Schema vocabulary; it is not a standards-complete JSON
+  Schema validator. It allows `type` or `anyOf`, `enum`/`const`, closed
+  objects, arrays with `items`, string lengths, numeric bounds and string
+  `title`/`description`. A request using anything else, or a malformed value
+  for one of these, cannot be built. Checking is stricter than JSON Schema's:
+  `true` is not `1`, and `1.0` is not an integer.
+- `await invoke_agent_model(model, request)` returns the answer only if it
+  conforms. Otherwise it raises `AgentModelOutputError`, listing every
+  violation, and none of the answer is used. An answer reporting a revision
+  other than the model's pinned `revision` is refused the same way. A model
+  failure raises `AgentModelInvocationError`, whose message names the
+  adapter's exception type but never repeats its text.
+- `request.fingerprint(model.descriptor.model)` identifies the logical
+  request: the model, prompts, schema and generation parameters. Token usage,
+  latency and provider request ids are not part of it.
+- Credentials belong to the adapter's configuration and are never part of a
+  request, a response or a descriptor.
+- `ScriptedAgentModel([...])` answers from a script, with no network, which
+  makes it the model to use in tests.
+
 ## Local checkpoint bundles
 
 `xaytune.checkpoints` provides a codec, local store and manager. The initial

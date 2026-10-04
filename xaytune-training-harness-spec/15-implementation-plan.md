@@ -1587,6 +1587,63 @@ Exit (`tests/test_daemon/test_daemon_cli.py`, against a daemon process):
 
 ### PR-030 — AgentModel protocol
 
+As built (`xaytune.agent`): the model-invocation boundary a future
+`LLMPlanner` sits on. It asks a model for structured output and knows nothing
+of experiments, candidates, actions, policy, storage, runtimes or controllers;
+it imports only `xaytune.core`, and an architecture test holds that (and keeps
+provider SDKs and HTTP clients out).
+
+- **Contract.** `AgentModel` has a `descriptor: AgentModelDescriptor` (the
+  adapter's `PluginDescriptor` and the model's `AgentModelIdentity` --
+  provider, name, pinned revision or `None` -- kept separate) and `async
+  generate(AgentModelRequest) -> AgentModelResponse`. Adapter configuration,
+  credentials included, is in neither; only requests, responses and
+  descriptors are serialized.
+- **Request.** System prompt, messages (user/assistant, ending with the
+  user's turn), a mandatory `response_schema`, `temperature` and
+  `max_output_tokens`. Frozen, closed and canonical.
+- **Schema subset.** Xaytune's closed response-schema subset in JSON Schema
+  vocabulary, which `xaytune.agent.schema` fully implements (it is not a
+  standards-complete JSON Schema validator): `type` or `anyOf`, `enum`,
+  `const`; closed objects (`additionalProperties` absent or false); arrays
+  with `items`; string lengths; numeric bounds; string `title`/`description`. A keyword outside it is refused when the request is
+  built, never ignored when an answer is checked. Checking is typed: `true` is
+  not an integer, `1.0` is not an integer, and `enum`/`const` compare by
+  canonical encoding.
+- **Fail closed.** Callers go through `invoke_agent_model()`. It refuses an
+  adapter on an unsupported plugin API before asking. It wraps an adapter's
+  own exception in `AgentModelInvocationError` whose message names only the
+  exception's type -- SDK text can carry URLs, headers or keys -- keeping
+  the original as `__cause__`, which is never to be serialized. It refuses
+  the whole answer (`AgentModelOutputError`) if it is not an
+  `AgentModelResponse`, if it reports a revision other than a pinned one (a
+  missing reported revision is accepted; a more specific model name, an
+  alias resolved, is too), or if its content breaks the schema (every
+  violation by path).
+- **Identity.** `agent_model_request_identity_v1(model, request)` covers the
+  model identity, system prompt, messages, schema and generation parameters.
+  Not the adapter or its version (how a request is carried, not what it asks),
+  and not usage, latency, provider request ids or the answer. A test pins the
+  digest, and one pins both models' fields against the projection.
+- **Response.** `content` (the structured answer), the model and revision the
+  provider reports, `finish_reason`, `usage` (input/output tokens; unreported
+  counts stay `None`), `provider_request_id`, `latency_seconds`. A rationale
+  is a field of the caller's schema; nothing requests or records hidden
+  reasoning.
+- **One call, one invocation.** An adapter may retry transport failures
+  inside `generate`; the caller sees one call for one request identity.
+  Recording attempts is PR-032, which keeps the full `AgentModelDescriptor`
+  in the invocation record beside the request fingerprint rather than
+  changing `agent_model_request_identity_v1`.
+- **`ScriptedAgentModel`** answers from a script (content, a whole response,
+  or an exception), records every request, and checks nothing itself, so a
+  malformed scripted answer is refused at the boundary like a real one. It is
+  PR-031's backend in CI: no network, no keys.
+
+Not here: `LLMPlanner`, prompts, `PlanningContext` → request conversion,
+proposal parsing, policy, persistence or audit tables, tool calling, and any
+provider adapter.
+
 ### PR-031 — LLMPlanner
 
 Structured actions only.

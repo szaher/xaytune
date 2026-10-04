@@ -135,3 +135,69 @@ def test_a_recorded_planner_at_another_version_is_refused(tmp_path) -> None:
             await host.close()
 
     asyncio.run(scenario())
+
+
+def _llm_config(model) -> FrozenDict:
+    return FrozenDict(
+        {
+            "model": model.model_dump(),
+            "prompt_version": "xaytune.llm-planner/v1",
+            "allowed_actions": [{"type": "reject-candidate"}],
+        }
+    )
+
+
+def test_an_llm_planner_binds_only_through_an_explicitly_supplied_factory(tmp_path) -> None:
+    """``kind="llm"`` has no default: the host binds it with the agent model it was given."""
+    from xaytune.agent import AgentModelIdentity, ScriptedAgentModel
+    from xaytune.planning import PLANNERS
+    from xaytune.planning.llm import LLMPlanner, llm_planner_factory
+
+    identity = AgentModelIdentity(provider="vendor", name="planner-large", revision="r1")
+    model = ScriptedAgentModel([], model=identity)
+    planners = {**PLANNERS, "llm": llm_planner_factory(model)}
+
+    async def scenario():
+        host = EmbeddedControllerHost(tmp_path / "state.db", planners=planners)
+        try:
+            spec = _spec(tmp_path, planner=PlannerSpec(kind="llm", config=_llm_config(identity)))
+            bound = host._planner(spec.planner).spec
+            experiment = host._record_experiment(
+                spec, NativeCompiler(), LocalRuntime(tmp_path / "runtime"), None, bound
+            )
+            recorded = host.repository.aggregates.load_experiment(str(experiment.id))
+            assert recorded.planner == bound
+            assert recorded.planner.config["model"] == identity.model_dump()
+            assert recorded.planner.config["allowed_actions"][0]["contract_fingerprint"]
+        finally:
+            await host.close()
+
+        # A restarted host given the same model rebuilds the same planner from the record.
+        rebuilt = EmbeddedControllerHost(tmp_path / "state.db", planners=planners)
+        try:
+            planner = rebuilt._recorded_planner(recorded)
+            assert isinstance(planner, LLMPlanner) and planner.spec == recorded.planner
+        finally:
+            await rebuilt.close()
+
+        # One given another model refuses it; one given none does not know the kind.
+        other = AgentModelIdentity(provider="vendor", name="planner-large", revision="r2")
+        swapped = EmbeddedControllerHost(
+            tmp_path / "state.db",
+            planners={**PLANNERS, "llm": llm_planner_factory(ScriptedAgentModel([], model=other))},
+        )
+        try:
+            with pytest.raises(PlannerConfigurationError, match="agent model supplied"):
+                swapped._recorded_planner(recorded)
+        finally:
+            await swapped.close()
+        default = EmbeddedControllerHost(tmp_path / "state.db")
+        try:
+            with pytest.raises(UnknownImplementationError):
+                await default.submit(
+                    _spec(tmp_path, planner=PlannerSpec(kind="llm", config=_llm_config(identity)))
+                )
+        finally:
+            await default.close()
+
+    asyncio.run(scenario())

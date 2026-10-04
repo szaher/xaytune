@@ -593,8 +593,10 @@ proposes only; it never creates a node or runs anything.
 - **From the record alone.** `host.repository.planning_context(experiment_id)`
   is a read-only projection: the objective, each candidate with its current
   identity, decisions, evaluation results, and the budget. A planner reads
-  nothing else, so the same context gives the same proposals. Each proposal
-  carries the context's fingerprint and the planner's identity.
+  nothing else, so a deterministic planner gives the same proposals for the
+  same context. (An LLM planner cannot promise that; its inputs are just as
+  fixed.) Each proposal carries the context's fingerprint and the planner's
+  identity.
 - **The rule-based planner** applies typed mutation rules, in declared order,
   to the best `COMPLETED` candidate by its recorded primary metric. The first
   rule is `increase-lora-rank` (for example 16 → 32, capped by `max_rank`).
@@ -660,6 +662,40 @@ a model through. An agent model only answers requests for structured output:
   request, a response or a descriptor.
 - `ScriptedAgentModel([...])` answers from a script, with no network, which
   makes it the model to use in tests.
+
+**The LLM planner** (`xaytune.planning.llm`) asks an agent model for at most
+one action. It is never a default; give the host your agent model explicitly:
+
+```python
+from xaytune.planning import PLANNERS
+from xaytune.planning.llm import llm_planner_factory
+
+host = EmbeddedControllerHost(state, planners={**PLANNERS, "llm": llm_planner_factory(model)})
+spec.planner = PlannerSpec(kind="llm", config={
+    "model": {"provider": "vendor", "name": "planner-large", "revision": "2026-10-01"},
+    "prompt_version": "xaytune.llm-planner/v1",
+    "allowed_actions": [{"type": "reject-candidate"}],
+    "temperature": 0.0,
+})
+```
+
+- The config's `model` must be exactly your agent model's identity, or
+  binding is refused; it is checked again before and after every call. The
+  prompt is fixed by `prompt_version`; binding records its fingerprint and
+  keeps the text it verified.
+- Like any planner, it proposes only at the planning stage and asks the
+  model nothing otherwise, or when a quota is exhausted.
+- Only the actions in `allowed_actions` are shown to the model. Each must be
+  registered, target the experiment or a node, and have parameters the
+  response-schema subset can describe; cancellations are refused. Binding
+  records a fingerprint of everything the model is shown of each action, and
+  an experiment's planner refuses to rebind if any of it changed.
+- The model's answer becomes an `ActionProposal` only if its target and
+  evidence are in the planning context and its parameters validate.
+  Otherwise `propose()` raises `AgentModelOutputError`. Provenance is always
+  xaytune's.
+- Nothing is executed or recorded: an action proposal is escalated by the
+  controller, as before.
 
 ## Local checkpoint bundles
 

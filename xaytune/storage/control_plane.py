@@ -226,7 +226,7 @@ from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
 from xaytune.storage.recovery_actions import RecoveryActionBindingStore
 from xaytune.storage.recovery_execution import RecoveryExecutionReceiptStore
 from xaytune.storage.repository import AggregateStore
-from xaytune.storage.requests import ControllerRequestStore
+from xaytune.storage.requests import ControllerRequestStore, ControllerRest
 
 __all__ = [
     "AdmissionRefusedError",
@@ -460,6 +460,24 @@ class CancellationNotGovernedError(StorageError):
             f"{action_type} is not proposed to policy: cancel through the cancellation API "
             f"(ExperimentHandle.cancel(), request_cancellation(), "
             f"request_experiment_cancellation())"
+        )
+
+
+class CancellationInFlightError(StorageError):
+    """A cancellation with its own id was asked for while another is in flight.
+
+    Without an id, a second request joins the cancellation in flight. With
+    one -- a daemon request's, minted by its client (PR-029) -- the request
+    names the Action it records, and is never carried out through a
+    different one: it is refused, and nothing is written.
+    """
+
+    def __init__(self, action_id: str, in_flight: str) -> None:
+        self.action_id = action_id
+        self.in_flight = in_flight
+        super().__init__(
+            f"cancellation {action_id} was not recorded: cancellation {in_flight} "
+            f"of the same experiment is already in flight"
         )
 
 
@@ -1098,13 +1116,48 @@ class ControlPlaneRepository:
             self.controller_requests._update(moved)
         return moved
 
+    def record_controller_rest(
+        self,
+        experiment_id: ExperimentId | str,
+        *,
+        controller_id: str,
+        escalation: dict[str, Any] | None = None,
+    ) -> ControllerRest:
+        """Record that the controller has nothing left it can do for the experiment (PR-029).
+
+        Stamped with the experiment's latest event, read in the same
+        transaction: the experiment is at rest for as long as that stays its
+        latest event. Rewrites nothing when the rest is the one already
+        recorded.
+        """
+        with self._write():
+            sequence = self.events.latest_sequence_for_experiment(str(experiment_id))
+            current = self.controller_requests.rest(str(experiment_id))
+            if current is not None and (
+                current.controller_id,
+                current.sequence,
+                current.escalation,
+            ) == (controller_id, sequence, escalation):
+                return current
+            rest = ControllerRest(
+                experiment_id=ExperimentId(str(experiment_id)),
+                controller_id=controller_id,
+                sequence=sequence,
+                escalation=escalation,
+                recorded_at=utc_now(),
+            )
+            self.controller_requests._put_rest(rest)
+        return rest
+
     def daemon_responsibilities(self) -> tuple[ExperimentId, ...]:
         """Every nonterminal experiment a daemon has durably taken on, oldest first.
 
         One a daemon admitted (its ``controller_host`` is ``local_daemon``),
-        or one a daemon adopted through a ``COMPLETED`` attach request. An
-        experiment an embedded host admitted, and no daemon ever attached, is
-        not here: that host may still be driving it.
+        or one a daemon adopted by carrying out a request for it: a
+        ``COMPLETED`` request of any kind, since the daemon attaches an
+        experiment before it cancels, proposes on or approves for it
+        (PR-029). An experiment an embedded host admitted, and no daemon ever
+        acted on, is not here: that host may still be driving it.
         """
         open_states = tuple(
             status.value
@@ -1116,7 +1169,7 @@ class ControlPlaneRepository:
             f"WHERE status IN ({', '.join('?' for _ in open_states)}) AND ("
             "json_extract(payload_json, '$.controller_host.kind') = 'local_daemon' "
             "OR id IN (SELECT experiment_id FROM controller_requests "
-            "WHERE kind = 'attach' AND state = 'completed')) "
+            "WHERE kind != 'submit' AND state = 'completed')) "
             "ORDER BY created_at, id",
             open_states,
         ).fetchall()
@@ -5406,7 +5459,10 @@ class ControlPlaneRepository:
         first, with its children, and writes nothing: two sagas over the same
         attempts would issue duplicate effects and race to settle one
         experiment. Retrying with the same ``action_id`` returns what was
-        recorded, and with a different request is refused.
+        recorded, and with a different request is refused. A request that
+        names its own ``action_id`` is carried out through that Action or not
+        at all: with another cancellation in flight it is refused, rather
+        than answered with an Action it does not name (PR-029).
 
         Returns:
             The parent action, and each child with the operation it caused --
@@ -5416,6 +5472,8 @@ class ControlPlaneRepository:
             UnknownOperationTargetError: If the experiment does not exist.
             IdempotencyConflictError: If *action_id* exists against a different
                 request.
+            CancellationInFlightError: If *action_id* is given, is not
+                recorded, and another cancellation is in flight.
         """
         target = ActionTarget(kind="experiment", id=str(experiment_id))
 
@@ -5443,6 +5501,8 @@ class ControlPlaneRepository:
                 if action.type == "cancel-experiment" and not action.is_terminal
             ]
             if in_flight:
+                if action_id is not None:
+                    raise CancellationInFlightError(str(action_id), str(in_flight[0].id))
                 return in_flight[0], self._saga_children(in_flight[0])
 
             self.actions._insert(proposed)

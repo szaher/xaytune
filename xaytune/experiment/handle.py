@@ -5,6 +5,12 @@ process, not a task, not a compiler or a runtime. Every answer comes from the
 record, which is what lets ``attach()`` in another process, or after this one
 has gone, return a handle that says the same things.
 
+The host is either the controller itself
+(:class:`~xaytune.experiment.EmbeddedControllerHost`) or a client of one
+running elsewhere (:class:`~xaytune.daemon.LocalDaemonControllerHost`, PR-029),
+whose handle reads the record and sends every mutation to the daemon as a
+mailbox request. The handle is the same either way.
+
 **What ``wait()`` means.** Controller quiescence: every piece of work this
 controller can currently execute for the experiment is settled, and its
 telemetry has been drained. It does *not* mean the experiment is finished.
@@ -22,14 +28,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Literal
+from typing import Literal, Protocol
 
 from xaytune.core.domain.actions import ActionSpec
 from xaytune.core.domain.budget import BudgetStatus
 from xaytune.core.domain.evaluation import EvaluationResult
 from xaytune.core.domain.event import DomainEvent
 from xaytune.core.domain.policy import GovernedAction
-from xaytune.core.ids import EvaluationRunId, ExperimentId, ExperimentNodeId, RunId
+from xaytune.core.ids import (
+    ControllerRequestId,
+    EvaluationRunId,
+    ExperimentId,
+    ExperimentNodeId,
+    RunId,
+)
 from xaytune.core.immutable import FrozenDomainModel
 from xaytune.core.refs import Actor, ArtifactRef
 from xaytune.core.state.status import (
@@ -40,9 +52,6 @@ from xaytune.core.state.status import (
     RunAttemptStatus,
     RunStatus,
 )
-
-if TYPE_CHECKING:
-    from xaytune.experiment.host import EmbeddedControllerHost
 
 __all__ = [
     "EvaluationOutcome",
@@ -172,10 +181,36 @@ class ExperimentResult(FrozenDomainModel):
     budget: BudgetStatus | None = None
 
 
+class _HandleHost(Protocol):
+    """What a handle asks its host. Private: a handle is made by a host, not by callers."""
+
+    def _experiment_status(self, experiment_id: ExperimentId) -> ExperimentStatus: ...
+
+    async def _wait(self, experiment_id: ExperimentId) -> ExperimentResult: ...
+
+    async def _cancel(self, experiment_id: ExperimentId, *, reason: str) -> None: ...
+
+    async def _propose(
+        self,
+        experiment_id: ExperimentId,
+        spec: ActionSpec,
+        *,
+        reason: str,
+        proposed_by: Actor,
+        request_id: ControllerRequestId | str | None = None,
+    ) -> GovernedAction: ...
+
+    def _actions(self, experiment_id: ExperimentId) -> tuple[GovernedAction, ...]: ...
+
+    def _events_after(
+        self, experiment_id: ExperimentId, sequence: int
+    ) -> tuple[DomainEvent, ...]: ...
+
+
 class ExperimentHandle:
     """The public face of one experiment: status, wait, cancel, events."""
 
-    def __init__(self, experiment_id: ExperimentId, host: EmbeddedControllerHost) -> None:
+    def __init__(self, experiment_id: ExperimentId, host: _HandleHost) -> None:
         self.experiment_id = experiment_id
         self._host = host
 
@@ -188,6 +223,13 @@ class ExperimentHandle:
 
     async def wait(self) -> ExperimentResult:
         """Wait until the controller is quiescent, and say where things stand.
+
+        Daemon-backed, it polls the record instead: until the daemon's
+        controller has come to rest on the experiment and nothing has
+        happened to it since, with no request for it still unhandled -- or
+        until it is terminal. Nothing in the caller drives anything, so a
+        caller that stops waiting, or exits, and waits again later loses
+        nothing.
 
         Raises:
             ReconciliationEscalatedError: If reconciliation reached a question
@@ -209,10 +251,23 @@ class ExperimentHandle:
 
         Calling it again while a cancellation is in flight returns without
         recording a second one.
+
+        Daemon-backed, this sends a ``cancel`` request and returns once the
+        daemon has carried it out -- the intent recorded and its effects
+        issued -- never calling a runtime itself. Beside another
+        cancellation in flight, it joins that one through an ``attach``
+        request, so the daemon owns the experiment and carries it on.
         """
         await self._host._cancel(self.experiment_id, reason=reason)
 
-    async def propose(self, spec: ActionSpec, *, reason: str, proposed_by: Actor) -> GovernedAction:
+    async def propose(
+        self,
+        spec: ActionSpec,
+        *,
+        reason: str,
+        proposed_by: Actor,
+        request_id: ControllerRequestId | str | None = None,
+    ) -> GovernedAction:
         """Propose a typed action: validated, judged by the host's policy, recorded.
 
         Nothing is carried out. The result says where governance left it:
@@ -223,11 +278,22 @@ class ExperimentHandle:
 
         Cancellation is not proposed: use :meth:`cancel`.
 
+        Daemon-backed, the proposal is a ``propose-action`` request: the
+        daemon validates, judges and records it under its own policy. To
+        retry one whose answer was lost -- the caller died, or timed out --
+        pass the same *request_id*: it is the same request, for the same
+        Action, judged once. The embedded host records the proposal within
+        this call, so it has nothing to retry by and ignores *request_id*.
+
         Raises:
             CancellationNotGovernedError: For a ``cancel-*`` spec.
             UnsupportedActionError: If the action's plugin refuses the spec.
+            ControllerRequestFailedError: Daemon-backed, if the daemon refused
+                the request: it says what the daemon raised.
         """
-        return self._host._propose(self.experiment_id, spec, reason=reason, proposed_by=proposed_by)
+        return await self._host._propose(
+            self.experiment_id, spec, reason=reason, proposed_by=proposed_by, request_id=request_id
+        )
 
     async def actions(self) -> tuple[GovernedAction, ...]:
         """Every action recorded for the experiment, oldest first, as governance left it.

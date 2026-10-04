@@ -5,6 +5,7 @@ import sys
 from typing import Any
 
 import xaytune
+from xaytune.cli_control import CONTROL_COMMANDS, add_control_commands, run_control_command
 from xaytune.config import load_config, validate_config
 from xaytune.recipes import recipe_registry
 
@@ -258,6 +259,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Print execution plan without running"
     )
 
+    # --- The local daemon's experiments (PR-029) ---
+    add_control_commands(subparsers)
+
     return parser
 
 
@@ -302,6 +306,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "pipeline":
         return _handle_pipeline(args)
+
+    if args.command in CONTROL_COMMANDS:
+        return run_control_command(args)
 
     return 0
 

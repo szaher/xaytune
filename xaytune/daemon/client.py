@@ -29,6 +29,7 @@ from xaytune.core.sqlite import connect
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.storage.control_plane import ControlPlaneRepository
 from xaytune.storage.errors import AggregateNotFoundError
+from xaytune.storage.leases import ControllerLease, ControllerLeaseStore
 from xaytune.storage.migrations import migrate
 from xaytune.storage.repository import AggregateStore
 from xaytune.storage.requests import ControllerRequestStore
@@ -56,6 +57,14 @@ class DaemonClient:
     def requests(self) -> ControllerRequestStore:
         """The mailbox, to read."""
         return self._repository.controller_requests
+
+    def lease(self) -> ControllerLease | None:
+        """The controller lease as recorded, live or expired; ``None`` if no daemon ever held one.
+
+        Advisory for a client: a request is durable whether or not a daemon
+        is serving, and one that is not finds it when it starts.
+        """
+        return ControllerLeaseStore(self._connection).current()
 
     def submit(
         self,

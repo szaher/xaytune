@@ -34,7 +34,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-__all__ = ["connect", "write_transaction"]
+__all__ = ["connect", "read_snapshot", "write_transaction"]
 
 # Long enough to ride out a contended writer, short enough that a genuine
 # deadlock surfaces as an error rather than a hang.
@@ -114,3 +114,26 @@ def write_transaction(connection: sqlite3.Connection) -> Iterator[sqlite3.Connec
         connection.rollback()
         raise
     connection.commit()
+
+
+@contextmanager
+def read_snapshot(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Run several reads against one snapshot of the database.
+
+    Under WAL a reader sees the database as of its transaction's first read,
+    so queries that must agree with each other -- an experiment's latest
+    event and the state that event produced -- are answered from one state,
+    with no commit from another connection landing between them. Takes no
+    lock that blocks a writer, and writes nothing.
+
+    Raises:
+        sqlite3.OperationalError: If a transaction is already open on this
+            connection.
+    """
+    if connection.in_transaction:
+        raise sqlite3.OperationalError("a transaction is already open on this connection")
+    connection.execute("BEGIN DEFERRED")
+    try:
+        yield connection
+    finally:
+        connection.rollback()

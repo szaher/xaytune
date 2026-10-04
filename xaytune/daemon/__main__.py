@@ -1,6 +1,7 @@
 """``python -m xaytune.daemon --state STATE_DB --config MODULE:FACTORY``
 
-The daemon process's entrypoint, not the Xaytune CLI (PR-029). It runs in the
+The daemon process's entrypoint, not the ``xaytune`` CLI, whose ``submit``,
+``watch``, ``cancel`` and other commands are its clients (PR-029). It runs in the
 foreground and does not daemonize itself: supervise it with systemd, launchd,
 a container or tmux. SIGTERM and SIGINT shut it down in a controlled way
 (ADR-004 §7); workloads keep running.

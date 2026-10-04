@@ -189,6 +189,53 @@ xaytune list metrics
 
 ---
 
+## Experiments on the local daemon
+
+`submit`, `attach`, `status`, `watch`, `events`, `results`, `actions`,
+`cancel`, `approve` and `reject` work on experiments controlled by a local
+daemon (`python -m xaytune.daemon`, see
+[Control-plane concepts](control-plane/concepts.md#the-local-daemon)). The
+commands run no controller: each reads the state database or sends the daemon
+a request, which the daemon carries out.
+
+```bash
+xaytune submit experiment.yaml --state state.db
+```
+
+Every command takes `--state <path>`, which defaults to `$XAYTUNE_STATE`.
+
+| Command | What it does |
+|---------|--------------|
+| `submit SPEC` | Send an `ExperimentSpec` (YAML or JSON); print the experiment id once the daemon has admitted it and started its first run, then exit |
+| `attach ID` | Ask the daemon to adopt an experiment already in the database |
+| `status ID [--json]` | Where the experiment stands now |
+| `watch ID [--timeout S]` | Print its events until the daemon has nothing left to do for it, then its status |
+| `events ID [--after N] [--follow] [--json]` | Its durable events |
+| `results ID [--no-wait] [--timeout S]` | Wait like `watch`, then print the `ExperimentResult` as JSON |
+| `actions ID [--json]` | Its actions, with status and policy verdict: approvals awaiting a human among them |
+| `cancel ID [--reason R]` | Ask the daemon to cancel it |
+| `approve ACTION_ID --reason R [--approver NAME]` | Approve an action awaiting approval, as a human (default: your user name) |
+| `reject ACTION_ID --reason R [--approver NAME]` | Reject it |
+
+The mutating commands (`submit`, `attach`, `cancel`, `approve`, `reject`)
+print `request <id>` to stderr before sending their request, and take:
+
+| Option | Description |
+|--------|-------------|
+| `--request-id ID` | Send that request again. After a command was killed, this retries it -- the same request, never carried out twice -- or reports how it ended |
+| `--timeout S` | Stop waiting for the daemon after S seconds. The request stays in the database, for the daemon to carry out |
+
+Killing any of these commands is safe: a request is the daemon's once it is
+sent, and nothing the command is waiting for depends on it. With no daemon
+running, a request waits in the database until one starts; the command says
+so.
+
+Exit status: 0 on success, 1 when the daemon refused the request (the error it
+raised is printed), the wait timed out or the experiment does not exist, 2 for
+a missing `--state`.
+
+---
+
 ## Example Config Files
 
 xaytune ships example configs in `configs/examples/`:

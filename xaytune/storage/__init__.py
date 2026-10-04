@@ -11,6 +11,10 @@ There is deliberately no ``save_experiment()``. The row-level writers on
 transaction, so a caller cannot write state without its event or request an
 external effect without durable intent: the API does not offer those operations
 separately.
+
+Every write is one fenced transaction (:mod:`xaytune.storage.leases`): a
+daemon's controller proves its lease and epoch, an embedded host that no
+daemon owns the database.
 """
 
 from __future__ import annotations
@@ -29,6 +33,15 @@ from xaytune.storage.errors import (
 )
 from xaytune.storage.graph import CandidateComparison, ExperimentGraph, LineageError
 from xaytune.storage.journal import IdempotencyConflictError
+from xaytune.storage.leases import (
+    ControllerLease,
+    ControllerLeaseFence,
+    ControllerLeaseHeldError,
+    ControllerLeaseStore,
+    LeaseLostError,
+    NoLiveLeaseFence,
+    WriteFence,
+)
 from xaytune.storage.migrations import applied_versions, available_migrations, migrate
 from xaytune.storage.repository import AggregateStore
 
@@ -38,13 +51,20 @@ __all__ = [
     "ConcurrentModificationError",
     "CandidateComparison",
     "ControlPlaneRepository",
+    "ControllerLease",
+    "ControllerLeaseFence",
+    "ControllerLeaseHeldError",
+    "ControllerLeaseStore",
     "ExperimentGraph",
     "IncompatiblePayloadError",
     "LineageError",
     "IdempotencyConflictError",
+    "LeaseLostError",
+    "NoLiveLeaseFence",
     "UnknownOperationTargetError",
     "MigrationError",
     "StorageError",
+    "WriteFence",
     "applied_versions",
     "available_migrations",
     "connect",

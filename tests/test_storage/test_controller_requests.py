@@ -21,11 +21,12 @@ import pytest
 from tests.test_storage.conftest import make_attempt, make_experiment, make_node, make_run
 from xaytune.core.domain.budget import BudgetDimension
 from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
+from xaytune.core.domain.experiment import Experiment
 from xaytune.core.domain.objective import BudgetSpec
 from xaytune.core.errors import DomainError, InvalidTransitionError
 from xaytune.core.ids import ExperimentId
 from xaytune.core.immutable import FrozenDict
-from xaytune.core.refs import Actor
+from xaytune.core.refs import Actor, ControllerHostRef
 from xaytune.core.state.status import (
     ExperimentNodeStatus,
     ExperimentStatus,
@@ -373,3 +374,59 @@ def test_a_request_cannot_be_admitted_without_the_submitted_specs_digest(
             request_id=request.id,
         )
     assert set(_counts(connection).values()) == {0}
+
+
+# ---- what a daemon is responsible for (PR-028) ------------------------------------------
+
+
+def _experiment_at(
+    repository: ControlPlaneRepository, host: str, *statuses: ExperimentStatus
+) -> ExperimentId:
+    experiment = Experiment.model_validate(
+        {
+            **make_experiment().model_dump(mode="python"),
+            "controller_host": ControllerHostRef(kind=host, id=f"{host}-1"),  # type: ignore[arg-type]
+        }
+    )
+    repository.create_experiment(experiment, actor=_ACTOR)
+    revision = 0
+    for status in statuses:
+        repository.transition_experiment(
+            experiment.id, expected_revision=revision, new_status=status, actor=_ACTOR
+        )
+        revision += 1
+    return experiment.id
+
+
+def _attached(repository: ControlPlaneRepository, experiment_id: ExperimentId, *, done: bool):
+    request = repository.record_controller_request(ControllerRequest.attach(experiment_id))
+    if done:
+        repository.complete_controller_request(request.id, expected_revision=0)
+    return request
+
+
+def test_a_daemon_is_responsible_for_what_it_admitted_or_adopted_and_has_not_ended(
+    repository: ControlPlaneRepository,
+) -> None:
+    ACTIVE, PAUSED = ExperimentStatus.ACTIVE, ExperimentStatus.PAUSED  # noqa: N806
+    admitted = _experiment_at(repository, "local_daemon", ACTIVE)
+    paused = _experiment_at(repository, "local_daemon", ACTIVE, PAUSED)
+    created = _experiment_at(repository, "local_daemon")
+    ended = _experiment_at(repository, "local_daemon", ACTIVE, ExperimentStatus.CANCELLED)
+    embedded = _experiment_at(repository, "embedded", ACTIVE)
+    adopted = _experiment_at(repository, "embedded", ACTIVE)
+    asked = _experiment_at(repository, "embedded", ACTIVE)
+    both = _experiment_at(repository, "local_daemon", ACTIVE)
+    _attached(repository, adopted, done=True)
+    _attached(repository, asked, done=False)
+    _attached(repository, both, done=True)
+    _attached(repository, both, done=True)
+    ended_adopted = _experiment_at(repository, "embedded", ACTIVE, ExperimentStatus.FAILED)
+    _attached(repository, ended_adopted, done=True)
+
+    owned = repository.daemon_responsibilities()
+
+    assert owned == (admitted, paused, created, adopted, both), "oldest first, each once"
+    assert embedded not in owned, "an embedded experiment nobody attached stays its host's"
+    assert asked not in owned, "an attach not yet completed is not adoption"
+    assert ended not in owned and ended_adopted not in owned

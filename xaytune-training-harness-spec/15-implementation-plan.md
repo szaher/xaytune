@@ -30,7 +30,7 @@ claim restart safety it has not built:
 |---|---|---|
 | **Repository recovery** | committed aggregate state and events, after the *process* restarts | B |
 | **Runtime-operation reconciliation** | in-flight submissions and live attempts, through `lookup_operation()` and `get_status()` | C |
-| **Daemon restart reconciliation** | whole-controller startup: lease acquisition, every active experiment, deadlines, control loops | H |
+| **Daemon restart reconciliation** | whole-controller startup: lease acquisition, every owned experiment, budget settlement, control loops | H |
 
 Only the first is available in band B, because there is no controller and no
 runtime there yet. Only the third is a full controller restart. ADR-013 puts
@@ -113,7 +113,7 @@ matter of record rather than of review:
 | ADR-015 — durable evaluation lifecycle | PR-005 evaluation tables |
 | ADR-016 — specs versus implementations | PR-005 experiment record |
 | ADR-017 — reuse policy | band G; accepted 2026-10-01 with v1 training-artifact reuse disabled |
-| ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary |
+| ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04 |
 
 ### Still Proposed, and what each actually blocks
 
@@ -1452,22 +1452,59 @@ Contract: ADR-004 (accepted before this PR). Delivered as the server half,
   runtimes and the database, release the lock last; workloads keep running.
 
 Out of scope: leases and heartbeats, the whole-database startup sweep,
-deadline/budget re-evaluation after downtime (PR-028); the user CLI (PR-029);
+budget settlement after downtime (PR-028); the user CLI (PR-029);
 HTTP/Unix-socket/gRPC; `DecisionEngineSpec` persistence; Windows locking.
 
 ### PR-028 — host leases and whole-controller startup reconciliation
 
-Implement:
+Durable controller ownership, and a restarted daemon recovering everything it
+owns, through the existing ADR-013 effect identities and record-driven loops.
+Contract: ADR-004 §8 (settled 2026-10-04). As built:
 
-- controller identity and lease acquisition, so two daemons cannot drive one
-  database
-- startup sweep: load every active experiment, node, run and attempt, then
-  delegate per-attempt recovery to the PR-012a path rather than reimplementing
-  it
-- deadline and budget re-evaluation after downtime
-- resuming control loops
+- **Two layers.** The PR-027 flock stays; the durable lease is added on top.
+  Startup: flock → migrate → acquire or wait for the lease → fenced controller
+  → unfinished mailbox requests → sweep → mailbox and heartbeat loop. The flock
+  is released last. Local SQLite only.
+- **Lease.** Migration 017, a singleton `controller_leases` row
+  (`controller_id`, `epoch`, `heartbeat_at`, `lease_expires_at`), never
+  deleted. The epoch starts at 1 and increments on every new acquisition,
+  clean or crash; renewal keeps it. A live lease is waited out, never taken --
+  no host/PID/process shortcut. Renewal (every TTL/3) and release are
+  compare-and-sets on `(controller_id, epoch)`; an expired lease is not
+  revived. `DaemonConfig.lease_ttl_seconds`, default 30, is the one timing
+  setting; no CLI flag.
+- **Fencing.** Every `ControlPlaneRepository` write goes through one
+  transaction helper that checks, after the write lock and before the first
+  mutation: owner + epoch + unexpired for the daemon's controller
+  (`LeaseLostError`), no live lease for an embedded host
+  (`ControllerLeaseHeldError`) -- on every write, so a host opened before the
+  daemon is refused afterwards; reads stay open. `DaemonClient` mailbox writes
+  and runtime calls are not fenced (ADR-013 idempotency covers a stale
+  re-issue). An AST test keeps the helper the only transaction opener.
+- **Lease loss is process-fatal** wherever it surfaces: the daemon stops,
+  records no workload outcome, leaves the lease alone and exits 5.
+- **Sweep.** Nonterminal experiments with `controller_host.kind ==
+  "local_daemon"` or a `COMPLETED` attach request, each reconciled by
+  `attach()`; embedded experiments never attached are not swept. Running it
+  twice changes nothing the first run did not.
+- **Pause-safe reconciliation.** `PAUSED` experiments are swept: existing work
+  is adopted and settled, nothing new starts. `_continue_to_evaluation()` now
+  requires `ACTIVE`, and an evaluation run with no attempt gets none while
+  paused.
+- **Settle durable budget accounting after downtime and apply existing
+  budget-exhaustion rules before starting further work.** The sweep runs
+  `settle_budget()` and moves no experiment; the existing rules apply at the
+  existing effect boundaries (new run, evaluation cycle, evaluation attempt,
+  recovery successor) through `attach()`, unchanged by a restart. A resting
+  experiment with a used-up quota stays `ACTIVE`; a `PAUSED` one is settled
+  and stays paused. No deadline, wall-time, GPU-hour, token or cost
+  accounting: those dimensions are refused at submission, and downtime costs
+  nothing.
 
-Idempotent: running it twice changes nothing the first run did not.
+Out of scope: `LocalDaemonControllerHost` and the CLI (PR-029); cancel,
+propose and approve request kinds; pause/resume; deadlines and time-based
+budgets; remote or distributed controllers, network filesystems and runtime
+fencing tokens; the event actor rename; mailbox retry backoff.
 
 ### PR-029 — LocalDaemonControllerHost + CLI submit/attach/watch
 

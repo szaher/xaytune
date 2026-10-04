@@ -226,15 +226,22 @@ submit it admits.
 On one machine the daemon's singleton is an OS advisory lock, not a row
 (ADR-004 §5).
 
-**Leases (PR-028).** For LocalDaemon:
+**Leases (PR-028, ADR-004 §8).** `controller_leases` (migration 017) is one
+row per database, keyed `singleton_key = 1` and never deleted:
 
 ```text
-controller_id
-heartbeat_at
-lease_expires_at
+controller_id      the daemon process instance that owns the database now
+epoch              fencing generation: 1 first, +1 on every new owner
+heartbeat_at       last renewal
+lease_expires_at   after this, nobody owns it
 ```
 
-Prevent two local daemons controlling the same database.
+Triggers keep the first epoch at 1 and make every update either keep
+`(controller_id, epoch)` or move to the next epoch. Acquire, renew and release
+are single transactions; every `ControlPlaneRepository` write checks the
+lease inside its own transaction (the daemon's: owner, epoch, unexpired; an
+embedded host's: no live lease). `Experiment.controller_host` is provenance,
+not ownership, and is never rewritten by a takeover.
 
 Remote distributed controller locking is deferred.
 

@@ -155,7 +155,9 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   ADR-017 was accepted on 2026-10-01, unblocking band G. ADR-004 was accepted on
   2026-10-03, unblocking band H: it was expanded before acceptance with the
   local daemon's SQLite request mailbox, atomic initial admission, flock
-  singleton and controlled shutdown, and the PR-027/PR-028 boundary.
+  singleton and controlled shutdown, and the PR-027/PR-028 boundary. Its §8
+  was settled on 2026-10-04 for PR-028: the durable, epoch-fenced controller
+  lease, embedded-host exclusion, and the startup sweep.
 - `schemas/` — proposed YAML and JSON/Python schema examples, and the design
   drafts of migrations 001–003 with their rationale. They are not the schema:
   the shipped migrations are `xaytune/storage/migrations/001`–`006` (core

@@ -1,7 +1,8 @@
 # ADR-004 — Controller hosting is explicit and durable
 
 ## Status
-Accepted — 2026-10-03.
+Accepted — 2026-10-03. §8 settled for PR-028 on 2026-10-04: the lease model,
+its fences, and the startup sweep.
 
 Gates band H (spec 15 Phase 7): PR-027 the local daemon process, PR-028
 host leases and whole-controller startup reconciliation, PR-029 CLI
@@ -164,9 +165,9 @@ database to attach, wait or cancel.
 
 The daemon recovers **unfinished mailbox requests** at startup (`PENDING`, and
 `ACCEPTED` through the existing attach/reconciliation path, never creating a
-second experiment, run or attempt). A `COMPLETED` request's experiment is not
-adopted again by restarting the daemon; an explicit `attach` request does that
-until PR-028.
+second experiment, run or attempt). Since PR-028 it then sweeps every
+nonterminal experiment it is responsible for (§8); in PR-027 a `COMPLETED`
+request's experiment was adopted again only by an explicit `attach` request.
 
 ### 7. Controlled shutdown
 
@@ -178,13 +179,109 @@ written; uncertain operations stay in the journal for reconciliation. A client
 may still commit a `PENDING` request during shutdown; it waits for the next
 daemon.
 
-### 8. What PR-028 adds
+### 8. Durable ownership: the controller lease (PR-028)
 
-Durable controller identity and leases (`controller_id`, `heartbeat_at`,
-`lease_expires_at`, takeover rules), the startup sweep over every active
-experiment, deadline and budget re-evaluation after downtime, and whole-
-controller control-loop reconstruction. PR-027 adds none of these, and no
-partial lease.
+**Two layers, both mandatory.** The flock (§5) keeps a second daemon on the
+same machine off the database, and the kernel releases it when a process dies.
+The **controller lease** is ownership in the record: it carries the fencing
+epoch, excludes embedded hosts, and decides takeover. Neither replaces the
+other. The state database must be on a local filesystem: SQLite over NFS, SMB
+or any shared or distributed filesystem is unsupported, and nothing tries to
+detect it.
+
+**The lease** is one row per database (`controller_leases`, migration 017):
+`controller_id` (the daemon process's instance id), `epoch`, `heartbeat_at`,
+`lease_expires_at`. It is never deleted.
+
+- *Epoch.* Starts at 1 and increments on **every new acquisition** -- after a
+  clean release as after a crash -- never on renewal. An earlier generation,
+  even under a reused controller id, never becomes current again.
+- *Acquire.* One transaction. No row: insert epoch 1. An expired row: a
+  compare-and-set on the old `(controller_id, epoch)` to the next epoch. A
+  live row is never taken: the new daemon waits for it to expire, and the wait
+  is interruptible by SIGTERM/SIGINT. There is no hostname, PID, container or
+  process-existence shortcut; durable expiry is the only authority.
+- *Renew.* Every TTL/3: a compare-and-set on `(controller_id, epoch)` of a
+  lease still live. An expired lease is not revived; zero rows changed is
+  `LeaseLostError`.
+- *Release.* On controlled shutdown, after controller work has stopped and
+  before the flock: `lease_expires_at = now`, only if `(controller_id, epoch)`
+  still match. A crash writes nothing; the successor waits out the TTL.
+- *Timing.* One setting, `DaemonConfig.lease_ttl_seconds` (finite, positive,
+  default 30 s); renewal is always TTL/3. No command-line flag.
+
+`Experiment.controller_host` stays *provenance* -- which host admitted it --
+and is never rewritten by a takeover; the lease is *current* ownership.
+
+**Fencing.** Every `ControlPlaneRepository` write transaction proves ownership
+inside the transaction, after `BEGIN IMMEDIATE` has taken SQLite's write lock
+and before its first mutation, so a write serializes wholly before or wholly
+after a takeover and never across one. The repository has a single
+transaction helper, and an architecture test keeps it the only one.
+
+```text
+daemon controller   controller_id == mine AND epoch == mine AND unexpired
+                    else LeaseLostError, nothing written
+embedded host       no unexpired lease exists
+                    else ControllerLeaseHeldError, nothing written
+DaemonClient        unfenced: committing a mailbox request is a client's
+                    write, not controller state
+```
+
+The embedded check runs on **every write**, not when the host opens: a host
+opened before the daemon took the lease loses write authority from then on.
+Reads stay open to it -- status, events, actions, results. Lease writes check
+ownership themselves; migrations run before ownership is taken.
+
+**Runtime effects are not fenced.** Every external mutation has a durable
+`RuntimeOperation` first (ADR-005 §5), so a process whose lease expired can
+only re-issue an effect recorded while it still owned the database, under the
+same operation id: get-or-create (ADR-013), not a second workload. Its
+confirmation of that effect is fenced, and the new owner reconciles the
+operation. There is no second, runtime-level fencing token.
+
+**Lease loss is fatal.** A `LeaseLostError` from anywhere -- renewal, a
+mailbox request, an observer, recovery, evaluation, planning, decision,
+cancellation, budget settlement -- is not a retry, an escalation or an
+experiment failure: the process no longer has authority over the database.
+The fence reports it to the server before raising, so a caller further up
+cannot swallow it. The daemon stops dequeuing, cancels observers, stops
+renewing, closes its controller and runtimes, records no workload outcome,
+leaves the lease alone, releases the flock and exits with status 5.
+
+**Startup.** flock → migrate → acquire (or wait for) the lease → the fenced
+controller → unfinished mailbox requests (§6) → the sweep → the mailbox and
+heartbeat loop. A crash anywhere in it is safe: the next epoch repeats it from
+the record.
+
+**The sweep.** Every nonterminal experiment the daemon is responsible for:
+`controller_host.kind == "local_daemon"`, or a `COMPLETED` attach request for
+it -- durable adoption, with no adoption table. An experiment an embedded host
+admitted and no daemon attached is not swept: that host may still be driving
+it. Each is reconciled through `attach()` and ADR-013; there is no
+startup-specific recovery of runs, attempts, operations or planning. Sweeping
+twice repeats nothing.
+
+**Paused experiments are swept, and stay paused.** A workload already running
+still needs an owner, so reconciliation may look up, adopt and settle existing
+work, carry on a requested cancellation and settle the ledger. It starts
+nothing new: no evaluation cycle, no first attempt for an evaluation run, no
+planned or realized candidate, no recovery successor (recovery already asks
+for review when paused). Automatic evaluation progression requires `ACTIVE`.
+
+**Budget after downtime.** No budget dimension measures time:
+`max_wall_time_seconds`, `max_gpu_hours`, `max_tokens` and `max_cost` are
+refused at submission, and the downtime is charged nowhere. The sweep repairs
+accounting only (`settle_budget`) and moves no experiment: the state a restart
+finds is not an effect. Exhaustion is decided where the controller is about to
+create one -- a run, an evaluation cycle, an evaluation attempt, a recovery
+successor -- by the same code before a restart as after it, so a restart alone
+never changes an outcome. An experiment resting with a used-up quota and
+nothing about to run (failure-handling, or planning with no planner) stays
+`ACTIVE`, as it would have; a `PAUSED` experiment is settled and stays
+paused.
+
+Distributed or remote controller ownership remains future work.
 
 ## Rationale
 
@@ -204,3 +301,6 @@ with the record. Polling latency is acceptable for a local host.
 - a request's handoff is durable and idempotent by its client-generated id
 - initial submission is atomic for every host
 - one daemon per state database per machine, by kernel lock
+- one controller per state database, by a durable epoch-fenced lease; an
+  embedded host cannot write beside a live daemon
+- a restarted daemon reconciles everything it owns from the record

@@ -28,6 +28,7 @@ against one database is the operator's responsibility.
 from __future__ import annotations
 
 import importlib
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -53,13 +54,19 @@ class DaemonConfigurationError(XaytuneError):
 
 @dataclass(frozen=True, kw_only=True)
 class DaemonConfig:
-    """The implementations a daemon's controller uses. Every field is required.
+    """The implementations a daemon's controller uses. Every implementation is required.
 
-    The fields are those of
+    The implementation fields are those of
     :class:`~xaytune.experiment.EmbeddedControllerHost`, which the daemon
     delegates its control to; ``None`` is accepted only where the embedded
     host gives it a meaning -- no checkpoint manager, no first recovery
     request -- and must still be written down.
+
+    ``lease_ttl_seconds`` is the one timing setting, and has a default: how
+    long the daemon's controller lease lasts unrenewed (ADR-004 §8). It is
+    renewed every third of that, and after a crash the next daemon waits for
+    it to expire -- so it bounds both how fast a dead daemon is replaced and
+    how long the event loop may stall before the daemon loses its lease.
     """
 
     compilers: Mapping[str, Callable[[], TrainerCompiler]]
@@ -70,6 +77,16 @@ class DaemonConfig:
     policy: PolicyEngine
     checkpoint_manager: CheckpointManager | None
     recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None
+    lease_ttl_seconds: float = 30.0
+
+    def __post_init__(self) -> None:
+        ttl = self.lease_ttl_seconds
+        if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+            raise DaemonConfigurationError(f"lease_ttl_seconds must be a number, not {ttl!r}")
+        if not math.isfinite(ttl) or ttl <= 0:
+            raise DaemonConfigurationError(
+                f"lease_ttl_seconds must be finite and positive, not {ttl!r}"
+            )
 
 
 def load_config(reference: str) -> DaemonConfig:

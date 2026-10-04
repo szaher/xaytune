@@ -41,7 +41,8 @@ from __future__ import annotations
 import math
 import sqlite3
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -190,6 +191,7 @@ from xaytune.core.ids import (
 )
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import Actor, ArtifactRef, CheckpointRef, RuntimeRef
+from xaytune.core.state.machines import EXPERIMENT_MACHINE
 from xaytune.core.state.status import (
     EvaluationAttemptStatus,
     EvaluationRunStatus,
@@ -218,6 +220,7 @@ from xaytune.storage.journal import (
     IdempotencyConflictError,
     OperationJournal,
 )
+from xaytune.storage.leases import WriteFence
 from xaytune.storage.policy import PolicyDecisionStore
 from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
 from xaytune.storage.recovery_actions import RecoveryActionBindingStore
@@ -696,10 +699,20 @@ class _BoundRecoveryProposal:
 
 
 class ControlPlaneRepository:
-    """Atomic writes over the control-plane aggregates and their journals."""
+    """Atomic writes over the control-plane aggregates and their journals.
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    Args:
+        connection: The state database.
+        fence: What every write transaction proves, inside it and before its
+            first mutation (ADR-004 §8). A daemon's controller passes its
+            :class:`~xaytune.storage.leases.ControllerLeaseFence`; an embedded
+            host a :class:`~xaytune.storage.leases.NoLiveLeaseFence`. ``None``
+            -- a mailbox client, a test -- writes unfenced.
+    """
+
+    def __init__(self, connection: sqlite3.Connection, *, fence: WriteFence | None = None) -> None:
         self._connection = connection
+        self._fence = fence
         self.aggregates = AggregateStore(connection)
         self.events = EventJournal(connection)
         self.operations = OperationJournal(connection)
@@ -720,6 +733,24 @@ class ControlPlaneRepository:
         self.graph = ExperimentGraph(connection)
         self.controller_requests = ControllerRequestStore(connection)
 
+    @contextmanager
+    def _write(self) -> Iterator[None]:
+        """One write transaction, fenced: the only way this repository writes.
+
+        The fence runs after ``BEGIN IMMEDIATE`` has taken SQLite's write lock
+        and before anything is written, so ownership cannot change between
+        the check and the commit: the transaction serializes wholly before a
+        takeover or wholly after it, and a refused one writes nothing.
+
+        Raises:
+            LeaseLostError: Through a daemon controller's fence.
+            ControllerLeaseHeldError: Through an embedded host's fence.
+        """
+        with write_transaction(self._connection):
+            if self._fence is not None:
+                self._fence.check(self._connection)
+            yield
+
     # ---- ADR-005 §3 ----------------------------------------------------
 
     def create_experiment(
@@ -732,7 +763,7 @@ class ControlPlaneRepository:
         """Create an experiment, its creation event and any outbox records."""
         _require_pristine(experiment, ExperimentStatus.CREATED)
 
-        with write_transaction(self._connection):
+        with self._write():
             self.aggregates._insert_experiment(experiment)
             self._emit(experiment, "ExperimentCreated", str(experiment.id), actor, destinations)
         return experiment
@@ -768,7 +799,7 @@ class ControlPlaneRepository:
                 f"provenance, minted only by materialize_candidate_proposal()"
             )
 
-        with write_transaction(self._connection):
+        with self._write():
             self.graph.validate_parents(node)
             self.aggregates._insert_node(node)
             self._emit(node, "NodeCreated", str(node.experiment_id), actor, destinations)
@@ -786,7 +817,7 @@ class ControlPlaneRepository:
         """
         _require_pristine(run, RunStatus.CREATED)
 
-        with write_transaction(self._connection):
+        with self._write():
             self._insert_run_with_reservation(run, actor, destinations)
         return run
 
@@ -896,7 +927,7 @@ class ControlPlaneRepository:
             raise StorageError(f"not one fresh submission: {'; '.join(problems)}")
 
         aggregates = self.aggregates
-        with write_transaction(self._connection):
+        with self._write():
             request = None
             if request_id is not None:
                 request = self.controller_requests.get(str(request_id))
@@ -1005,7 +1036,7 @@ class ControlPlaneRepository:
         """
         if request.state is not ControllerRequestState.PENDING or request.revision != 0:
             raise ValueError("a controller request is recorded PENDING, at revision 0")
-        with write_transaction(self._connection):
+        with self._write():
             existing = self.controller_requests.get(str(request.id))
             if existing is not None:
                 differing = existing.same_request(request)
@@ -1055,7 +1086,7 @@ class ControlPlaneRepository:
         new_state: ControllerRequestState,
         error: FrozenDict | None,
     ) -> ControllerRequest:
-        with write_transaction(self._connection):
+        with self._write():
             request = self.controller_requests.get(str(request_id))
             if request is None:
                 raise AggregateNotFoundError("ControllerRequest", str(request_id))
@@ -1066,6 +1097,30 @@ class ControlPlaneRepository:
             moved = request.with_state(new_state, error=error)
             self.controller_requests._update(moved)
         return moved
+
+    def daemon_responsibilities(self) -> tuple[ExperimentId, ...]:
+        """Every nonterminal experiment a daemon has durably taken on, oldest first.
+
+        One a daemon admitted (its ``controller_host`` is ``local_daemon``),
+        or one a daemon adopted through a ``COMPLETED`` attach request. An
+        experiment an embedded host admitted, and no daemon ever attached, is
+        not here: that host may still be driving it.
+        """
+        open_states = tuple(
+            status.value
+            for status in ExperimentStatus
+            if not EXPERIMENT_MACHINE.is_terminal(status)
+        )
+        rows = self._connection.execute(
+            "SELECT id FROM experiments "  # noqa: S608
+            f"WHERE status IN ({', '.join('?' for _ in open_states)}) AND ("
+            "json_extract(payload_json, '$.controller_host.kind') = 'local_daemon' "
+            "OR id IN (SELECT experiment_id FROM controller_requests "
+            "WHERE kind = 'attach' AND state = 'completed')) "
+            "ORDER BY created_at, id",
+            open_states,
+        ).fetchall()
+        return tuple(ExperimentId(row["id"]) for row in rows)
 
     def transition_experiment(
         self,
@@ -1240,7 +1295,7 @@ class ControlPlaneRepository:
                 f"artifact {artifact.id} names attempt {artifact.producer_attempt_id} as its "
                 f"producer, not {attempt_id}; recording it here would misattribute it"
             )
-        with write_transaction(self._connection):
+        with self._write():
             current = self.aggregates.get_attempt(str(attempt_id))
             if current is None:
                 raise AggregateNotFoundError("RunAttempt", str(attempt_id))
@@ -1284,7 +1339,7 @@ class ControlPlaneRepository:
         self, incident_id: str, request: RecoveryRequest, actor: Actor
     ) -> RecoveryEpisode:
         """Prepare immutable initial provenance without writing a half-episode."""
-        with write_transaction(self._connection):
+        with self._write():
             incident = self.incidents.get(incident_id)
             if incident is None:
                 raise AggregateNotFoundError("incident", incident_id)
@@ -1328,13 +1383,13 @@ class ControlPlaneRepository:
         )
 
     def recovery_target_is_superseded(self, context: AttemptContext) -> bool:
-        with write_transaction(self._connection):
+        with self._write():
             attempt, _, attempts = self._recovery_attempt_state(context)
             return any(a.attempt_number > attempt.attempt_number for a in attempts)
 
     def recovery_snapshot(self, episode: RecoveryEpisode) -> RecoveryInputsV1:
         """Typed decision-only projection. Byte inspection happens outside this lock."""
-        with write_transaction(self._connection):
+        with self._write():
             return self._recovery_snapshot(episode)
 
     def _recovery_snapshot(self, episode: RecoveryEpisode) -> RecoveryInputsV1:
@@ -1444,7 +1499,7 @@ class ControlPlaneRepository:
         self, incident_id: str, *, actor: Actor, destinations: tuple[str, ...] = ()
     ) -> None:
         """Repair audit linkage only; accepted coverage gaps intentionally fail closed."""
-        with write_transaction(self._connection):
+        with self._write():
             incident = self.incidents.get(incident_id)
             if incident is None:
                 raise AggregateNotFoundError("incident", incident_id)
@@ -1488,7 +1543,7 @@ class ControlPlaneRepository:
         A future executor MUST revalidate checkpoint bytes before using them.
         """
         plan = RecoveryPlan.model_validate_json(plan.model_dump_json())
-        with write_transaction(self._connection):
+        with self._write():
             revisions = self.recovery_plans.revisions_for_episode(str(plan.episode_id))
             existing = next((p for p in revisions if p.sequence == plan.sequence), None)
             reused = self.recovery_plans.get(str(plan.id))
@@ -1599,7 +1654,7 @@ class ControlPlaneRepository:
         """
         incident = Incident.model_validate_json(incident.model_dump_json())
         target = incident.context.target
-        with write_transaction(self._connection):
+        with self._write():
             context = self.incident_context(target)
             if context != incident.context:
                 raise ProvenanceError("incident context does not match its recorded attempt")
@@ -1671,7 +1726,7 @@ class ControlPlaneRepository:
         second checkpoint/event. The original provenance remains authoritative.
         """
         target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
-        with write_transaction(self._connection):
+        with self._write():
             context = self.incident_context(target)
             attempt = self.aggregates.load_attempt(str(attempt_id))
             run = self.aggregates.load_run(str(attempt.run_id))
@@ -1770,7 +1825,7 @@ class ControlPlaneRepository:
         Returns:
             The new ``(generation, sequence)`` position.
         """
-        with write_transaction(self._connection):
+        with self._write():
             attempt: RunAttempt | EvaluationAttempt = (
                 self.aggregates.load_attempt(str(attempt_id))
                 if kind == "training-attempt"
@@ -1840,7 +1895,7 @@ class ControlPlaneRepository:
         for run in runs:
             _require_pristine(run, EvaluationRunStatus.CREATED)
 
-        with write_transaction(self._connection):
+        with self._write():
             current = self.aggregates.get_node(str(node_id))
             if current is None:
                 raise AggregateNotFoundError("ExperimentNode", str(node_id))
@@ -1875,7 +1930,7 @@ class ControlPlaneRepository:
             StorageError: If the node is not evaluating, or is in another cycle.
         """
         _require_pristine(run, EvaluationRunStatus.CREATED)
-        with write_transaction(self._connection):
+        with self._write():
             node = self.aggregates.load_node(str(run.node_id))
             _require_run_of_cycle(run, node)
             self.aggregates._insert_evaluation_run(run)
@@ -1993,7 +2048,7 @@ class ControlPlaneRepository:
             AggregateNotFoundError: If the attempt does not exist.
             StorageError: If the attempt has already ended.
         """
-        with write_transaction(self._connection):
+        with self._write():
             attempt = self.aggregates.load_evaluation_attempt(str(attempt_id))
             if attempt.is_terminal:
                 raise StorageError(
@@ -2085,7 +2140,7 @@ class ControlPlaneRepository:
             ProvenanceError: If the result disagrees with its run.
             StorageError: If the run already has a result.
         """
-        with write_transaction(self._connection):
+        with self._write():
             attempt = self.aggregates.get_evaluation_attempt(str(attempt_id))
             if attempt is None:
                 raise AggregateNotFoundError("EvaluationAttempt", str(attempt_id))
@@ -2167,7 +2222,7 @@ class ControlPlaneRepository:
             AggregateNotFoundError: If the node does not exist.
             StorageError: If the node is not in ``EVALUATING``.
         """
-        with write_transaction(self._connection):
+        with self._write():
             node = self.aggregates.load_node(str(node_id))
             if node.status is not ExperimentNodeStatus.EVALUATING:
                 raise StorageError(
@@ -2276,7 +2331,7 @@ class ControlPlaneRepository:
                 cites a result outside the cycle, or claims an input
                 fingerprint the durable inputs do not give.
         """
-        with write_transaction(self._connection):
+        with self._write():
             node = self.aggregates.load_node(str(proposal.node_id))
             recorded = self.aggregates.decision_for_cycle(str(node.id), proposal.evaluation_cycle)
             if recorded is not None:
@@ -2434,7 +2489,7 @@ class ControlPlaneRepository:
             AggregateNotFoundError: If the node does not exist.
             StorageError: If the node is not in ``DECIDING``.
         """
-        with write_transaction(self._connection):
+        with self._write():
             node = self.aggregates.load_node(str(node_id))
             if node.status is not ExperimentNodeStatus.DECIDING:
                 raise StorageError(
@@ -2578,7 +2633,7 @@ class ControlPlaneRepository:
             BranchRefusedError: See above.
             LineageError: See above.
         """
-        with write_transaction(self._connection):
+        with self._write():
             aggregates = self.aggregates
             experiment = aggregates.load_experiment(str(experiment_id))
             candidate = proposal.candidate
@@ -2706,7 +2761,7 @@ class ControlPlaneRepository:
             The active node, the active run, the attempt and its submit
             operation -- or ``None`` if the node is no longer ``PLANNED``.
         """
-        with write_transaction(self._connection):
+        with self._write():
             aggregates = self.aggregates
             node = aggregates.get_node(str(node_id))
             if node is None:
@@ -2930,7 +2985,7 @@ class ControlPlaneRepository:
         Returns:
             Whether the experiment is now ``BUDGET_EXHAUSTED`` by this call.
         """
-        with write_transaction(self._connection):
+        with self._write():
             experiment = self.aggregates.load_experiment(str(experiment_id))
             if experiment.status is not ExperimentStatus.ACTIVE:
                 return False
@@ -2977,7 +3032,7 @@ class ControlPlaneRepository:
         Returns:
             How many entries it wrote.
         """
-        with write_transaction(self._connection):
+        with self._write():
             before = len(self.budget.entries(str(experiment_id)))
             for node in self.aggregates.nodes_for_experiment(str(experiment_id)):
                 for run in self.aggregates.runs_for_node(str(node.id)):
@@ -3121,7 +3176,7 @@ class ControlPlaneRepository:
                 f"{proposal.input_fingerprint}, but it was given {context.input_fingerprint()}"
             )
 
-        with write_transaction(self._connection):
+        with self._write():
             if _bound is not None:
                 bound = _bound.replay()
                 if bound is not None:
@@ -3567,7 +3622,7 @@ class ControlPlaneRepository:
             IdempotencyConflictError: If the Action already has a different one.
         """
         intervention = TrainingIntervention.model_validate_json(intervention.model_dump_json())
-        with write_transaction(self._connection):
+        with self._write():
             existing = self.training_interventions.for_action(
                 str(intervention.action_id)
             ) or self.training_interventions.get(str(intervention.id))
@@ -3749,7 +3804,7 @@ class ControlPlaneRepository:
                 the durable record, or the trajectory's rate is unknown.
             IdempotencyConflictError: If *application_id* was recorded differently.
         """
-        with write_transaction(self._connection):
+        with self._write():
             intervention = self.training_interventions.get(str(intervention_id))
             if intervention is None:
                 raise AggregateNotFoundError("training intervention", str(intervention_id))
@@ -3941,7 +3996,7 @@ class ControlPlaneRepository:
             request_digest=request_digest,
             caused_by_action_id=action_id,
         )
-        with write_transaction(self._connection):
+        with self._write():
             binding = self.numerical_recovery_bindings.for_action(str(action_id))
             if binding is None:
                 raise ProvenanceError("numerical Action has no recovery decision binding")
@@ -4093,7 +4148,7 @@ class ControlPlaneRepository:
         For a rejected Action, or one no eligible checkpoint can carry. Mirrors
         :meth:`abandon_oom_recovery_action`. Creates no successor or operation.
         """
-        with write_transaction(self._connection):
+        with self._write():
             binding = self.numerical_recovery_bindings.for_action(str(action_id))
             if binding is None:
                 raise ProvenanceError("numerical Action has no recovery decision binding")
@@ -4251,7 +4306,7 @@ class ControlPlaneRepository:
             request_digest=request_digest,
             caused_by_action_id=action_id,
         )
-        with write_transaction(self._connection):
+        with self._write():
             binding = self.recovery_action_bindings.for_action(str(action_id))
             if binding is None:
                 raise ProvenanceError("OOM Action has no recovery decision binding")
@@ -4418,7 +4473,7 @@ class ControlPlaneRepository:
         A stale plan cannot terminalize a Run whose current episode decision
         may already have changed. This path creates no successor or operation.
         """
-        with write_transaction(self._connection):
+        with self._write():
             binding = self.recovery_action_bindings.for_action(str(action_id))
             if binding is None:
                 raise ProvenanceError("OOM Action has no recovery decision binding")
@@ -4505,7 +4560,7 @@ class ControlPlaneRepository:
         destinations: tuple[str, ...] = (),
     ) -> tuple[RecoveryExecutionReceipt, ...]:
         """Retire unconsumed Actions bound to obsolete episode revisions."""
-        with write_transaction(self._connection):
+        with self._write():
             current = self.recovery_plans.effective_for_episode(str(episode_id))
             if current is None or not self.recovery_plans.is_effective_and_fresh(str(current.id)):
                 raise StaleRecoveryContextError("OOM episode has no fresh effective decision")
@@ -4632,7 +4687,7 @@ class ControlPlaneRepository:
             raise ApprovalError("an approval or rejection says why")
         answer = {"approver": approver.model_dump(mode="json"), "reason": reason}
         identity = _approval_identity(event_type, answer)
-        with write_transaction(self._connection):
+        with self._write():
             action = self.actions.get(str(action_id))
             if action is None:
                 raise AggregateNotFoundError("Action", str(action_id))
@@ -5057,7 +5112,7 @@ class ControlPlaneRepository:
             loader = self.aggregates.get_evaluation_attempt
             created_event = "EvaluationAttemptCreated"
 
-        with write_transaction(self._connection):
+        with self._write():
             existing = self.operations.get(str(operation.id))
             if existing is not None:
                 self.operations._assert_same_request(existing, operation)
@@ -5243,7 +5298,7 @@ class ControlPlaneRepository:
         action_id = action_id or ActionId.generate()
         operation_id = operation_id or OperationId.generate()
 
-        with write_transaction(self._connection):
+        with self._write():
             experiment_id = self._experiment_of_action_target(target)
             proposed = Action(
                 id=action_id,
@@ -5321,7 +5376,7 @@ class ControlPlaneRepository:
         status, outcome = resolution
 
         settled = action.with_status(status, outcome=outcome)
-        with write_transaction(self._connection):
+        with self._write():
             self.actions._update(settled)
             label = outcome.value if outcome else "failed"
             self._emit_action(settled, f"Cancellation{label.capitalize()}", actor, destinations)
@@ -5364,7 +5419,7 @@ class ControlPlaneRepository:
         """
         target = ActionTarget(kind="experiment", id=str(experiment_id))
 
-        with write_transaction(self._connection):
+        with self._write():
             experiment = self.aggregates.get_experiment(str(experiment_id))
             if experiment is None:
                 raise UnknownOperationTargetError(target.kind, target.id)
@@ -5490,13 +5545,13 @@ class ControlPlaneRepository:
         if self._live_attempts(experiment_id):
             if any(child.status is ActionStatus.FAILED for child in children):
                 failed = parent.with_status(ActionStatus.FAILED)
-                with write_transaction(self._connection):
+                with self._write():
                     self.actions._update(failed)
                     self._emit_action(failed, "CancellationFailed", actor, destinations)
                 return failed
             return parent
 
-        with write_transaction(self._connection):
+        with self._write():
             if self._live_attempts(experiment_id):
                 return parent
             for node in self.aggregates.nodes_for_experiment(experiment_id):
@@ -5750,7 +5805,7 @@ class ControlPlaneRepository:
             ConcurrentModificationError: If it has moved since the caller read it.
             InvalidTransitionError: If the state machine forbids the edge.
         """
-        with write_transaction(self._connection):
+        with self._write():
             return self._apply_transition(
                 kind,
                 aggregate_id,
@@ -5817,7 +5872,7 @@ class ControlPlaneRepository:
         runtime_ref: RuntimeRef | None = None,
         destinations: tuple[str, ...] = (),
     ) -> RuntimeOperation:
-        with write_transaction(self._connection):
+        with self._write():
             current = self.operations.get(str(operation_id))
             if current is None:
                 raise AggregateNotFoundError("RuntimeOperation", str(operation_id))

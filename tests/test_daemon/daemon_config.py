@@ -9,6 +9,9 @@ named, as the daemon requires. ``XAYTUNE_TEST_FAULT`` injects a crash:
 ``kill-before-submit``     dies after admission, before the runtime got the
 ``kill-after-submit``      submission -- or after it did, before the daemon
                            recorded it: see :mod:`.file_runtime`.
+
+``XAYTUNE_TEST_LEASE_TTL`` sets the lease TTL in seconds, so a test that
+kills a daemon waits seconds, not the default 30, for its lease to expire.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ def create_config() -> DaemonConfig:
         policy=DenyAllPolicy(),
         checkpoint_manager=None,
         recovery_request_for_incident=None,
+        lease_ttl_seconds=float(os.environ.get("XAYTUNE_TEST_LEASE_TTL", "30")),
     )
 
 

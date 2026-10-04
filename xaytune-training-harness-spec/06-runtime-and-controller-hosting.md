@@ -191,10 +191,11 @@ returning an `ExperimentHandle` over the mailbox -- is PR-029's.
   first attempt, reservations and `INTENDED` submit are recorded, and the
   request moved `PENDING → ACCEPTED`, in one transaction; the runtime is called
   after it commits. The embedded host admits through the same transaction.
-- **Reconciliation after restart** of *unfinished requests* only: `PENDING`
-  ones are processed, `ACCEPTED` ones resumed through the existing attach
-  path. An experiment whose request is `COMPLETED` is driven again only by an
-  explicit `attach` request until PR-028's startup sweep.
+- **Reconciliation after restart**: *unfinished requests* first -- `PENDING`
+  ones processed, `ACCEPTED` ones resumed through the existing attach path --
+  then the startup sweep (PR-028): every nonterminal experiment a daemon
+  admitted, or adopted by a `COMPLETED` attach request, is attached and
+  reconciled from the record. `PAUSED` ones are swept and start nothing new.
 - **Foreground process**, `python -m xaytune.daemon --state … --config
   module:factory`, with every implementation from the explicit configuration;
   supervision is the operator's (systemd, launchd, a container, tmux).
@@ -204,10 +205,16 @@ returning an `ExperimentHandle` over the mailbox -- is PR-029's.
 - **Singleton locking per state database**: an exclusive `fcntl.flock` on
   `<resolved path>.lock`, held for the process lifetime; its content is
   diagnostic only. POSIX only; no fallback.
+- **Durable controller lease** (PR-028, ADR-004 §8) on top of the flock: one
+  `controller_leases` row, a new epoch per owner, renewed every TTL/3 (default
+  TTL 30 s), released at a clean shutdown and waited out after a crash. Every
+  controller write proves the current owner and epoch; an embedded host cannot
+  write while a daemon's lease is live. Losing the lease stops the daemon
+  (exit status 5).
 
 Experiments it admits record `ControllerHostRef(kind="local_daemon",
-id=<instance id>)`. Leases, the whole-database startup sweep and deadline or
-budget re-evaluation after downtime are PR-028.
+id=<instance id>)` -- provenance, never rewritten when a later daemon takes
+over. The state database must be on a local filesystem.
 
 ### RemoteControllerHost
 
@@ -264,14 +271,17 @@ def run(self):
 
 On startup:
 
-1. acquire controller identity
-2. load active experiments
+1. acquire controller identity (the local daemon: flock, then the lease)
+2. load the experiments the controller owns, nonterminal
 3. load active attempts
 4. query each runtime
 5. reconcile runtime state
 6. ingest missing runtime events if possible
-7. re-evaluate deadlines/budgets
-8. resume control loops
+7. settle the budget ledger; the existing exhaustion rules apply where an
+   effect is about to be created, as without a restart. No budget dimension
+   measures time, so downtime itself costs nothing
+8. resume control loops -- except for a paused experiment, whose existing
+   work is reconciled and nothing new started
 
 Reconciliation must be idempotent.
 

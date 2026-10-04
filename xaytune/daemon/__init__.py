@@ -1,4 +1,4 @@
-"""The local daemon: a controller process and its mailbox client (ADR-004; PR-027).
+"""The local daemon: a controller process and its mailbox client (ADR-004; PR-027, PR-028).
 
 :class:`LocalDaemonControllerServer` is the persistent, foreground controller
 process over one SQLite state database, which is also its mailbox::
@@ -15,7 +15,9 @@ with DaemonClient("state.db") as client:
     request = client.submit(spec)
 ```
 
-One daemon per database, by kernel lock; SIGTERM or SIGINT stops it without
+One daemon per database, by kernel lock, and one controller, by a durable
+lease whose epoch every controller write proves (PR-028); a restarted daemon
+reconciles every experiment it owns. SIGTERM or SIGINT stops it without
 cancelling a workload. See :mod:`xaytune.daemon.server`.
 """
 

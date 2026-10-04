@@ -5,10 +5,14 @@ start daemon on state.db           it takes <state.db>.lock; a second is refused
 a client commits a submission      and is SIGKILLed; the daemon drives it anyway
 SIGTERM                            observers stop, the workload is not cancelled,
                                    the lock is released
-restart                            no sweep: a COMPLETED handoff is not adopted
-attach request                     the existing reconciliation adopts it, once
+restart                            the next lease epoch; the startup sweep
+                                   adopts what the daemon owns, once
 SIGKILL at each crash point        the unfinished request is resumed, never
                                    duplicated
+SIGKILL, then a successor          it takes the flock, waits out the lease, takes
+                                   the next epoch, and adopts the running
+                                   workload; epoch N's writes are fenced
+lease taken away                   the daemon exits 5
 ```
 
 Workloads are :mod:`.file_runtime` files, so they outlive every daemon here.
@@ -16,6 +20,7 @@ Workloads are :mod:`.file_runtime` files, so they outlive every daemon here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import signal
@@ -23,13 +28,17 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.test_daemon.file_runtime import calls, finish, workloads
+from tests.test_daemon.file_runtime import FileRuntime, calls, finish, workloads
 from tests.test_daemon.test_daemon_server import _file_spec
+from xaytune.compilation.native import NativeCompiler
+from xaytune.core.clock import utc_now
+from xaytune.core.refs import Actor
 from xaytune.core.state.status import RunAttemptStatus, RunStatus
 from xaytune.daemon import (
     ControllerRequestState,
@@ -38,10 +47,20 @@ from xaytune.daemon import (
     StateDatabaseLock,
     lock_path,
 )
+from xaytune.experiment import EmbeddedControllerHost
+from xaytune.storage import (
+    ControllerLeaseFence,
+    ControllerLeaseHeldError,
+    ControllerLeaseStore,
+    ControlPlaneRepository,
+    LeaseLostError,
+)
 
 _REPOSITORY = Path(__file__).resolve().parents[2]
 _CONFIG = "tests.test_daemon.daemon_config:create_config"
 _TIMEOUT = 60
+_LEASE_TTL = 1.5
+"""Short enough that a killed daemon's successor is not kept waiting long."""
 
 
 @pytest.fixture(autouse=True)
@@ -58,12 +77,18 @@ class _Daemons:
         self.processes: list[subprocess.Popen[str]] = []
 
     def start(
-        self, *, fault: str | None = None, config: str = _CONFIG, ready: bool = True
+        self,
+        *,
+        fault: str | None = None,
+        config: str = _CONFIG,
+        ready: bool = True,
+        lease_ttl: float = _LEASE_TTL,
     ) -> subprocess.Popen[str]:
         env = dict(os.environ)
         env.pop("XAYTUNE_TEST_FAULT", None)
         if fault is not None:
             env["XAYTUNE_TEST_FAULT"] = fault
+        env["XAYTUNE_TEST_LEASE_TTL"] = str(lease_ttl)
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -231,18 +256,18 @@ def test_a_dead_client_hands_off_and_shutdown_leaves_the_workload_running(
         assert not attempt.is_terminal, "nothing synthetic recorded at shutdown"
         assert _lock_is_free(daemons.state)
 
-        # Restart: no sweep. The workload ends while nobody watches it.
-        finish(root, operation_id)
-        watched = len(calls(root, "watch"))
-        daemons.start()
-        time.sleep(1.0)
-        assert len(calls(root, "watch")) == watched
-        assert client.aggregates.load_run(str(run.id)).status is RunStatus.ACTIVE
+        # The clean shutdown expired the lease in place: same epoch, no owner.
+        released = ControllerLeaseStore(client._connection).current()
+        assert released is not None and released.epoch == 1
+        assert released.lease_expires_at <= released.heartbeat_at
 
-        # An explicit attach adopts it through reconciliation, and only once.
-        attach = client.attach(experiment.id)
-        assert _handoff(client, attach.id).state is ControllerRequestState.COMPLETED
+        # Restart: the next epoch at once, and the startup sweep adopts what
+        # the daemon owns -- the workload ended while nobody watched it.
+        finish(root, operation_id)
+        daemons.start()
         _until(lambda: client.aggregates.load_run(str(run.id)).status is RunStatus.SUCCEEDED)
+        current = ControllerLeaseStore(client._connection).current()
+        assert current is not None and current.epoch == 2
         (attempt,) = client.aggregates.attempts_for_run(str(run.id))
         assert attempt.status is RunAttemptStatus.SUCCEEDED
         assert len(calls(root, "submit")) == 1
@@ -314,3 +339,94 @@ def test_a_daemon_killed_before_admission_leaves_the_request_to_process_once(
         assert json.loads(lock_path(daemons.state).read_text())["state_db"] == str(
             daemons.state.resolve()
         )
+
+
+# ---- the lease across processes (PR-028 exit criterion) ---------------------------------
+
+
+def test_a_killed_daemons_successor_waits_out_its_lease_and_adopts_its_work(
+    tmp_path: Path, daemons: _Daemons
+) -> None:
+    root = tmp_path / "runtime"
+    with DaemonClient(daemons.state) as client:
+        leases = ControllerLeaseStore(client._connection)
+        a = daemons.start()
+        request = client.submit(_file_spec(tmp_path))
+        assert _handoff(client, request.id).state is ControllerRequestState.COMPLETED
+        held = leases.current()
+        assert held is not None
+        epoch, a_id = held.epoch, held.controller_id
+        experiment = client.aggregates.load_experiment(str(request.experiment_id))
+        assert experiment.controller_host.id == a_id
+        (operation_id,) = workloads(root)
+        (node,) = client.aggregates.nodes_for_experiment(str(experiment.id))
+        (run,) = client.aggregates.runs_for_node(str(node.id))
+
+        a.kill()
+        a.communicate(timeout=_TIMEOUT)
+        killed_at = time.monotonic()
+        assert _lock_is_free(daemons.state), "the flock went with the process"
+        crashed = leases.current()
+        assert crashed is not None and crashed.controller_id == a_id
+        assert crashed.lease_expires_at > utc_now(), "the lease outlives it until its TTL"
+        assert workloads(root)[operation_id]["state"] == "running"
+
+        daemons.start()  # takes the flock at once; the lease only after expiry
+        _until(lambda: (leases.current() or crashed).epoch == epoch + 1)
+        assert time.monotonic() - killed_at >= _LEASE_TTL * 0.5, "it waited, it did not take"
+        taken = leases.current()
+        assert taken is not None and taken.controller_id != a_id
+
+        finish(root, operation_id)
+        _until(lambda: client.aggregates.load_run(str(run.id)).status is RunStatus.SUCCEEDED)
+        assert len(calls(root, "submit")) == 1, "adopted, not recreated"
+        assert len(workloads(root)) == 1
+        for table in ("runs", "run_attempts", "runtime_operations"):
+            assert _count(client, table) == 1, table
+        assert client.aggregates.load_experiment(str(experiment.id)).controller_host.id == a_id
+
+        # A surviving writer of epoch N is fenced.
+        stale = ControlPlaneRepository(client._connection, fence=ControllerLeaseFence(a_id, epoch))
+        with pytest.raises(LeaseLostError):
+            stale.settle_budget(experiment.id, actor=Actor(type="system", id="stale"))
+
+        # An embedded host is refused control while epoch N+1 lives.
+        async def embedded_submit() -> None:
+            host = EmbeddedControllerHost(
+                daemons.state,
+                compilers={"native": NativeCompiler},
+                runtimes={"file": lambda config: FileRuntime(config["root"])},
+            )
+            try:
+                await host.submit(_file_spec(tmp_path))
+            finally:
+                await host.close()
+
+        with pytest.raises(ControllerLeaseHeldError):
+            asyncio.run(embedded_submit())
+
+        b = daemons.processes[-1]
+        stderr = daemons.stop(b)
+        assert b.returncode == 0, stderr
+        released = leases.current()
+        assert released is not None and released.epoch == epoch + 1
+        assert released.lease_expires_at <= utc_now(), "expired at once by a clean shutdown"
+        assert _lock_is_free(daemons.state)
+
+
+def test_a_daemon_that_loses_its_lease_exits_with_its_own_status(
+    tmp_path: Path, daemons: _Daemons
+) -> None:
+    with DaemonClient(daemons.state) as client:
+        daemon = daemons.start()
+        _until(lambda: ControllerLeaseStore(client._connection).current() is not None)
+        later = utc_now() + timedelta(hours=1)
+        thief = ControllerLeaseStore(client._connection, clock=lambda: later)
+        assert thief.acquire("daemon-thief", timedelta(hours=2)) is not None
+
+        _, stderr = daemon.communicate(timeout=_TIMEOUT)
+        assert daemon.returncode == 5, stderr
+        assert "lost its lease" in stderr
+        assert _lock_is_free(daemons.state)
+        current = ControllerLeaseStore(client._connection).current()
+        assert current is not None and current.controller_id == "daemon-thief"

@@ -144,14 +144,44 @@ the daemon tries it again on its next look.
 `<state.db>.lock` for its lifetime; a second exits with status 3. A daemon
 that dies releases it with the process.
 
+**The controller lease.** On top of the lock, the daemon holds a lease in the
+database itself: which daemon owns it, in which *epoch*, until when. The lease
+is renewed every third of its TTL (`DaemonConfig.lease_ttl_seconds`, 30
+seconds by default), and every daemon that takes it starts a new epoch. Every
+write the daemon's controller makes proves it still holds the current epoch.
+A daemon that loses the lease -- its renewal refused, or a write refused
+because another epoch owns the database -- stops at once, records nothing on
+its workloads' behalf, and exits with status 5. The state database must be on
+a local disk: SQLite on NFS, SMB or another shared filesystem is unsupported.
+
+While a daemon holds the lease, an `EmbeddedControllerHost` on the same
+database can read everything -- status, events, actions, results -- but every
+write it attempts raises `ControllerLeaseHeldError`, even if it was opened
+before the daemon started. `DaemonClient` is not affected: committing a
+request is how work reaches the daemon.
+
 **Shutdown and restart.** SIGTERM or SIGINT stops dequeuing requests, stops
-observing, and releases the lock. Workloads keep running and nothing is
-recorded on their behalf. On restart the daemon finishes the requests it had
-not finished -- a submission admitted but not yet confirmed is reconciled,
-never submitted twice -- but it does **not** adopt experiments whose handoff
-already completed: send an `attach` request for those. Recovering every active
-experiment at startup, leases, and deadline or budget re-evaluation after
-downtime come later (PR-028).
+observing, expires the lease and releases the lock, last. Workloads keep
+running and nothing is recorded on their behalf. A daemon that was killed
+leaves its lease to expire; the next one takes the lock at once and waits out
+the lease before it starts.
+
+On restart the daemon first finishes the requests it had not finished -- a
+submission admitted but not yet confirmed is reconciled, never submitted
+twice. Then it **sweeps** every experiment it is responsible for that has not
+ended: those a daemon admitted, and those it adopted through an `attach`
+request. Each is reconciled from the record, exactly as `attach()` does: a
+workload still running is adopted, not resubmitted, and control continues
+from where it stopped. An experiment an embedded host submitted, and nobody
+attached to a daemon, is left alone. A paused experiment is swept too, but only
+its existing work is adopted and settled: nothing new -- no evaluation, no
+candidate -- starts until it is resumed.
+
+The sweep also settles the budget ledger, and that is all it does with the
+budget. Nothing is charged for the downtime, because no budget limit measures
+time, and a restart never ends an experiment by itself: a used-up budget stops
+the next run, evaluation or recovery when the controller is about to start it,
+exactly as it would have without the restart.
 
 ## What `wait()` means
 
@@ -614,6 +644,5 @@ evaluation results, carrying out a proposed action (other than
 cancelling), approval by role or group, budgets on GPU-hours, tokens and cost, custom budget meters,
 TRL managed checkpoint capture/application,
 recording the decision engine with the experiment, several proposals or
-parallel branches, plateau detection,
-daemon leases and recovering every active experiment when the daemon starts,
+parallel branches, plateau detection, a controller shared across machines,
 and runtimes other than local.

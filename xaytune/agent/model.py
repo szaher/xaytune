@@ -88,11 +88,23 @@ class AgentModelInvocationError(AgentModelError):
 
 
 class AgentModelOutputError(AgentModelError):
-    """The model answered, and the answer is not what was asked for. Nothing of it is used."""
+    """The model answered, and the answer is not what was asked for. Nothing of it is used.
 
-    def __init__(self, request_fingerprint: str, reasons: tuple[str, ...]) -> None:
+    ``response`` is the refused answer, when there was one -- an
+    :class:`AgentModelResponse` whose content or revision is wrong -- so it
+    can be recorded as what was refused (PR-032). It is never acted on.
+    """
+
+    def __init__(
+        self,
+        request_fingerprint: str,
+        reasons: tuple[str, ...],
+        *,
+        response: AgentModelResponse | None = None,
+    ) -> None:
         self.request_fingerprint = request_fingerprint
         self.reasons = reasons
+        self.response = response
         super().__init__(
             f"agent model output refused for request {request_fingerprint}: " + "; ".join(reasons)
         )
@@ -284,8 +296,9 @@ async def invoke_agent_model(model: AgentModel, request: AgentModelRequest) -> A
         raise AgentModelOutputError(
             request_fingerprint,
             (f"the model reports revision {response.model_revision!r}, not the pinned {pinned!r}",),
+            response=response,
         )
     violations = schema_violations(request.response_schema, response.content)
     if violations:
-        raise AgentModelOutputError(request_fingerprint, violations)
+        raise AgentModelOutputError(request_fingerprint, violations, response=response)
     return response

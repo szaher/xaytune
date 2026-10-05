@@ -27,6 +27,7 @@ from xaytune.core.capabilities import PLUGIN_API_VERSIONS, PluginDescriptor
 from xaytune.core.domain.actions import contract
 from xaytune.core.domain.actions.builtin import RejectCandidate
 from xaytune.core.domain.actions.contract import ActionDescriptor, ActionSpec, MutationClass
+from xaytune.core.domain.agent_invocation import InMemoryAgentInvocationJournal
 from xaytune.core.domain.budget import BudgetDimension, BudgetStatus, DimensionStatus
 from xaytune.core.domain.decision import DecisionOutcome
 from xaytune.core.domain.planning import ActionProposal, PlanningContext
@@ -113,7 +114,7 @@ def config(**changes: Any) -> dict[str, Any]:
 def bind(script: list[Any], **changes: Any) -> tuple[LLMPlanner, ScriptedAgentModel]:
     model = ScriptedAgentModel(script, model=MODEL)
     spec = PlannerSpec(kind="llm", config=FrozenDict(config(**changes)))
-    return LLMPlanner.from_spec(spec, model), model
+    return LLMPlanner.from_spec(spec, model).with_journal(InMemoryAgentInvocationJournal()), model
 
 
 def propose(planner: LLMPlanner, ctx: PlanningContext) -> tuple[Any, ...]:
@@ -452,13 +453,13 @@ def test_the_model_is_given_the_context_projection_and_nothing_else() -> None:
     assert (request.temperature, request.max_output_tokens) == (0.0, 512)
 
 
-def test_the_same_context_is_the_same_request() -> None:
+def test_the_same_context_is_the_same_request_and_is_asked_once() -> None:
     ctx = context(node())
     planner, model = bind([{"proposal": None}, {"proposal": None}])
+    assert planner.request(ctx).fingerprint(MODEL) == planner.request(ctx).fingerprint(MODEL)
     propose(planner, ctx)
-    propose(planner, ctx)
-    first, second = model.requests
-    assert first.fingerprint(MODEL) == second.fingerprint(MODEL)
+    propose(planner, ctx)  # replayed from the record (PR-032)
+    assert len(model.requests) == 1
 
 
 def test_only_the_user_role_is_used() -> None:
@@ -621,7 +622,9 @@ class _ChangesWhileAnswering(ScriptedAgentModel):
 def test_a_model_whose_identity_changed_while_answering_is_not_believed() -> None:
     parent = node()
     model = _ChangesWhileAnswering([answer(str(parent.node_id))], model=MODEL)
-    planner = LLMPlanner.from_spec(PlannerSpec(kind="llm", config=FrozenDict(config())), model)
+    planner = LLMPlanner.from_spec(
+        PlannerSpec(kind="llm", config=FrozenDict(config())), model
+    ).with_journal(InMemoryAgentInvocationJournal())
     with pytest.raises(PlannerConfigurationError, match="its answer is not used"):
         propose(planner, context(parent))
     assert len(model.requests) == 1

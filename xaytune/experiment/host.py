@@ -66,6 +66,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from xaytune.agent import AgentModelError
 from xaytune.checkpoints import CheckpointManager
 from xaytune.compilation import (
     CompilationContext,
@@ -78,6 +79,7 @@ from xaytune.compilation.attempt_resolution import (
 )
 from xaytune.core.domain.action import Action, ActionStatus
 from xaytune.core.domain.actions import ActionSpec
+from xaytune.core.domain.agent_invocation import RecordsAgentInvocations, require_derived_from
 from xaytune.core.domain.budget import (
     BudgetExhaustedError,
     CapacityUnavailableError,
@@ -2565,7 +2567,12 @@ class EmbeddedControllerHost:
             except ConcurrentModificationError:
                 # Another caller moved the node first; the record carries on.
                 return
-            except (_AdaptiveStopError, XaytuneError, PlannerConfigurationError) as stopped:
+            except (
+                _AdaptiveStopError,
+                XaytuneError,
+                PlannerConfigurationError,
+                AgentModelError,
+            ) as stopped:
                 self._escalations[str(experiment_id)] = f"the adaptive loop stopped: {stopped}"
 
     def _settle_ledger(self, experiment_id: ExperimentId) -> int:
@@ -2605,6 +2612,12 @@ class EmbeddedControllerHost:
             return False
         planner = self._recorded_planner(experiment)
         assert planner is not None
+        asks_a_model = False
+        if isinstance(planner, RecordsAgentInvocations):
+            asks_a_model = True
+            # A planner that asks a model records every invocation in the
+            # experiment's own record, before and after the call (PR-032).
+            planner = planner.with_journal(self.repository.agent_invocation_journal())
         proposals = await planner.propose(self.repository.planning_context(experiment.id))
         if not proposals:
             return False
@@ -2615,10 +2628,22 @@ class EmbeddedControllerHost:
             )
         (proposal,) = proposals
         if not isinstance(proposal, CandidateProposal):
+            derived = ""
+            if asks_a_model:
+                # Every action a model-backed planner proposes must be the one
+                # its recorded call produced -- one naming no call included --
+                # or it is not believed even enough to report.
+                recorded = (
+                    None
+                    if proposal.agent_invocation_id is None
+                    else self.repository.agent_invocations.get(proposal.agent_invocation_id)
+                )
+                require_derived_from(proposal, recorded)
+                derived = f", derived from agent invocation {proposal.agent_invocation_id}"
             raise _AdaptiveStopError(
                 f"planner {experiment.planner.kind!r} proposed an action "
-                f"({type(proposal.action).__name__}); the adaptive driver does not execute action "
-                f"proposals, so no action was created"
+                f"({type(proposal.action).__name__}{derived}); the adaptive driver does not "
+                f"execute action proposals, so no action was created"
             )
         self._materialize_candidate_proposal(experiment.id, proposal, actor=_ACTOR)
         return True

@@ -694,8 +694,25 @@ spec.planner = PlannerSpec(kind="llm", config={
   evidence are in the planning context and its parameters validate.
   Otherwise `propose()` raises `AgentModelOutputError`. Provenance is always
   xaytune's.
-- Nothing is executed or recorded: an action proposal is escalated by the
-  controller, as before.
+- Nothing is executed: an action proposal is escalated by the controller,
+  as before.
+
+Every model call the planner makes is recorded in the experiment's state
+(`host.repository.agent_invocations.for_experiment(experiment_id)`):
+
+- It is written **before** the model is asked, then updated with the answer,
+  then with the proposal derived from it. A call that fails is recorded as a
+  classification -- the kind of failure and the exception's type, never its
+  message. A malformed answer is recorded as refused, with what was refused.
+- Each record holds the planner, the planning-context and prompt
+  fingerprints, the whole request and its fingerprint, the adapter and model
+  that answered, and the structured response with token usage and provider
+  metadata when reported.
+- A host that restarts replays a call that was already answered instead of
+  asking the model again. A call cut off by a crash is marked
+  `outcome_unknown`, and the model is asked again as a new attempt.
+- An action proposal names the call it came from (`agent_invocation_id`),
+  and the host checks the record agrees before reporting it.
 
 ## Local checkpoint bundles
 

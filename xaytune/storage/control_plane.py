@@ -67,6 +67,11 @@ from xaytune.core.domain.actions import (
     encode_payload,
     spec_of,
 )
+from xaytune.core.domain.agent_invocation import (
+    AgentInvocation,
+    AgentInvocationIntent,
+    next_invocation,
+)
 from xaytune.core.domain.budget import (
     BudgetDimension,
     BudgetExhaustedError,
@@ -202,6 +207,10 @@ from xaytune.core.state.status import (
 )
 from xaytune.core.telemetry import CheckpointCommittedPayload, EvaluationCompletedPayload
 from xaytune.storage.actions import ActionStore
+from xaytune.storage.agent_invocations import (
+    AgentInvocationStore,
+    RepositoryAgentInvocationJournal,
+)
 from xaytune.storage.budget import BudgetLedgerStore
 from xaytune.storage.checkpoints import CheckpointRecordStore
 from xaytune.storage.database import write_transaction
@@ -750,6 +759,7 @@ class ControlPlaneRepository:
         self.numerical_recovery_executions = NumericalRecoveryExecutionStore(connection)
         self.graph = ExperimentGraph(connection)
         self.controller_requests = ControllerRequestStore(connection)
+        self.agent_invocations = AgentInvocationStore(connection)
 
     @contextmanager
     def _write(self) -> Iterator[None]:
@@ -1148,6 +1158,48 @@ class ControlPlaneRepository:
             )
             self.controller_requests._put_rest(rest)
         return rest
+
+    # ---- agent invocations (PR-032) ---------------------------------------
+
+    def agent_invocation_journal(self) -> RepositoryAgentInvocationJournal:
+        """This record, as the journal a model-backed planner records its invocations in."""
+        return RepositoryAgentInvocationJournal(self)
+
+    def begin_agent_invocation(self, intent: AgentInvocationIntent) -> AgentInvocation:
+        """The invocation a planning round goes on with, written before the model is asked.
+
+        In one fenced transaction: the round's latest attempt is read; one
+        that got an answer is returned to replay, and nothing is written; one
+        still ``INTENDED`` -- the process stopped during the call -- is closed
+        ``OUTCOME_UNKNOWN``; and a new attempt is written ``INTENDED``
+        (:func:`~xaytune.core.domain.agent_invocation.next_invocation`).
+
+        Raises:
+            AgentInvocationConflictError: The round recorded another request.
+        """
+        with self._write():
+            latest = self.agent_invocations.latest_for_round(
+                str(intent.experiment_id),
+                intent.planner_spec_fingerprint,
+                intent.context_fingerprint,
+            )
+            closed, invocation, replayed = next_invocation(latest, intent, at=utc_now())
+            if closed is not None:
+                self.agent_invocations._update(closed)
+            if not replayed:
+                self.agent_invocations._insert(invocation)
+        return invocation
+
+    def settle_agent_invocation(self, invocation: AgentInvocation) -> AgentInvocation:
+        """Write an invocation's transition, guarded on the revision it moved from.
+
+        Raises:
+            ConcurrentModificationError: The record moved since *invocation*
+                was read.
+        """
+        with self._write():
+            self.agent_invocations._update(invocation)
+        return invocation
 
     def daemon_responsibilities(self) -> tuple[ExperimentId, ...]:
         """Every nonterminal experiment a daemon has durably taken on, oldest first.

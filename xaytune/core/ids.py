@@ -27,6 +27,7 @@ from xaytune.core.errors import InvalidIdError
 
 __all__ = [
     "ActionId",
+    "AgentInvocationId",
     "ArtifactId",
     "CheckpointId",
     "ControllerRequestId",
@@ -309,6 +310,18 @@ class ControllerRequestId(TypedId):
 
     __slots__ = ()
     prefix = "creq_"
+
+
+class AgentInvocationId(TypedId):
+    """Identifies one invocation of an agent model by a planner (PR-032).
+
+    Minted when the invocation is recorded as intended, before the model is
+    asked, so a proposal derived from the answer can name the call it came
+    from.
+    """
+
+    __slots__ = ()
+    prefix = "agentinv_"
 
 
 class OperationId(TypedId):

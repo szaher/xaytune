@@ -65,6 +65,7 @@ could only invent an id.
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Literal
@@ -73,17 +74,28 @@ from pydantic import Field, StrictInt, TypeAdapter, ValidationError, model_valid
 from pydantic.errors import PydanticInvalidForJsonSchema
 
 from xaytune.agent import (
+    AGENT_MODEL_REQUEST_IDENTITY_VERSION,
     AgentMessage,
     AgentModel,
     AgentModelIdentity,
+    AgentModelInvocationError,
     AgentModelOutputError,
     AgentModelRequest,
+    AgentModelResponse,
     invoke_agent_model,
 )
 from xaytune.agent.schema import UnsupportedResponseSchemaError, check_response_schema
 from xaytune.core.capabilities import require_supported_plugin
 from xaytune.core.domain.action import CANCELLATION_TYPES, ActionTarget, UnknownActionTypeError
 from xaytune.core.domain.actions.contract import ActionDescriptor, ActionSpec, action_descriptor
+from xaytune.core.domain.agent_invocation import (
+    AgentInvocation,
+    AgentInvocationFailure,
+    AgentInvocationIntent,
+    AgentInvocationJournal,
+    AgentInvocationMismatchError,
+    AgentInvocationStatus,
+)
 from xaytune.core.domain.planning import (
     ActionProposal,
     EvidenceRef,
@@ -250,6 +262,7 @@ class LLMPlanner:
             update={"allowed_actions": tuple(resolved), "prompt_fingerprint": prompt}
         )
         self.model = model
+        self._journal: AgentInvocationJournal | None = None
         self._prompt = prompt_text
         self._allowed = {(a.descriptor.type, a.descriptor.version): a for a in allowed}
         self.response_schema = FrozenDict(_response_schema(allowed))
@@ -307,48 +320,183 @@ class LLMPlanner:
             max_output_tokens=self.config.max_output_tokens,
         )
 
+    def with_journal(self, journal: AgentInvocationJournal) -> LLMPlanner:
+        """This planner, bound identically, recording its invocations in *journal*."""
+        planner = copy.copy(self)
+        planner._journal = journal
+        return planner
+
     async def propose(self, context: PlanningContext) -> tuple[Proposal, ...]:
-        """At most one action proposal, as the model answers *context*.
+        """At most one action proposal, as the model answers *context*, recorded throughout.
 
         Like every planner it acts only at the planning stage -- the
         experiment ``ACTIVE``, every candidate decided on its merits -- and
         not with a quota exhausted. Anything else is ``()``, and the model is
         not asked: an invocation is an external, often paid, call.
 
+        Every invocation is recorded in the journal (PR-032): ``INTENDED``
+        before the model is asked, the answer as soon as it arrives, and the
+        proposal derived from the recorded answer. A round already answered
+        is replayed from its record, and the model is not asked again.
+
         Raises:
-            PlannerConfigurationError: The agent model's identity is no longer
-                the one bound: before the call it is not asked; after it,
-                its answer is not read.
+            PlannerConfigurationError: No journal is attached, or the agent
+                model's identity is no longer the one bound: before the call
+                it is not asked; after it, its answer is not used.
             AgentModelInvocationError: The model gave no answer.
             AgentModelOutputError: The answer breaks the schema, or names a
                 target, evidence or parameters the context or the action's
-                schema does not allow. Nothing of it is proposed.
+                schema does not allow -- now, or when the round was first
+                answered. Nothing of it is proposed.
         """
         if not _planning_stage(context):
             return ()
         if context.budget is not None and context.budget.exhausted:
             return ()
+        journal = self._journal
+        if journal is None:
+            raise PlannerConfigurationError(
+                self.spec.kind,
+                (
+                    "an LLM planner records every invocation (PR-032) and has no journal; "
+                    "a host attaches its own, or use with_journal()",
+                ),
+            )
         self._require_bound_model(consequence="it is not asked")
         request = self.request(context)
-        response = await invoke_agent_model(self.model, request)
+        invocation = journal.begin(self._intent(context, request))
+        if invocation.status is AgentInvocationStatus.INTENDED:
+            invocation = await self._ask(journal, invocation, request)
+        return self._settle_derivation(journal, invocation, context, request)
+
+    async def _ask(
+        self,
+        journal: AgentInvocationJournal,
+        invocation: AgentInvocation,
+        request: AgentModelRequest,
+    ) -> AgentInvocation:
+        """Ask the model, and record its answer -- or how it gave none -- before going on."""
+        try:
+            response = await invoke_agent_model(self.model, request)
+        except AgentModelOutputError as refused:
+            journal.refused(
+                invocation,
+                AgentInvocationFailure(
+                    kind="output-refused",
+                    error_type=type(refused).__name__,
+                    reasons=refused.reasons,
+                ),
+                None if refused.response is None else refused.response.model_dump(mode="json"),
+            )
+            raise
+        except AgentModelInvocationError as failed:
+            journal.failed(invocation, _failure("invocation-failed", failed))
+            raise
+        except IncompatiblePluginError as incompatible:
+            journal.failed(invocation, _failure("plugin-incompatible", incompatible))
+            raise
+        except Exception as unexpected:
+            journal.failed(invocation, _failure("internal-error", unexpected))
+            raise
+        answer = response.model_dump(mode="json")
         # Again after the call: an adapter whose identity changed while it
         # answered produced an answer the recorded spec does not describe.
-        self._require_bound_model(consequence="its answer is not used")
-        proposal = response.content["proposal"]
+        try:
+            self._require_bound_model(consequence="its answer is not used")
+        except PlannerConfigurationError as changed:
+            journal.failed(invocation, _failure("model-identity-changed", changed), answer)
+            raise
+        return journal.answered(invocation, answer)
+
+    def _settle_derivation(
+        self,
+        journal: AgentInvocationJournal,
+        invocation: AgentInvocation,
+        context: PlanningContext,
+        request: AgentModelRequest,
+    ) -> tuple[Proposal, ...]:
+        """The proposal derived from the *recorded* answer, recorded with it.
+
+        ``ANSWERED``: derive and complete. ``COMPLETED``: derive again from
+        the same recorded answer -- derivation is a function of it, the bound
+        planner and the context -- and refuse a result other than the one
+        recorded. ``REFUSED``: the refusal, again, without asking.
+        """
+        request_fingerprint = request.fingerprint(self.config.model)
+        if invocation.status is AgentInvocationStatus.REFUSED:
+            assert invocation.failure is not None
+            raise AgentModelOutputError(request_fingerprint, invocation.failure.reasons)
+        assert invocation.response is not None
+        content = AgentModelResponse.model_validate(thaw(invocation.response)).content
+        try:
+            proposal = self._derive(content, context, request_fingerprint, invocation)
+        except AgentModelOutputError as refused:
+            if invocation.status is AgentInvocationStatus.ANSWERED:
+                journal.refused(
+                    invocation,
+                    AgentInvocationFailure(
+                        kind="output-refused",
+                        error_type=type(refused).__name__,
+                        reasons=refused.reasons,
+                    ),
+                )
+            raise
+        # Any other error is xaytune's, not the model's: the record stays
+        # ANSWERED, and the round derives again from the same answer -- it
+        # never asks the model again for an answer it already has.
+        if invocation.status is AgentInvocationStatus.ANSWERED:
+            journal.completed(invocation, proposal)
+        else:
+            recorded = invocation.proposal_fingerprint
+            derived = None if proposal is None else proposal.proposal_fingerprint()
+            if recorded != derived:
+                raise AgentInvocationMismatchError(
+                    f"agent invocation {invocation.id} recorded proposal {recorded}; its "
+                    f"recorded answer now derives {derived}"
+                )
+        return () if proposal is None else (proposal,)
+
+    def _derive(
+        self,
+        content: Mapping[str, Any],
+        context: PlanningContext,
+        request_fingerprint: str,
+        invocation: AgentInvocation,
+    ) -> ActionProposal | None:
+        """What an answer proposes: pure, from the answer, the context and this planner."""
+        proposal = content["proposal"]
         if proposal is None:
-            return ()
+            return None
         reasons: list[str] = []
         spec = self._action(proposal["action"], context, reasons)
         evidence = _evidence(proposal["evidence_refs"], context, reasons)
         if spec is None or reasons:
-            raise AgentModelOutputError(request.fingerprint(self.config.model), tuple(reasons))
-        return (
-            ActionProposal(
-                action=spec,
-                reason=proposal["reason"],
-                evidence_refs=evidence,
-                provenance=_provenance(self, context),
-            ),
+            raise AgentModelOutputError(request_fingerprint, tuple(reasons))
+        return ActionProposal(
+            action=spec,
+            reason=proposal["reason"],
+            evidence_refs=evidence,
+            provenance=_provenance(self, context),
+            agent_invocation_id=invocation.id,
+        )
+
+    def _intent(
+        self, context: PlanningContext, request: AgentModelRequest
+    ) -> AgentInvocationIntent:
+        provenance = _provenance(self, context)
+        return AgentInvocationIntent(
+            experiment_id=context.experiment_id,
+            planner_kind=self.spec.kind,
+            planner_version=provenance.planner_version,
+            planner_spec_fingerprint=provenance.planner_spec_fingerprint,
+            context_identity_version=provenance.context_identity_version,
+            context_fingerprint=provenance.context_fingerprint,
+            prompt_version=self.config.prompt_version,
+            prompt_fingerprint=fingerprint(self._prompt),
+            request_identity_version=AGENT_MODEL_REQUEST_IDENTITY_VERSION,
+            request_fingerprint=request.fingerprint(self.config.model),
+            request=FrozenDict(request.model_dump(mode="json")),
+            agent_model=FrozenDict(self.model.descriptor.model_dump(mode="json")),
         )
 
     def _require_bound_model(self, *, consequence: str) -> None:
@@ -578,3 +726,8 @@ def _evidence(answer: Any, context: PlanningContext, reasons: list[str]) -> tupl
 def _model_name(model: AgentModelIdentity) -> str:
     revision = "" if model.revision is None else f"@{model.revision}"
     return f"{model.provider}/{model.name}{revision}"
+
+
+def _failure(kind: Any, error: BaseException) -> AgentInvocationFailure:
+    """How an invocation failed, by kind and the exception's type -- never its text."""
+    return AgentInvocationFailure(kind=kind, error_type=type(error).__name__)

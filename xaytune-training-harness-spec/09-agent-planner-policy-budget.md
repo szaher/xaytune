@@ -243,6 +243,18 @@ Do not provide:
 
 ## 9. Decision recording
 
+**As of PR-032, every model invocation by a planner is persisted**
+(`AgentInvocation`, migration 019): written `INTENDED` before the model is
+asked, then the answer, then the proposal derived from the recorded answer --
+or a sanitized failure classification. It records the planner and its spec
+fingerprint, the context fingerprint, the prompt version and fingerprint, the
+logical request fingerprint with the whole request, the full agent-model
+descriptor, the structured response with usage and provider metadata, and the
+derived proposal, which names the invocation (`agent_invocation_id`). A
+restarted controller replays an answered round rather than asking again.
+Hidden reasoning is never requested or stored; neither is any adapter or SDK
+error text.
+
 **As of PR-025, a consumed `CandidateProposal` is persisted** on the node it
 creates (`ExperimentNode.branch_origin`): its versioned fingerprint, full
 provenance, mutation and typed evidence. That makes "why does this node exist,

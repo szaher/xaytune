@@ -1729,6 +1729,72 @@ Exit:
 - policy cannot be bypassed
 - decisions reproducible/auditable
 
+As built: every invocation of an agent model by a planner is a durable
+`AgentInvocation` (`xaytune.core.domain.agent_invocation`, migration 019),
+written through the fenced repository. Still no automatic `Action` creation or
+execution.
+
+```text
+PlanningContext → LLMPlanner → begin(): INTENDED  (written before the call)
+  → invoke_agent_model() → ANSWERED (the answer, written before anything is
+  derived) → COMPLETED (proposal or none) | REFUSED
+INTENDED → REFUSED (schema-invalid) | FAILED | OUTCOME_UNKNOWN (found still
+  INTENDED by the next begin(): the process stopped during the call)
+ANSWERED never → FAILED: a local error deriving from a recorded answer leaves
+  it ANSWERED, and the round derives again from it, never re-asking
+```
+
+- **Intent before the call.** The settled ordering: record `INTENDED`, call
+  the model, record the outcome, derive the proposal only from the recorded
+  answer. A crash after an expensive call cannot make the history pretend it
+  never happened.
+- **What is recorded.** The intent: experiment, planner kind, version and
+  spec fingerprint, planning-context identity version and fingerprint,
+  prompt version and fingerprint, request identity version and fingerprint
+  (`agent_model_request_identity_v1`, unchanged), the whole
+  `AgentModelRequest`, and the full `AgentModelDescriptor` (adapter and
+  model) beside it. The response: structured content, the provider-reported
+  model and revision, finish reason, usage, provider request id and latency.
+  The derived proposal and its fingerprint (`action_proposal_identity_v1`).
+- **Failures are classified, never quoted.** `AgentInvocationFailure` is a
+  kind (`invocation-failed`, `output-refused`, `model-identity-changed`,
+  `plugin-incompatible`, `internal-error`), the exception's type name, and
+  reasons xaytune wrote. No adapter or SDK message, exception object,
+  `__cause__`, `__context__`, traceback or provider payload is stored -- not
+  even an adapter's own `AgentModelInvocationError` text.
+- **Malformed output is auditable and inert.** A schema-invalid answer is
+  recorded `REFUSED` with the answer refused (`AgentModelOutputError` now
+  carries it) and the violations; one naming a target or evidence the
+  context lacks is recorded `ANSWERED`, then `REFUSED`. Neither yields a
+  proposal.
+- **Restart-safe rounds.** A planning round is (experiment, planner spec
+  fingerprint, context fingerprint) with numbered attempts. `begin()` on a
+  round whose latest attempt got an answer (`ANSWERED`, `COMPLETED`,
+  `REFUSED`) returns it to replay -- the model is not asked again; a
+  `COMPLETED` round re-derives from the recorded answer and refuses a result
+  other than the recorded proposal. An attempt still `INTENDED` is closed
+  `OUTCOME_UNKNOWN`; after that or `FAILED`, a new attempt is asked. A round
+  whose recorded request differs from the one now made is a conflict. The
+  schema enforces consecutive attempts, one open attempt per round,
+  immutable intent, forward-only status (never answered → failed), an answer
+  exactly where the status requires one, a kept answer and no deletion.
+- **Bound proposals.** `ActionProposal.agent_invocation_id` names the call;
+  `require_derived_from()` checks the invocation is `COMPLETED`, for the
+  proposal's planner and context, and recorded exactly this proposal. The
+  host verifies every action proposal from a planner that records
+  invocations -- one naming no invocation is refused too -- before escalating
+  it, and its escalation names the invocation.
+- **Who records.** The planner reads no clock and holds no repository: the
+  host attaches `repository.agent_invocation_journal()` to any planner that
+  `RecordsAgentInvocations`; the journal stamps times. An LLM planner with no
+  journal refuses to plan. `InMemoryAgentInvocationJournal` serves tests and
+  direct use.
+- The host now escalates an `AgentModelError` from the adaptive loop like
+  any other planner failure, instead of letting it escape.
+
+Not here: domain events for invocations, a CLI view of them, retry limits,
+tool calling, provider SDKs, memory, policy execution, automatic actions.
+
 ---
 
 ## Phase 9 — Ray and TorchFT

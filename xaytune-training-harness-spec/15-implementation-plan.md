@@ -1168,8 +1168,11 @@ built:
   `planner = None` and load unchanged. Nothing invokes the planner yet.
 - **`Planner` protocol** (`xaytune.planning`): `descriptor`, the bound `spec`,
   and `async propose(PlanningContext) -> tuple[CandidateProposal |
-  ActionProposal, ...]`. It is pure: no clock, id, repository, environment or
-  runtime. The same bound planner and context give identical proposals.
+  ActionProposal, ...]`. It depends only on its bound configuration and its
+  context: no clock, id, repository, environment, runtime or execution
+  authority. A deterministic planner gives identical proposals for identical
+  inputs; a model-backed one (PR-031) makes its one external call explicitly
+  and auditably instead.
   `NoOpPlanner` always returns `()`.
 - **`PlanningContext`** (`xaytune.core.domain.planning`) is a serializable
   projection that `ControlPlaneRepository.planning_context()` assembles
@@ -1651,7 +1654,72 @@ provider adapter.
 
 ### PR-031 — LLMPlanner
 
-Structured actions only.
+Structured actions only. As built (`xaytune.planning.llm`):
+
+```text
+PlanningContext → LLMPlanner → AgentModelRequest → invoke_agent_model()
+  → schema-valid answer → zero or one registered, explicitly allowed ActionSpec
+  → ActionProposal with xaytune-built ProposalProvenance
+```
+
+No `Action` is created, no `PolicyEngine` is called, nothing executes; the
+controller still escalates an action proposal, unchanged.
+
+- **No default.** `PLANNERS` has no `llm`. A host binds `kind="llm"` only
+  through `llm_planner_factory(agent_model)` supplied explicitly
+  (`planners={**PLANNERS, "llm": ...}`); otherwise the kind is unknown.
+- **The model is identity.** `LLMPlannerConfig` names the model
+  (`AgentModelIdentity`), `prompt_version`, `temperature`,
+  `max_output_tokens` and `allowed_actions`; all of it is in the bound spec
+  and so in every proposal's `planner_spec_fingerprint`. Binding refuses an
+  agent model whose identity differs in any part (provider, name,
+  revision), and so does **every invocation**: before the request is built
+  (an agent model whose descriptor changed after binding is never asked) and
+  again after it answers (one whose identity changed while answering has its
+  answer discarded). The
+  adapter is not identity (PR-030); PR-032 records it.
+- **The prompt is code.** One fixed template per `prompt_version`
+  (`xaytune.llm-planner/v1`); a spec cannot carry instructions. Binding
+  records `prompt_fingerprint`, the fingerprint of that text, and a
+  recorded planner whose prompt text no longer matches is refused; a test
+  pins the v1 text. The bound planner keeps the text it verified, so a later
+  change to the prompt table never reaches a planner already bound. The prompt says an answer is only a proposal that cannot
+  execute and that any eventual action passes governance and policy -- not
+  that PR-031 invokes policy.
+- **Planning stage only.** Like every `Planner`, it returns `()` -- without
+  asking the model -- unless the experiment is `ACTIVE`, every candidate is
+  decided on its merits and no quota is exhausted. The controller's gate
+  remains as defence in depth.
+- **Explicit allowlist.** `allowed_actions` lists `(type, version)`, at least
+  one, no repeats. Binding refuses an action that is not registered, a
+  cancellation (requested, never proposed), one targeting only runs or
+  attempts (the planning context names none), and one whose parameters fall
+  outside the response-schema subset (a free-form mapping). Each entry is
+  recorded with a `contract_fingerprint` over everything the model is shown
+  of it -- type, version, mutation class, visible target kinds and schema;
+  a recorded fingerprint that no longer matches the registered action is
+  refused, so nothing the model sees can drift under a recorded spec.
+  Registering another action type later shows the model nothing new.
+- **What the model sees.** A system prompt and one user message: the
+  canonical JSON of `planning_context_identity_v1(context)` and the allowed
+  actions (type, version, mutation class, target kinds). The response schema
+  admits `{"proposal": null}` or one proposal -- action (`type`, `version`,
+  `target`, `parameters`), `reason`, `evidence_refs` -- and nothing else.
+- **What is checked.** The answer passes `invoke_agent_model()` (a test
+  spies on it, and bypassing it fails ten tests). Then the target must be the
+  experiment or one of its nodes, evidence must be decisions and evaluation
+  results in the context, each cited once, and the parameters must validate
+  as the registered `ActionSpec` (validators included). Any failure raises
+  `AgentModelOutputError` with every reason; nothing is proposed.
+- **Provenance is xaytune's.** The model cannot supply it (the schema is
+  closed); it is built from the bound planner and the context's fingerprint,
+  exactly as for the rule-based planner.
+- **Not deterministic.** The `Planner` contract now says so: a model-backed
+  planner's inputs are fixed and its call explicit; PR-032 makes each
+  invocation durable.
+- The response-schema checker now explains a failed `anyOf` through the one
+  alternative the value evidently meant (its type, and any `const`
+  discriminator), instead of only "matches none".
 
 ### PR-032 — agent audit/provenance
 

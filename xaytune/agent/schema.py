@@ -193,7 +193,7 @@ def _check_literals(node: Mapping[str, Any], path: str, reasons: list[str]) -> N
 def _check_value(schema: Mapping[str, Any], value: Any, path: str, out: list[str]) -> None:
     if "anyOf" in schema:
         if not any(not schema_violations(option, value) for option in schema["anyOf"]):
-            out.append(f"{path}: matches none of the {len(schema['anyOf'])} alternatives")
+            _explain_alternatives(schema["anyOf"], value, path, out)
             return
     elif not _has_type(schema["type"], value):
         out.append(f"{path}: expected {schema['type']}, got {_json_type(value)}")
@@ -223,6 +223,37 @@ def _check_value(schema: Mapping[str, Any], value: Any, path: str, out: list[str
         _check_size(len(value), schema, ("minLength", "maxLength"), "characters", path, out)
     elif kind in ("integer", "number"):
         _check_bounds(value, schema, path, out)
+
+
+def _explain_alternatives(
+    alternatives: Sequence[Mapping[str, Any]], value: Any, path: str, out: list[str]
+) -> None:
+    """Why *value* matches no alternative: the one it was evidently meant as, if there is one.
+
+    An alternative is *meant* when the value has its type and, for an object,
+    agrees with every ``const`` property it carries -- a discriminator such as
+    an action's ``type``. With exactly one such alternative, its own
+    violations are the useful answer; otherwise the value matches none.
+    """
+    meant = [option for option in alternatives if _could_be(option, value)]
+    if len(meant) == 1:
+        _check_value(meant[0], value, path, out)
+    else:
+        out.append(f"{path}: matches none of the {len(alternatives)} alternatives")
+
+
+def _could_be(option: Mapping[str, Any], value: Any) -> bool:
+    if "anyOf" in option:
+        return any(_could_be(inner, value) for inner in option["anyOf"])
+    if not _has_type(option["type"], value):
+        return False
+    if option["type"] != "object":
+        return True
+    return all(
+        name in value and canonical_encode(value[name]) == canonical_encode(child["const"])
+        for name, child in option.get("properties", {}).items()
+        if "const" in child
+    )
 
 
 def _check_size(

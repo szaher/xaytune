@@ -220,6 +220,19 @@ has a versioned identity (`agent_model_request_identity_v1`). The agent model
 knows nothing of planning; building the request from the context and turning
 the answer into proposals is the planner's (PR-031).
 
+As built in PR-031, `LLMPlanner` (`xaytune.planning.llm`) sends the canonical
+`planning_context_identity_v1` projection and the allowed actions under a
+fixed, versioned prompt, and turns the answer into **at most one**
+`ActionProposal` of a registered action type on its explicit allowlist. The
+model chooses the action, target, parameters, reason and evidence; xaytune
+checks each against the context and the registered schema and builds the
+provenance itself. The bound `PlannerSpec` names the model, prompt version,
+generation parameters, the prompt text's fingerprint and each allowed
+action's contract fingerprint (all the model is shown of it), and an
+LLM planner binds only with an explicitly supplied agent model of that
+identity. No candidate proposals from a model yet, and no policy or
+execution.
+
 Do not provide:
 
 - secrets

@@ -343,3 +343,29 @@ network = sorted(m for m in sys.modules if m.split(".")[0] in {sorted(AGENT_FORB
 assert not network, network
 """)
     assert result.returncode == 0, result.stderr
+
+
+def test_the_llm_planner_reaches_nothing_but_its_context_and_its_model():
+    """No repository, runtime, controller or environment: a context in, a proposal out."""
+    path = CORE_DIR.parent / "planning" / "llm.py"
+    modules = _imported_modules(ast.parse(path.read_text()))
+    allowed = ("xaytune.agent", "xaytune.core", "xaytune.planning", "xaytune._version")
+    offenders = sorted(
+        m
+        for m in modules
+        if (m.startswith("xaytune") and not m.startswith(allowed))
+        or m.split(".")[0] in AGENT_FORBIDDEN_ROOTS | {"os", "subprocess", "socket", "pathlib"}
+    )
+    assert not offenders, offenders
+    result = _run_isolated("""
+import xaytune
+before = set(sys.modules)
+import xaytune.planning.llm
+loaded = sorted(
+    m for m in set(sys.modules) - before
+    if m.startswith(("xaytune.storage", "xaytune.experiment", "xaytune.runtimes",
+                     "xaytune.daemon", "xaytune.policy"))
+)
+assert not loaded, loaded
+""")
+    assert result.returncode == 0, result.stderr

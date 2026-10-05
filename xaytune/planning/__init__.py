@@ -5,10 +5,14 @@ PlanningContext ──Planner.propose()──▶ (CandidateProposal | ActionProp
 ```
 
 A planner is the sibling of a decision engine, held to the same rule: **it
-proposes; it applies nothing.** It reads only its context -- no clock, no id,
-no database, no environment, no runtime -- so the same bound planner and the
-same context give identical proposals. Accepting a proposal (policy, budget,
-branching) is somebody else's work, later.
+proposes; it applies nothing.** It depends only on its bound configuration and
+its context -- no clock, no id, no database, no environment, no runtime, no
+execution authority. A deterministic planner (rule-based, no-op) therefore
+gives identical proposals for identical inputs. A model-backed planner
+(:mod:`xaytune.planning.llm`) cannot promise that, even at temperature 0: its
+inputs are just as fixed, and its one external call is explicit -- through
+:func:`~xaytune.agent.invoke_agent_model`, auditable from PR-032. Accepting a
+proposal (policy, budget, branching) is somebody else's work, later.
 
 Ownership, so a planner never becomes a second decision engine or a second
 recovery planner:
@@ -106,8 +110,10 @@ class Planner(Protocol):
     async def propose(self, context: PlanningContext) -> tuple[Proposal, ...]:
         """What *context* suggests doing next; ``()`` when nothing is proposed.
 
-        Pure: nothing but *context* and the bound configuration is read, and
-        nothing is minted -- no id, no timestamp, no record.
+        Nothing but *context* and the bound configuration is read, and nothing
+        is minted -- no id, no timestamp, no record. A deterministic planner
+        is pure; a model-backed one makes its single model call explicitly
+        and fails closed on a malformed answer.
         """
         ...
 

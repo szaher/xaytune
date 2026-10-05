@@ -38,15 +38,23 @@ from xaytune.core.domain.decision import DecisionOutcome
 from xaytune.core.domain.objective import Objective
 from xaytune.core.domain.specs import PlannerSpec
 from xaytune.core.fingerprint import fingerprint
-from xaytune.core.ids import DecisionId, EvaluationId, ExperimentId, ExperimentNodeId
+from xaytune.core.ids import (
+    AgentInvocationId,
+    DecisionId,
+    EvaluationId,
+    ExperimentId,
+    ExperimentNodeId,
+)
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel, thaw
 from xaytune.core.observability import Finite
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 
 __all__ = [
+    "ACTION_PROPOSAL_IDENTITY_VERSION",
     "CANDIDATE_PROPOSAL_IDENTITY_VERSION",
     "CandidateBranchOrigin",
     "EvidenceRef",
+    "action_proposal_identity_v1",
     "candidate_proposal_identity_v1",
     "PLANNER_SPEC_IDENTITY_VERSION",
     "PLANNING_CONTEXT_IDENTITY_VERSION",
@@ -449,6 +457,11 @@ class ActionProposal(FrozenDomainModel):
     a dictionary, or the bare base class, is refused, so a planner cannot
     propose an action nothing can validate. Whether it is allowed is policy's
     to decide when it is proposed as a durable Action.
+
+    ``agent_invocation_id`` names the recorded model call a model-backed
+    planner derived the proposal from (PR-032); ``None`` for a planner that
+    asks no model. It is the record's identity, not the proposal's, so it is
+    not in :func:`action_proposal_identity_v1`.
     """
 
     kind: Literal["action"] = "action"
@@ -456,6 +469,11 @@ class ActionProposal(FrozenDomainModel):
     reason: str = Field(min_length=1)
     evidence_refs: tuple[EvidenceRef, ...] = ()
     provenance: ProposalProvenance
+    agent_invocation_id: AgentInvocationId | None = None
+
+    def proposal_fingerprint(self) -> str:
+        """The identity of this proposal: :func:`action_proposal_identity_v1`, hashed."""
+        return fingerprint(action_proposal_identity_v1(self))
 
     @field_validator("action", mode="before")
     @classmethod
@@ -485,6 +503,47 @@ Proposal = CandidateProposal | ActionProposal
 
 
 CANDIDATE_PROPOSAL_IDENTITY_VERSION = 1
+ACTION_PROPOSAL_IDENTITY_VERSION = 1
+
+
+def action_proposal_identity_v1(proposal: ActionProposal) -> Mapping[str, Any]:
+    """What makes two action proposals the same, version 1.
+
+    The action -- type, schema version, target and canonical parameters --
+    the reason, the evidence sorted by kind and id, and the full provenance.
+    Not ``agent_invocation_id``: a recorded invocation stores this
+    fingerprint of the proposal it produced, and the proposal names the
+    invocation, so the reference cannot be part of what it refers to.
+    """
+    action = proposal.action
+    provenance = proposal.provenance
+    return {
+        "kind": "action-proposal",
+        "identity_version": ACTION_PROPOSAL_IDENTITY_VERSION,
+        "action": {
+            "type": type(action).model_fields["type"].default,
+            "version": action.version,
+            "target": {"kind": action.target.kind, "id": action.target.id},
+            "parameters": action.parameters(),
+        },
+        "reason": proposal.reason,
+        "evidence_refs": sorted(
+            ({"kind": ref.kind, "id": ref.id} for ref in proposal.evidence_refs),
+            key=lambda ref: (ref["kind"], ref["id"]),
+        ),
+        "provenance": {
+            "planner_provider": provenance.planner_provider,
+            "planner_name": provenance.planner_name,
+            "planner_version": provenance.planner_version,
+            "planner_api_version": provenance.planner_api_version,
+            "planner_spec_kind": provenance.planner_spec_kind,
+            "planner_spec_version": provenance.planner_spec_version,
+            "planner_spec_identity_version": provenance.planner_spec_identity_version,
+            "planner_spec_fingerprint": provenance.planner_spec_fingerprint,
+            "context_identity_version": provenance.context_identity_version,
+            "context_fingerprint": provenance.context_fingerprint,
+        },
+    }
 
 
 def candidate_proposal_identity_v1(proposal: CandidateProposal) -> Mapping[str, Any]:

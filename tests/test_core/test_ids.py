@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 from xaytune.core.errors import InvalidIdError
 from xaytune.core.ids import (
     ActionId,
+    AgentInvocationId,
     ArtifactId,
     CheckpointId,
     ControllerRequestId,
@@ -26,6 +27,7 @@ from xaytune.core.ids import (
 ALL_ID_TYPES = [
     (ExperimentId, "exp_"),
     (ControllerRequestId, "creq_"),
+    (AgentInvocationId, "agentinv_"),
     (ExperimentNodeId, "node_"),
     (RunId, "run_"),
     (RunAttemptId, "attempt_"),

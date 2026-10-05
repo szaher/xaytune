@@ -551,7 +551,7 @@ def test_the_rebuilt_mailbox_keeps_every_earlier_request_and_rule(tmp_path: Path
             "('creq_y', 'cancel', 'pending', 0, 'exp_x', '{}', 'd', NULL, 't', 't')"
         )
 
-    assert migrate(connection) == (18,)
+    assert migrate(connection)[0] == 18  # and any later migrations
     repository = ControlPlaneRepository(connection)
     assert repository.controller_requests.get(str(submitted.id)) == submitted
     assert repository.controller_requests.get(str(attached.id)).state is (

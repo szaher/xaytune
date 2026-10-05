@@ -119,6 +119,7 @@ from xaytune.core.execution import (
 )
 from xaytune.core.ids import (
     ActionId,
+    AgentInvocationId,
     ArtifactId,
     CheckpointId,
     ControllerRequestId,
@@ -257,6 +258,7 @@ __all__ = [
     "CapabilityRequirements",
     "CheckpointExecutionContract",
     "CheckpointId",
+    "AgentInvocationId",
     "ControllerRequestId",
     "CheckpointIntent",
     "CheckpointRef",

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 REQUIRE_TRL_ENV = "XAYTUNE_REQUIRE_TRL"
+REQUIRE_RAY_ENV = "XAYTUNE_REQUIRE_RAY"
 
 
 def pytest_configure(config):
@@ -12,11 +13,16 @@ def pytest_configure(config):
         "markers",
         f"trl: needs the optional trl extra; skipped without it, failed if {REQUIRE_TRL_ENV}=1",
     )
+    config.addinivalue_line(
+        "markers",
+        "ray: needs a real local Ray head (the ray extra); skipped without it, "
+        f"failed if {REQUIRE_RAY_ENV}=1",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Under ``XAYTUNE_REQUIRE_TRL=1`` a skipped TRL test is a failed one.
+    """Under ``XAYTUNE_REQUIRE_TRL=1`` a skipped TRL test is a failed one; Ray likewise.
 
     TRL is optional, so its tests skip when it is absent -- and a CI job that
     lost the extra would then pass having tested none of it. CI sets the
@@ -24,16 +30,20 @@ def pytest_runtest_makereport(item, call):
     """
     outcome = yield
     report = outcome.get_result()
-    if (
-        report.skipped
-        and os.environ.get(REQUIRE_TRL_ENV) == "1"
-        and item.get_closest_marker("trl") is not None
+    for marker, variable, suite in (
+        ("trl", REQUIRE_TRL_ENV, "TRL"),
+        ("ray", REQUIRE_RAY_ENV, "Ray"),
     ):
-        report.outcome = "failed"
-        report.longrepr = (
-            f"{item.nodeid} is part of the TRL suite and was skipped, but "
-            f"{REQUIRE_TRL_ENV}=1 requires it to run: {report.longrepr}"
-        )
+        if (
+            report.skipped
+            and os.environ.get(variable) == "1"
+            and item.get_closest_marker(marker) is not None
+        ):
+            report.outcome = "failed"
+            report.longrepr = (
+                f"{item.nodeid} is part of the {suite} suite and was skipped, but "
+                f"{variable}=1 requires it to run: {report.longrepr}"
+            )
 
 
 @pytest.fixture(autouse=True)

@@ -69,6 +69,11 @@ trl = ["trl>=1.13,<1.14", "transformers>=5.17,<5.18"]
 # the worker refuses any other. Kept equal to LM_EVAL_VERSION in
 # xaytune/workers/eval_lmeval_schema.py (tests/test_evaluation/test_lmeval_evaluator.py).
 eval = ["lm-eval[hf]==0.4.13"]
+# The Ray Jobs API RayJobsRuntime submits through (PR-033a): `default` brings
+# the job-submission client and the dashboard a local head serves it from.
+# Pinned to one minor: the Jobs API is an integration surface, and the next
+# minor is reviewed before the range widens.
+ray = ["ray[default]>=2.59,<2.60"]
 wandb = ["wandb>=0.16"]
 mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]

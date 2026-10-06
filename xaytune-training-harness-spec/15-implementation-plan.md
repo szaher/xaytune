@@ -1799,7 +1799,140 @@ tool calling, provider SDKs, memory, policy execution, automatic actions.
 
 ## Phase 9 — Ray and TorchFT
 
-### PR-033 — RayTrainRuntime
+Two independent axes, kept apart by composition rather than a class per
+pairing:
+
+```text
+what runs (a RuntimeBackend)          how it reaches a cluster (RaySubmissionBackend)
+────────────────────────────          ───────────────────────────────────────────────
+RayJobsRuntime   one supervised   ─┐  ┌─ RayJobsBackend     Ray Jobs API, existing cluster
+                 Xaytune worker    ├──┤
+RayTrainRuntime  Ray Train worker ─┘  └─ KubeRayJobsBackend  RayJob CR (existing or
+                 group                                       ephemeral RayCluster)
+```
+
+Ray Tune is a search provider (PR-034), not a runtime; Ray Data waits for a
+data abstraction to plug into. Xaytune never creates a cluster for the Jobs
+backend: it submits to one that exists, named by its address.
+
+### PR-033a — Ray substrate + RayJobsRuntime
+
+As built (`xaytune.ray`): Ray as one more `RuntimeBackend`, with nothing
+Ray-specific above the runtime boundary.
+
+```text
+xaytune.ray
+├── submission   RaySubmissionBackend (protocol), RayJobsBackend
+└── runtime      RayJobsRuntime, its supervisor entrypoint
+
+ResolvedExecutionPlan → RayJobsRuntime.submit_or_get(operation_id, plan)
+  → RaySubmissionBackend.submit(submission_id = operation_id,
+                                metadata = request digest + target, runtime_env)
+  → python -m xaytune.ray.runtime.supervisor <shared_state_root>/<operation_id>
+  → one worker, supervised exactly as under LocalRuntime
+```
+
+- **Identity.** `RuntimeSpec(kind="ray-jobs", config={"address",
+  "runtime_env", "shared_state_root"})`, all required and nothing else
+  accepted, no defaults. The address is authoritative: Ray's SDK would let
+  `RAY_API_SERVER_ADDRESS` / `RAY_ADDRESS` replace it, so a process where
+  either names another address is refused before anything is contacted
+  (`RayUnavailableError`, naming the variable, never its value). Direct
+  Jobs API authentication and TLS settings are not supported yet. `RayJobsRuntime.descriptor` is the
+  plugin (`ray-jobs` 0.1.0). Registered explicitly:
+  `runtimes={..., "ray-jobs": ray_jobs_runtime}`. Credentials are not
+  configuration, in the address or in `runtime_env`.
+- **Code travels in `runtime_env`.** The entrypoint is `python` as the job's
+  environment resolves it -- the cluster image's, or what `runtime_env`
+  builds (`pip`, a `working_dir` Ray uploads) -- never an interpreter path
+  assumed to exist on both machines.
+- **v1 state transport: a shared filesystem.** The workload directory (plan,
+  event stream, ending) lives under `shared_state_root`, which must be
+  mounted at the same absolute path on the controller and every node (one
+  machine, NFS, a PVC). A limitation of this version, not of the contract:
+  object storage or a remote telemetry transport can replace it without
+  changing `RuntimeBackend`.
+- **One operation, one job.** Ray refuses to reuse a `submission_id`; the job
+  records the digests of the plan's request and of the `runtime_env`, both
+  part of what was submitted. `submit_or_get` returns the job already under
+  the id for the same plan in the same environment, refuses either changed as
+  `IdempotencyConflictError` (`request_digest` / `runtime_env`), and resolves
+  a lost submit response from Ray's job store. `lookup_operation` finds the job after any restart, so a
+  controller that died after Ray accepted the job and before it recorded the
+  reference adopts it. A plan refused here is recorded (`rejected.json`), so
+  a lookup reports `rejected`.
+- **Fail closed.** `lookup_operation` returns `None` only when Ray answers the
+  job does not exist *and* nothing durable says it ever had it; an
+  unreachable cluster raises `RayUnavailableError`. Once Ray accepts a job,
+  `accepted.json` records it, so a cluster that restarts without its job
+  store cannot make the job look new: a finished one (`finished.json`) is
+  `completed`, one whose acceptance or supervisor left any trace is
+  `accepted` with status `unknown`, and `submit_or_get` returns it rather
+  than submitting again. A controller-level test restarts a host after Ray
+  forgot a finished job and checks it is never re-run.
+  `get_status` reports `unknown` for an unreachable cluster or a forgotten
+  job, never an invented state.
+- **Telemetry.** The job's entrypoint is the local launcher's supervisor,
+  extracted as `supervise_workload`: the single sequencer of the event
+  stream, so `watch(cursor)` replays and resumes after a restart. The worker
+  is unchanged.
+- **Status.** The supervisor's `finished.json` first (a worker cancelled
+  gracefully exits 0 and is still cancelled), then Ray: `PENDING` → pending,
+  `RUNNING` → starting/running, `STOPPED` → cancelled, `FAILED` → failed
+  (cancelled if a cancel was requested before the worker ever started),
+  anything else unexplained → unknown.
+- **Cancellation.** Idempotent by cancellation operation id, as
+  `LocalRuntime`'s registry makes it: the id is claimed for one workload
+  (`cancellations/<id>.json`, created exclusively); the same id for the same
+  workload is a retry that reasserts the effect, for another workload -- or
+  one already naming a submission -- an `IdempotencyConflictError`. The
+  effect is a durable `cancel.request`, delivered by the supervisor to the
+  worker's process group once; a job Ray has not started is also asked
+  to stop in Ray. Idempotent. Stopping is asynchronous and `cancelled` is
+  never synthesized from the request: while Ray still reports `PENDING` the
+  job is pending with "cancellation requested", and it is cancelled when Ray
+  reports it ended.
+- **Resources.** The plan's `cpus`, `gpus` and `memory_bytes` become Ray's
+  entrypoint scheduling options; `gpu_type`, accelerator memory, a runtime
+  limit and resource extensions are refused rather than dropped, as are
+  secrets, containers, topology variables and more than one worker
+  (`distributed.max_workers = 1`; worker groups are PR-033b).
+- **Refactors.** `UnsupportedPlanError` moved into the runtime contract
+  (`xaytune.runtimes`, re-exported by `xaytune.runtimes.local`) so the host
+  recognises any backend's refusal. Refusal rules moved to the runtime-neutral
+  `xaytune.runtimes.refusals`; each backend lists the ones it applies, so
+  neither inherits the other's limitations. The supervisor and ending
+  classification are shared. `LocalRuntime` behaves as before.
+- **Ray stays below.** Only `xaytune/ray/submission/jobs.py` imports `ray`,
+  lazily; importing core, planning, storage, the controller, the daemon,
+  `xaytune.runtimes` or `xaytune.ray` loads no Ray.
+- **Tests.** Every scenario runs real supervisors and workers against
+  `ProcessJobs`, a stand-in for Ray's job manager, in the matrix; the `ray`
+  CI job (`xaytune[ray]` pinned to Ray 2.59, `XAYTUNE_REQUIRE_RAY`) repeats
+  the essential ones on a real local head that the tests start and stop
+  themselves -- that process tree only, on ports of its own, never
+  `ray stop`. A controller-level test shows the same spec yields the same
+  durable history on `local` and `ray-jobs`, and a host restarted after Ray
+  accepted the job adopts it.
+
+Not here: Ray Train, KubeRay, Ray Tune (PR-034), TorchFT (PR-035), state
+transports other than a shared filesystem.
+
+### PR-033b — RayTrainRuntime
+
+Actual Ray Train: a job driver runs a `TorchTrainer` whose
+`ScalingConfig(num_workers=N, use_gpu=...)` is derived from the plan's
+`resources.workers`/`gpus` through the capability resolver, so plans asking
+for several workers run as a Ray Train worker group (one worker is valid
+too). Composes a `RaySubmissionBackend`; shares internals with
+`RayJobsRuntime` without either deriving from the other.
+
+### PR-033c — KubeRayJobsBackend
+
+A second `RaySubmissionBackend`: a `RayJob` custom resource against an
+existing RayCluster (`clusterSelector`) or an ephemeral one
+(`rayClusterSpec`), later queued by Kueue. Runtimes are unchanged; Kubernetes
+concepts stay inside the backend.
 
 ### PR-034 — RayTuneSearchProvider
 

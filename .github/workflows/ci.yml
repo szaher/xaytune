@@ -78,6 +78,28 @@ jobs:
         env:
           XAYTUNE_REQUIRE_LMEVAL: "1"
 
+  # The Ray runtime (PR-033a) against a real local Ray head, with the `ray`
+  # extra resolved from uv.lock. The matrix runs every RayJobsRuntime
+  # scenario against an in-process stand-in for Ray's job manager; this job
+  # repeats the essential ones on Ray itself, and they must run, not skip
+  # (XAYTUNE_REQUIRE_RAY). The tests start their own head and stop only that
+  # process tree: nothing here runs `ray stop`, which would also stop any
+  # other Ray on a shared or self-hosted runner.
+  ray:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --locked --extra dev --extra ray
+      - run: >-
+          uv run --locked python -m pytest -q --tb=short
+          tests/test_ray
+          tests/test_experiment/test_ray_controller.py
+        env:
+          XAYTUNE_REQUIRE_RAY: "1"
+      # And the real-Ray suite must exist: pytest exits 5 when nothing is selected.
+      - run: uv run --locked python -m pytest tests/test_ray -q --collect-only -m ray
+
   # The package a user installs, not the source tree the tests import. uv
   # builds the sdist, then the wheel from that sdist, so a file the sdist's
   # allow-list leaves out breaks the wheel here rather than on PyPI. The sdist

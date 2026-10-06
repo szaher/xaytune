@@ -36,15 +36,9 @@ from xaytune.core.capabilities import (
     DistributedCapabilities,
     PluginDescriptor,
     ResilienceCapabilities,
-    require_supported_plugin,
 )
 from xaytune.core.clock import utc_now
-from xaytune.core.errors import IncompatiblePluginError
-from xaytune.core.execution import (
-    PythonModuleEntrypoint,
-    ResolvedExecutionPlan,
-    TrainingExecutionSpec,
-)
+from xaytune.core.execution import ResolvedExecutionPlan
 from xaytune.core.ids import OperationId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import RuntimeRef
@@ -56,13 +50,14 @@ from xaytune.runtimes import (
     RuntimeState,
     RuntimeStatus,
     StreamCursor,
+    UnsupportedPlanError,
+    refusals,
 )
 from xaytune.runtimes.local.jsonl import AppendOnlyJsonlReader
 from xaytune.runtimes.local.paths import WorkloadPaths, read_json, write_atomic
 from xaytune.runtimes.local.registry import LocalWorkloadRecord, LocalWorkloadRegistry
-from xaytune.runtimes.worker import TOPOLOGY_VARIABLES
 
-__all__ = ["BACKEND", "LocalRuntime", "UnsupportedPlanError"]
+__all__ = ["BACKEND", "LocalRuntime", "UnsupportedPlanError", "finished_status"]
 
 BACKEND = "local"
 
@@ -99,16 +94,6 @@ option is a caller asking for behaviour -- ``{'launcher': 'torchrun'}`` is
 the obvious one -- and silently running a plain subprocess instead would be
 exactly the "ignore part of the request" failure this runtime refuses
 elsewhere."""
-
-
-class UnsupportedPlanError(Exception):
-    """This runtime cannot execute the plan it was handed.
-
-    Raised to the caller *and* recorded as a rejected operation, because those
-    answer different questions. The caller needs to stop; a controller that
-    restarts and looks the operation up needs to learn that nothing was
-    started, which is the one answer that makes re-issuing safe.
-    """
 
 
 class LocalRuntime:
@@ -365,48 +350,7 @@ class LocalRuntime:
         )
 
     def _finished_status(self, finished: dict[str, object]) -> RuntimeStatus:
-        """Classify an ending from what the launcher observed.
-
-        Entirely from the finished record, and deliberately **not** from the
-        registry's ``cancel_requested_at``. Those answer different questions --
-        whether a cancellation was ever wanted, and whether one reached this
-        execution before it ended -- and only the second describes what
-        happened. ADR-013 §5 puts the observed terminal state above pending
-        intent, and two races make the difference visible:
-
-        ```text
-        cancel requested, worker exits 3 first    -> FAILED, not cancelled
-        SIGTERM delivered, worker exits 0 cleanly -> CANCELLED, not succeeded
-        ```
-
-        The second is the one an exit code alone gets wrong. A worker that
-        handles SIGTERM and shuts down tidily did not finish its work, and
-        recording it as a success would put a partial run into the record as a
-        complete one.
-        """
-        raw = finished.get("exit_code")
-        code = raw if isinstance(raw, int) else None
-
-        if finished.get("spawn_error") is not None:
-            return RuntimeStatus(
-                state="failed",
-                detail=f"the worker could not be started: {finished['spawn_error']}",
-                observed_at=utc_now(),
-            )
-
-        if finished.get("cancelled") is True:
-            state: RuntimeState = "cancelled"
-        elif code == 0:
-            state = "succeeded"
-        else:
-            state = "failed"
-
-        return RuntimeStatus(
-            state=state,
-            exit_code=code,
-            detail=f"terminated by signal {-code}" if code is not None and code < 0 else None,
-            observed_at=utc_now(),
-        )
+        return finished_status(finished)
 
     # -- cancelling --------------------------------------------------------
 
@@ -553,98 +497,24 @@ class LocalRuntime:
 def _refuse(plan: ResolvedExecutionPlan) -> str | None:
     """Why this plan cannot run locally, or ``None`` if it can.
 
-    Refusing beats ignoring. A plan that declares secrets or an image has said
-    the workload needs them; running it anyway would start a process that fails
-    somewhere inside the worker, for a reason the logs would attribute to the
-    training code rather than to a runtime that quietly dropped part of the
-    request.
+    The rules are :mod:`xaytune.runtimes.refusals`, chosen here: what this
+    backend cannot honour, not what any other cannot.
     """
-    if plan.runtime != BACKEND:
-        return (
-            f"this plan was resolved for {plan.runtime!r}, not {BACKEND!r}; a "
-            f"resolver's decisions are made against one runtime's capabilities "
-            f"and running them on another discards the resolution"
-        )
-
-    unsupported = sorted(set(plan.runtime_options) - _RUNTIME_OPTIONS)
-    if unsupported:
-        return (
-            f"this runtime does not implement the runtime options "
-            f"{', '.join(repr(option) for option in unsupported)}; it understands "
-            f"{', '.join(repr(option) for option in sorted(_RUNTIME_OPTIONS))}. "
-            f"They are part of the request, so honouring some and ignoring the "
-            f"rest would run something other than what was asked for"
-        )
-
-    if "checkpoint_restore" in plan.runtime_options and (
-        not isinstance(plan.spec, TrainingExecutionSpec)
-        or not isinstance(plan.spec.entrypoint, PythonModuleEntrypoint)
-        or plan.spec.entrypoint.module != "xaytune.workers.native"
-        or plan.spec.checkpoint.format != "native-torch/v1"
-        or plan.spec.checkpoint.store_uri is None
-    ):
-        return "local FULL+EXACT restore is supported only by the managed Native worker"
-
-    requested = sorted(set(plan.runtime_options) & _WORKER_REQUESTS)
-    if requested and (
-        not isinstance(plan.spec, TrainingExecutionSpec)
-        or not isinstance(plan.spec.entrypoint, PythonModuleEntrypoint)
-        or plan.spec.entrypoint.module != "xaytune.workers.native"
-        or plan.spec.checkpoint.format != "native-torch/v1"
-    ):
-        return (
-            f"local worker requests {', '.join(repr(item) for item in requested)} are "
-            f"honoured only by the managed Native worker"
-        )
-
-    # Whichever plugin produced the spec -- a compiler or an evaluator -- is
-    # checked the same way; the runtime does not ask which it was.
-    producer = plan.spec.producer
-    descriptor = producer.descriptor
-    if descriptor is None:
-        return (
-            f"the plan names {producer.name!r} as its producer but carries no "
-            f"PluginDescriptor; ADR-008 requires every plugin to declare one, and "
-            f"a plan whose producer cannot be identified cannot be version-checked "
-            f"or traced back to what built it"
-        )
-
-    try:
-        require_supported_plugin(descriptor)
-    except IncompatiblePluginError as exc:
-        # Refused here rather than raised, so the operation is recorded as
-        # rejected and the controller learns nothing was started (ADR-008).
-        return str(exc)
-
-    if plan.spec.telemetry.protocol_version not in _TELEMETRY_PROTOCOLS:
-        spoken = ", ".join(sorted(_TELEMETRY_PROTOCOLS))
-        return (
-            f"this runtime speaks {spoken}, and the plan asks for "
-            f"{plan.spec.telemetry.protocol_version!r}; a worker and a controller "
-            f"that disagree about the telemetry contract should fail at submission "
-            f"rather than halfway through a run"
-        )
-
-    placed = sorted(set(plan.spec.environment) & TOPOLOGY_VARIABLES)
-    if placed:
-        return (
-            f"the plan sets {', '.join(placed)}; those place a worker in a "
-            f"distributed process group, and this runtime runs one worker in "
-            f"none -- honouring them would start a process waiting for peers "
-            f"that were never launched"
-        )
-
-    if plan.spec.secrets:
-        names = ", ".join(secret.name for secret in plan.spec.secrets)
-        return (
-            f"this runtime cannot resolve secret references ({names}); running "
-            f"the workload without them would fail inside the worker instead of here"
-        )
-    if plan.spec.container is not None:
-        return (
-            f"this runtime runs subprocesses, not containers; "
-            f"{plan.spec.container.image!r} needs a container runtime"
-        )
+    reasons = (
+        refusals.foreign_plan(plan, BACKEND),
+        refusals.unimplemented_options(plan, _RUNTIME_OPTIONS),
+        refusals.managed_worker_only(plan, _WORKER_REQUESTS),
+        # Whichever plugin produced the spec -- a compiler or an evaluator --
+        # is checked the same way; the runtime does not ask which it was.
+        refusals.unidentified_producer(plan),
+        refusals.unspoken_telemetry(plan, _TELEMETRY_PROTOCOLS),
+        refusals.topology_environment(plan),
+        refusals.secrets(plan),
+        refusals.container_image(plan),
+    )
+    refused = next((reason for reason in reasons if reason is not None), None)
+    if refused is not None:
+        return refused
     workers = plan.spec.resources.workers
     if workers is not None and workers > 1:
         return (
@@ -652,6 +522,51 @@ def _refuse(plan: ResolvedExecutionPlan) -> str | None:
             f"launcher is a separate backend with its own capability document"
         )
     return None
+
+
+def finished_status(finished: dict[str, object]) -> RuntimeStatus:
+    """Classify an ending from what the launcher observed.
+
+    Entirely from the finished record, and deliberately **not** from the
+    registry's ``cancel_requested_at``. Those answer different questions --
+    whether a cancellation was ever wanted, and whether one reached this
+    execution before it ended -- and only the second describes what
+    happened. ADR-013 §5 puts the observed terminal state above pending
+    intent, and two races make the difference visible:
+
+    ```text
+    cancel requested, worker exits 3 first    -> FAILED, not cancelled
+    SIGTERM delivered, worker exits 0 cleanly -> CANCELLED, not succeeded
+    ```
+
+    The second is the one an exit code alone gets wrong. A worker that
+    handles SIGTERM and shuts down tidily did not finish its work, and
+    recording it as a success would put a partial run into the record as a
+    complete one.
+    """
+    raw = finished.get("exit_code")
+    code = raw if isinstance(raw, int) else None
+
+    if finished.get("spawn_error") is not None:
+        return RuntimeStatus(
+            state="failed",
+            detail=f"the worker could not be started: {finished['spawn_error']}",
+            observed_at=utc_now(),
+        )
+
+    if finished.get("cancelled") is True:
+        state: RuntimeState = "cancelled"
+    elif code == 0:
+        state = "succeeded"
+    else:
+        state = "failed"
+
+    return RuntimeStatus(
+        state=state,
+        exit_code=code,
+        detail=f"terminated by signal {-code}" if code is not None and code < 0 else None,
+        observed_at=utc_now(),
+    )
 
 
 def _cancel_digest(workload: LocalWorkloadRecord) -> str:

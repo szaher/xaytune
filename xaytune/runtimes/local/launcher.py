@@ -34,6 +34,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +61,7 @@ from xaytune.runtimes.worker import (
     WorkerObservationRecord,
 )
 
-__all__ = ["main", "run"]
+__all__ = ["main", "run", "supervise_workload"]
 
 _CANCEL_POLL_SECONDS = 0.05
 
@@ -268,6 +269,24 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
         # the whole point of the claim is that only one worker exists.
         return 0
 
+    return supervise_workload(paths, plan)
+
+
+def supervise_workload(
+    paths: WorkloadPaths,
+    plan: ResolvedExecutionPlan,
+    *,
+    on_termination: Callable[[], None] | None = None,
+) -> int:
+    """Run and supervise the worker for a workload this process already owns.
+
+    Everything after the claim, shared by every backend whose supervisor is a
+    process beside the worker writing the workload's files: the Ray runtime
+    runs this as its job's entrypoint, where the claim is Ray's submission id
+    rather than the local registry. *on_termination* is what a termination
+    request to this process does; ``None`` survives it (the local launcher,
+    whose cancellations arrive as ``cancel.request``).
+    """
     events = _EventWriter(paths, plan)
 
     if paths.cancel.exists():
@@ -301,7 +320,7 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
                 stdout=out,
                 stderr=err,
                 env=_environment(plan, paths),
-                cwd=str(plan.runtime_options.get("working_directory", directory)),
+                cwd=str(plan.runtime_options.get("working_directory", paths.directory)),
                 # Its own session, so the worker leads a process group that
                 # contains it and everything it starts. Cancelling a training
                 # job has to reach the dataloader workers and helpers it
@@ -327,7 +346,7 @@ def run(directory: Path, registry_path: Path, external_id: str) -> int:
             )
             return 127
 
-    _survive_signals()
+    _survive_signals(on_termination)
     write_atomic(
         paths.started,
         {
@@ -490,7 +509,7 @@ def _wait_honouring_cancellation(
     return signalled
 
 
-def _survive_signals() -> None:
+def _survive_signals(on_termination: Callable[[], None] | None = None) -> None:
     """Keep waiting through a termination request instead of dying of it.
 
     A cancellation is delivered to the whole process group, so the worker has
@@ -505,7 +524,8 @@ def _survive_signals() -> None:
     """
 
     def _keep_waiting(_signum: int, _frame: object) -> None:
-        return
+        if on_termination is not None:
+            on_termination()
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, _keep_waiting)

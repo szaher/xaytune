@@ -15,9 +15,10 @@ CandidateSpec ──compile──> TrainingExecutionSpec ──resolve──> Re
 ```
 
 A **trainer compiler** (`NativeCompiler`, `TRLCompiler`) turns a candidate
-into a plan. A **runtime** (`LocalRuntime` today) executes the plan and streams
-observations back. The **controller** (`EmbeddedControllerHost`) ties them
-together and writes everything down. Each boundary carries data, never live
+into a plan. A **runtime** (`LocalRuntime`, or `RayJobsRuntime` on an
+existing Ray cluster) executes the plan and streams observations back. The
+**controller** (`EmbeddedControllerHost`) ties them together and writes
+everything down. Each boundary carries data, never live
 objects, so every step can be recorded, replayed and checked.
 
 ## The record

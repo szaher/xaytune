@@ -117,6 +117,22 @@ Uses Ray Train/Jobs for execution.
 
 It does not own planning or search.
 
+As built so far (PR-033a, `xaytune.ray`): what runs and how it is submitted
+are separate. `RayJobsRuntime` (`RuntimeSpec(kind="ray-jobs")`) runs each
+plan as one supervised Xaytune worker -- not Ray Train -- through a
+`RaySubmissionBackend`; `RayJobsBackend` submits to an existing cluster over
+the Ray Jobs API, whether it is local, on VMs or KubeRay-managed. The job's
+`submission_id` is the operation id -- Ray's own idempotency key, so a
+restarted controller finds and adopts the job it already submitted and never
+submits a second. The entrypoint is the same file-backed supervisor
+`LocalRuntime` runs, so a worker on Ray writes the same telemetry and the
+controller has no Ray-specific code. Code reaches the cluster through Ray's
+`runtime_env`; state, in this version, through a `shared_state_root` mounted
+at the same path on both sides -- a v1 transport limitation, not part of the
+contract. `RayTrainRuntime` proper (a `TorchTrainer` worker group, PR-033b)
+and a KubeRay `RayJob` submission backend (PR-033c) compose with the same
+pieces.
+
 ### TrainingHubRuntime
 
 Submits runtime-neutral execution requirements to Training Hub.

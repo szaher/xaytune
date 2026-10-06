@@ -1920,12 +1920,86 @@ transports other than a shared filesystem.
 
 ### PR-033b — RayTrainRuntime
 
-Actual Ray Train: a job driver runs a `TorchTrainer` whose
-`ScalingConfig(num_workers=N, use_gpu=...)` is derived from the plan's
-`resources.workers`/`gpus` through the capability resolver, so plans asking
-for several workers run as a Ray Train worker group (one worker is valid
-too). Composes a `RaySubmissionBackend`; shares internals with
-`RayJobsRuntime` without either deriving from the other.
+As built (`xaytune.ray.runtime.train`, `RuntimeSpec(kind="ray-train")`, same
+`{address, runtime_env, shared_state_root}` configuration):
+
+```text
+TrainingExecutionSpec   → Ray job → train_driver → TorchTrainer(ScalingConfig(**launch.json))
+                                                      → rank k: the plan's worker, placed
+EvaluationExecutionSpec → Ray job → supervisor → one worker (as RayJobsRuntime)
+```
+
+- **Ray Train at every size.** A training plan always runs as a
+  `TorchTrainer` worker group -- `workers=1` included -- with
+  `FailureConfig(max_failures=0)` (retrying is recovery, the controller's) and
+  `storage_path` under the workload directory (Ray's default is a node's home
+  directory). Each rank's train loop runs the plan's worker as a subprocess,
+  exactly as `LocalRuntime` would, adding the placement Ray decided: `RANK`,
+  `WORLD_SIZE`, `LOCAL_RANK`, `LOCAL_WORLD_SIZE`, `GROUP_RANK`, and a
+  `MASTER_ADDR`/`MASTER_PORT` rank 0 chooses and broadcasts
+  (`broadcast_from_rank_zero`), where the workers form their own process
+  group. Ray's actors hold the devices (`CUDA_VISIBLE_DEVICES`) and supervise.
+  The worker contract is unchanged.
+- **Evaluation still runs.** An experiment records one runtime and resolves
+  its evaluations against it, so an evaluation plan under `ray-train` runs as
+  one supervised Ray job, as under `ray-jobs`.
+- **Composed, not derived.** The job tracking both runtimes need -- identity,
+  adoption, forgotten jobs, cancellation claims, replayed telemetry -- moved
+  into the private `RayWorkloads`, which each runtime composes with its own
+  name, refusals and launch (`Launch`: entrypoint module, entrypoint
+  resources, a record written to `launch.json` before Ray is asked). No
+  public base class.
+- **One sequencer (ADR-014 §1a).** The driver alone writes the event stream,
+  relaying rank 0's observations only; every other rank's are kept as
+  diagnostics (`ranks/<k>.observations.jsonl`), never interleaved.
+  `WorkerReady` is emitted, as sequence 0, only once every rank has started
+  -- never for a group that failed or was cancelled before all of them did,
+  whose rank 0 observations then stay diagnostics too.
+- **The group ends together.** A rank whose worker fails writes
+  `ranks/abort.json`; every other rank stops its worker (`SIGTERM` to its
+  process group, once). A cancellation reaches every rank the same way, and a
+  rank announces itself before checking for one, so none can start behind a
+  driver that already ended the workload. The outcome is the group's, and
+  what was observed outranks what was intended: failed with the first rank
+  that failed on its own (`failed_rank`) -- even when its siblings were then
+  stopped for a cancellation -- or failed because Ray Train failed the group
+  (`worker-group-failed`); otherwise cancelled if any worker was stopped for
+  one; otherwise succeeded.
+- **Resources only where unambiguous**, refused otherwise:
+  `workers` required; `gpus` none or exactly one per worker (`gpus ==
+  workers`); `cpus`/`memory_bytes` are a single worker's only when there is
+  one worker, refused for several (how a total divides is not stated);
+  `gpu_type`, accelerator memory, deadlines and extensions refused. With no
+  `cpus`, Ray Train's per-worker default applies; the scaling used is
+  recorded. Managed-worker requests and checkpoint restore address one
+  worker and are refused for a group.
+- **Xaytune's built-in workers run as a group of one only.** The Native and
+  TRL workers publish the model from every rank to one output path, and
+  Native wraps the model in FSDP at `world_size > 1`, where `save_pretrained`
+  on every rank is no full-model publication. A plan running
+  `xaytune.workers.*` with `workers > 1` -- by module or by command -- is
+  refused. Groups of more than one are for workers that implement
+  distributed publication themselves; the built-in compilers emit
+  `workers=1`.
+- **Ray stays below.** `ray.train` is imported only by
+  `xaytune/ray/runtime/train_driver.py`, which nothing imports -- Ray runs it.
+- **Tests.** The matrix runs the real driver and ranks with real workers
+  against `ProcessJobs`, whose "image" swaps in a thread-backed group
+  (`tests/test_ray/fake_train_driver.py`); two ranks there form a real gloo
+  group. The `ray` CI job runs an actual two-worker `TorchTrainer` whose
+  workers all-reduce, a failing rank, and a cancelled group whose workers are
+  all gone. Controller level: the same spec yields the same history on
+  `local`, `ray-jobs` and `ray-train`, and a `ray-train` experiment trains
+  then evaluates.
+
+Later, deliberately: distributed-safe publication in the built-in workers
+(gather, barrier, one publishing rank) and a compiler/candidate path that
+asks for more than one worker.
+
+Limitations kept explicit: a worker started by a rank whose Ray actor is
+killed outright (node loss, `SIGKILL`) is not reaped by this slice -- the
+failure campaigns are PR-036; coordination between ranks uses the v1 shared
+state root.
 
 ### PR-033c — KubeRayJobsBackend
 

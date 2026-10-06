@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests.test_ray.ray_support import ProcessJobs, RayHead, ray_head  # noqa: F401
+from tests.test_ray.ray_support import ProcessJobs, RayHead
 from xaytune.core.capabilities import PLUGIN_API_VERSIONS, PluginDescriptor
 from xaytune.core.domain.operation import RuntimeOperationTarget
 from xaytune.core.errors import IdempotencyConflictError
@@ -799,7 +799,8 @@ def test_ray_is_imported_by_the_ray_runtime_alone() -> None:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         )
     )
-    assert importers == ["ray/submission/jobs.py"]
+    # The Jobs client, and the Ray Train driver Ray runs on the cluster -- each lazily.
+    assert importers == ["ray/runtime/train_driver.py", "ray/submission/jobs.py"]
 
 
 def test_the_local_runtime_still_refuses_ray_plans(tmp_path: Path) -> None:
@@ -821,7 +822,7 @@ def _real(root: Path, head: RayHead) -> RayJobsRuntime:
 @pytest.mark.ray
 def test_on_ray_a_workload_runs_once_is_adopted_and_reports_its_telemetry(
     root: Path,
-    ray_head: RayHead,  # noqa: F811
+    ray_head: RayHead,
 ) -> None:
     operation = OperationId.generate()
 
@@ -845,7 +846,7 @@ def test_on_ray_a_workload_runs_once_is_adopted_and_reports_its_telemetry(
 @pytest.mark.ray
 def test_on_ray_a_failed_worker_fails_and_a_running_one_cancels(
     root: Path,
-    ray_head: RayHead,  # noqa: F811
+    ray_head: RayHead,
 ) -> None:
     runtime = _real(root, ray_head)
 
@@ -872,7 +873,7 @@ def test_on_ray_a_failed_worker_fails_and_a_running_one_cancels(
 @pytest.mark.ray
 def test_on_ray_another_address_in_the_environment_is_refused_before_any_job(
     root: Path,
-    ray_head: RayHead,  # noqa: F811
+    ray_head: RayHead,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """RAY_ADDRESS naming another cluster would redirect Ray's SDK; nothing is submitted."""
@@ -888,7 +889,7 @@ def test_on_ray_another_address_in_the_environment_is_refused_before_any_job(
 @pytest.mark.ray
 def test_on_ray_a_job_waiting_for_resources_is_pending_and_cancels_there(
     root: Path,
-    ray_head: RayHead,  # noqa: F811
+    ray_head: RayHead,
 ) -> None:
     """The head has no GPU, so a job asking for one waits in Ray until it is stopped."""
     runtime = _real(root, ray_head)

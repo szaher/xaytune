@@ -2,13 +2,13 @@
 
 ```text
                  ┌─ RuntimeSpec(kind="local")     ─ LocalRuntime    ─ launcher   ─ worker
-ExperimentHandle ┤
-                 └─ RuntimeSpec(kind="ray-jobs")  ─ RayJobsRuntime  ─ Ray job ─ supervisor ─ worker
+ExperimentHandle ┼─ RuntimeSpec(kind="ray-jobs")  ─ RayJobsRuntime  ─ Ray job ─ supervisor ─ worker
+                 └─ RuntimeSpec(kind="ray-train") ─ RayTrainRuntime ─ Ray job ─ TorchTrainer ─ ranks
 ```
 
 The same spec, differing only in the runtime it names, must produce the same
 durable history and the same answers. The host has no Ray-specific code: it
-is given a ``ray-jobs`` factory like any other. Ray's job manager is
+is given ``ray-jobs`` and ``ray-train`` factories like any other. Ray's job manager is
 ``ProcessJobs`` here, so the matrix runs this without Ray; a host restarted
 after Ray accepted the job, before the reference was recorded, adopts it --
 even once Ray has forgotten the job it already finished.
@@ -20,11 +20,13 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tests.test_experiment.test_cross_compiler_controller import _history, _shape
 from tests.test_ray.ray_support import ProcessJobs
 from tests.training_fixtures import sft_candidate, tiny_dataset, tiny_model
 from xaytune.core.domain.objective import Objective, ObjectiveMetric
-from xaytune.ray import RayJobsConfig, RayJobsRuntime
+from xaytune.ray import RayJobsConfig, RayJobsRuntime, RayTrainConfig, RayTrainRuntime
 
 
 def _spec(root: Path, runtime: str) -> Any:
@@ -58,6 +60,7 @@ def _runtimes(jobs: ProcessJobs) -> dict[str, Any]:
     return {
         "local": _local_runtime,
         "ray-jobs": lambda config: RayJobsRuntime(RayJobsConfig(**config), submission=jobs),
+        "ray-train": lambda config: RayTrainRuntime(RayTrainConfig(**config), submission=jobs),
     }
 
 
@@ -79,11 +82,12 @@ def _drive(root: Path, runtime: str, jobs: ProcessJobs) -> dict[str, Any]:
     return asyncio.run(scenario())
 
 
-def test_the_same_spec_succeeds_identically_on_local_and_on_ray(tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", ["ray-jobs", "ray-train"])
+def test_the_same_spec_succeeds_identically_on_local_and_on_ray(tmp_path: Path, kind: str) -> None:
     jobs = ProcessJobs()
     try:
         local = _drive(tmp_path / "local", "local", jobs)
-        ray = _drive(tmp_path / "ray", "ray-jobs", jobs)
+        ray = _drive(tmp_path / "ray", kind, jobs)
     finally:
         jobs.close()
     assert _shape(ray["result"]) == _shape(local["result"])
@@ -185,3 +189,38 @@ def test_a_restarted_host_never_reruns_a_finished_job_ray_forgot(tmp_path: Path)
         asyncio.run(scenario())
     finally:
         jobs.close()
+
+
+def test_an_experiment_on_ray_train_trains_as_a_group_and_still_evaluates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One recorded runtime serves both: training as Ray Train, evaluation as one Ray job."""
+    from tests.evaluation_fixtures import native_evaluation
+    from xaytune.core.state.status import EvaluationRunStatus, ExperimentNodeStatus
+    from xaytune.experiment import EmbeddedControllerHost
+
+    for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
+        monkeypatch.setenv(name, "1")
+    spec = _spec(tmp_path, "ray-train").model_copy(
+        update={"evaluation": native_evaluation(tmp_path / "eval")}
+    )
+    jobs = ProcessJobs()
+
+    async def scenario() -> Any:
+        host = EmbeddedControllerHost(tmp_path / "state.db", runtimes=_runtimes(jobs))
+        try:
+            handle = await host.submit(spec)
+            return await asyncio.wait_for(handle.wait(), timeout=300)
+        finally:
+            await host.close()
+
+    try:
+        result = asyncio.run(scenario())
+    finally:
+        jobs.close()
+    (node,) = result.nodes
+    assert node.status is ExperimentNodeStatus.DECIDING
+    (evaluated,) = node.evaluations
+    assert evaluated.status is EvaluationRunStatus.SUCCEEDED
+    entrypoints = sorted(job.entrypoint.split()[2] for job in jobs.jobs.values())
+    assert entrypoints == ["xaytune.ray.runtime.supervisor", "xaytune.ray.runtime.train_driver"]

@@ -31,7 +31,11 @@ from typing import Any
 
 import pytest
 
+from xaytune.ray.runtime.train import TRAIN_DRIVER
 from xaytune.ray.submission import RayJob, RayJobStatus, RayUnavailableError
+
+FAKE_TRAIN_DRIVER = "tests.test_ray.fake_train_driver"
+_REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 @dataclass
@@ -51,6 +55,7 @@ class ProcessJobs:
     """A fake Ray job manager that runs entrypoints as real processes."""
 
     def __init__(self, *, hold: bool = False) -> None:
+        """*hold* keeps every new job pending until :meth:`release`."""
         self.jobs: dict[str, _Job] = {}
         self.submissions = 0
         self.hold = hold
@@ -129,7 +134,10 @@ class ProcessJobs:
 
     def _start(self, job: _Job) -> None:
         job.process = subprocess.Popen(  # noqa: S602 -- Ray runs entrypoints through a shell too
-            job.entrypoint,
+            # This "cluster's image" has no Ray, so its Ray Train driver is the
+            # one whose worker group is simulated (tests/test_ray/fake_train_driver).
+            job.entrypoint.replace(TRAIN_DRIVER, FAKE_TRAIN_DRIVER),
+            cwd=str(_REPOSITORY),
             shell=True,
             start_new_session=True,
             stdout=subprocess.DEVNULL,
@@ -224,7 +232,7 @@ def ray_head() -> Iterator[RayHead]:
             f"--runtime-env-agent-port={ports[8]}",
             "--dashboard-host=127.0.0.1",
             "--include-dashboard=true",
-            "--num-cpus=2",
+            "--num-cpus=4",
             "--num-gpus=0",
             f"--temp-dir={temp}",
             "--disable-usage-stats",

@@ -78,10 +78,11 @@ jobs:
         env:
           XAYTUNE_REQUIRE_LMEVAL: "1"
 
-  # The Ray runtime (PR-033a) against a real local Ray head, with the `ray`
-  # extra resolved from uv.lock. The matrix runs every RayJobsRuntime
-  # scenario against an in-process stand-in for Ray's job manager; this job
-  # repeats the essential ones on Ray itself, and they must run, not skip
+  # The Ray runtimes (PR-033a/b) against a real local Ray head, with the `ray`
+  # extra resolved from uv.lock. The matrix runs every RayJobsRuntime and
+  # RayTrainRuntime scenario against a stand-in for Ray's job manager; this
+  # job repeats the essential ones on Ray itself -- an actual multi-worker
+  # TorchTrainer among them -- and they must run, not skip
   # (XAYTUNE_REQUIRE_RAY). The tests start their own head and stop only that
   # process tree: nothing here runs `ray stop`, which would also stop any
   # other Ray on a shared or self-hosted runner.

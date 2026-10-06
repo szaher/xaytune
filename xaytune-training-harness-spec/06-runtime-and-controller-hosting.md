@@ -129,9 +129,16 @@ submits a second. The entrypoint is the same file-backed supervisor
 controller has no Ray-specific code. Code reaches the cluster through Ray's
 `runtime_env`; state, in this version, through a `shared_state_root` mounted
 at the same path on both sides -- a v1 transport limitation, not part of the
-contract. `RayTrainRuntime` proper (a `TorchTrainer` worker group, PR-033b)
-and a KubeRay `RayJob` submission backend (PR-033c) compose with the same
-pieces.
+contract.
+
+`RayTrainRuntime` (PR-033b, `RuntimeSpec(kind="ray-train")`) runs every
+training plan as a `TorchTrainer` worker group sized by the plan's
+`resources.workers` -- each rank running the plan's worker, placed by Ray
+Train -- with the job's driver as the one telemetry sequencer, relaying rank
+0's observations; evaluation plans run as one supervised job, so an
+experiment on `ray-train` still evaluates. Resources Ray Train would have to
+guess how to divide are refused. A KubeRay `RayJob` submission backend
+(PR-033c) composes with the same pieces.
 
 ### TrainingHubRuntime
 

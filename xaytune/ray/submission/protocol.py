@@ -3,7 +3,7 @@
 ```text
 RayJobsRuntime ─┐                        ┌─ RayJobsBackend    (Ray Jobs API, an existing cluster)
 RayTrainRuntime ┴─ RaySubmissionBackend ─┤
-  (PR-033b)                              └─ KubeRay RayJob    (PR-033c)
+                                         └─ KubeRay RayJob    (PR-033c)
 ```
 
 What runs and how it is submitted are separate choices. A runtime decides

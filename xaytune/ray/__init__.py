@@ -3,7 +3,7 @@
 ```text
 xaytune.ray
 ├── submission   how a job reaches a cluster    RayJobsBackend; KubeRay later (PR-033c)
-└── runtime      what runs there                RayJobsRuntime; RayTrainRuntime (PR-033b)
+└── runtime      what runs there                RayJobsRuntime, RayTrainRuntime
 ```
 
 A runtime composes a submission backend; neither inherits from the other, so
@@ -27,7 +27,16 @@ needs it, when it first talks to a cluster (``pip install xaytune[ray]``).
 
 from __future__ import annotations
 
-from xaytune.ray.runtime import BACKEND, RayJobsConfig, RayJobsRuntime, ray_jobs_runtime
+from xaytune.ray.runtime import (
+    BACKEND,
+    RayClusterConfig,
+    RayJobsConfig,
+    RayJobsRuntime,
+    RayTrainConfig,
+    RayTrainRuntime,
+    ray_jobs_runtime,
+    ray_train_runtime,
+)
 from xaytune.ray.submission import (
     RayJob,
     RayJobsBackend,
@@ -38,12 +47,16 @@ from xaytune.ray.submission import (
 
 __all__ = [
     "BACKEND",
+    "RayClusterConfig",
     "RayJob",
     "RayJobStatus",
     "RayJobsBackend",
     "RayJobsConfig",
     "RayJobsRuntime",
     "RaySubmissionBackend",
+    "RayTrainConfig",
+    "RayTrainRuntime",
     "RayUnavailableError",
     "ray_jobs_runtime",
+    "ray_train_runtime",
 ]

@@ -2827,7 +2827,7 @@ def _trained_model(attempts: tuple[RunAttempt, ...]) -> ArtifactRef | None:
 
 def _is_refusal(exc: BaseException) -> bool:
     """Whether *exc* is a runtime's definitive refusal of a plan."""
-    from xaytune.runtimes.local import UnsupportedPlanError
+    from xaytune.runtimes import UnsupportedPlanError
 
     return isinstance(exc, UnsupportedPlanError)
 

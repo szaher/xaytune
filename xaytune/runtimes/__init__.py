@@ -46,6 +46,7 @@ __all__ = [
     "RuntimeEventPayload",
     "StreamCursor",
     "TrainingEventPayload",
+    "UnsupportedPlanError",
 ]
 
 RuntimeState = Literal[
@@ -359,6 +360,19 @@ class RuntimeLog(FrozenDomainModel):
     trace_context: TraceContext | None = None
     context: CorrelationContext | None = None
     attributes: FrozenDict = Field(default_factory=FrozenDict)
+
+
+class UnsupportedPlanError(Exception):
+    """This runtime cannot execute the plan it was handed.
+
+    Raised to the caller *and* recorded as a rejected operation, because those
+    answer different questions. The caller needs to stop; a controller that
+    restarts and looks the operation up needs to learn that nothing was
+    started, which is the one answer that makes re-issuing safe.
+
+    One type for every backend, so a controller recognises a refusal without
+    knowing which runtime made it.
+    """
 
 
 @runtime_checkable

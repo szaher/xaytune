@@ -61,12 +61,21 @@ from xaytune.runtimes.worker import (
     WorkerObservationRecord,
 )
 
-__all__ = ["main", "run", "supervise_workload"]
+__all__ = [
+    "EventWriter",
+    "main",
+    "observation_adapter",
+    "relay_observations",
+    "run",
+    "supervise_workload",
+    "worker_argv",
+    "worker_environment",
+]
 
 _CANCEL_POLL_SECONDS = 0.05
 
 
-def _argv(plan: ResolvedExecutionPlan) -> list[str]:
+def worker_argv(plan: ResolvedExecutionPlan) -> list[str]:
     """Turn the plan's entrypoint into an argument vector.
 
     The two entrypoint kinds are handled mechanically. Note what is *not* here:
@@ -97,7 +106,7 @@ def _argv(plan: ResolvedExecutionPlan) -> list[str]:
     ]
 
 
-def _environment(plan: ResolvedExecutionPlan, paths: WorkloadPaths) -> dict[str, str]:
+def worker_environment(plan: ResolvedExecutionPlan, paths: WorkloadPaths) -> dict[str, str]:
     """The worker's environment: this process's, plus what the plan declares.
 
     Inherited rather than replaced, because a bare environment has no ``PATH``
@@ -122,7 +131,7 @@ def _environment(plan: ResolvedExecutionPlan, paths: WorkloadPaths) -> dict[str,
     return environment
 
 
-class _EventWriter:
+class EventWriter:
     """The single assigner of ``sequence`` for one target (ADR-014 §1a)."""
 
     def __init__(self, paths: WorkloadPaths, plan: ResolvedExecutionPlan) -> None:
@@ -287,7 +296,7 @@ def supervise_workload(
     request to this process does; ``None`` survives it (the local launcher,
     whose cancellations arrive as ``cancel.request``).
     """
-    events = _EventWriter(paths, plan)
+    events = EventWriter(paths, plan)
 
     if paths.cancel.exists():
         # Cancelled before there was anything to cancel. Recorded as an ending
@@ -316,10 +325,10 @@ def supervise_workload(
     with paths.stdout.open("ab") as out, paths.stderr.open("ab") as err:
         try:
             child = subprocess.Popen(
-                _argv(plan),
+                worker_argv(plan),
                 stdout=out,
                 stderr=err,
-                env=_environment(plan, paths),
+                env=worker_environment(plan, paths),
                 cwd=str(plan.runtime_options.get("working_directory", paths.directory)),
                 # Its own session, so the worker leads a process group that
                 # contains it and everything it starts. Cancelling a training
@@ -361,7 +370,7 @@ def supervise_workload(
     # operating system schedules the two processes.
     events.emit("WorkerReady", pid=child.pid)
 
-    observations = AppendOnlyJsonlReader(paths.observations, _observation_adapter(plan))
+    observations = AppendOnlyJsonlReader(paths.observations, observation_adapter(plan))
     cancelled = _supervise(child, paths, events, observations)
     code = child.returncode
 
@@ -386,7 +395,7 @@ def supervise_workload(
     return code
 
 
-def _observation_adapter(plan: ResolvedExecutionPlan) -> TypeAdapter[Any]:
+def observation_adapter(plan: ResolvedExecutionPlan) -> TypeAdapter[Any]:
     """Validate worker records against the family this target may carry.
 
     The two vocabularies share members, so the family is chosen by the typed
@@ -398,7 +407,7 @@ def _observation_adapter(plan: ResolvedExecutionPlan) -> TypeAdapter[Any]:
     return TypeAdapter(WorkerObservationRecord[EvaluationObservation])
 
 
-def _drain(observations: AppendOnlyJsonlReader[Any], events: _EventWriter) -> None:
+def relay_observations(observations: AppendOnlyJsonlReader[Any], events: EventWriter) -> None:
     """Move everything the worker has reported so far into the event stream.
 
     **The supervisor does not die of bad worker output.** The worker is the
@@ -438,7 +447,7 @@ def _drain(observations: AppendOnlyJsonlReader[Any], events: _EventWriter) -> No
 def _supervise(
     child: subprocess.Popen[bytes],
     paths: WorkloadPaths,
-    events: _EventWriter,
+    events: EventWriter,
     observations: AppendOnlyJsonlReader[Any],
 ) -> bool:
     """Relay observations and honour cancellation until the worker exits.
@@ -454,8 +463,10 @@ def _supervise(
     A record still cut off after that read means the worker died mid-write;
     that is reported rather than silently dropped.
     """
-    cancelled = _wait_honouring_cancellation(child, paths, lambda: _drain(observations, events))
-    _drain(observations, events)
+    cancelled = _wait_honouring_cancellation(
+        child, paths, lambda: relay_observations(observations, events)
+    )
+    relay_observations(observations, events)
 
     if observations.pending_bytes:
         events.emit(

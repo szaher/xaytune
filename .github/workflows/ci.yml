@@ -101,6 +101,34 @@ jobs:
       # And the real-Ray suite must exist: pytest exits 5 when nothing is selected.
       - run: uv run --locked python -m pytest tests/test_ray -q --collect-only -m ray
 
+  # KubeRayJobsBackend (PR-033c) against a real Kubernetes API server and the
+  # KubeRay operator, pinned: a kind cluster this job creates on its own
+  # runner, so KubeRay's CRDs judge the RayJobs the backend writes and its
+  # finalizer handles their deletion. Each test module works in a namespace
+  # it creates and deletes. The suite must run, not skip
+  # (XAYTUNE_REQUIRE_KUBERAY).
+  kuberay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: xaytune-kuberay
+      - run: >-
+          helm install kuberay-operator kuberay-operator
+          --repo https://ray-project.github.io/kuberay-helm/ --version 1.7.1
+          --wait --timeout 300s
+      - run: uv sync --locked --extra dev --extra kuberay
+      - run: >-
+          uv run --locked python -m pytest -q --tb=short
+          tests/test_ray/test_kuberay_cluster.py
+          tests/test_ray/test_kuberay_backend.py
+        env:
+          XAYTUNE_REQUIRE_KUBERAY: "1"
+          XAYTUNE_KUBERAY_CONTEXT: kind-xaytune-kuberay
+      - run: uv run --locked python -m pytest tests/test_ray -q --collect-only -m kuberay
+
   # The package a user installs, not the source tree the tests import. uv
   # builds the sdist, then the wheel from that sdist, so a file the sdist's
   # allow-list leaves out breaks the wheel here rather than on PyPI. The sdist

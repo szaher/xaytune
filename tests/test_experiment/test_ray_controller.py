@@ -9,7 +9,9 @@ ExperimentHandle ┼─ RuntimeSpec(kind="ray-jobs")  ─ RayJobsRuntime  ─ Ra
 The same spec, differing only in the runtime it names, must produce the same
 durable history and the same answers. The host has no Ray-specific code: it
 is given ``ray-jobs`` and ``ray-train`` factories like any other. Ray's job manager is
-``ProcessJobs`` here, so the matrix runs this without Ray; a host restarted
+``ProcessJobs`` here, so the matrix runs this without Ray -- submitted through the
+Ray Jobs API or as KubeRay RayJobs (``FakeKubernetes``), which neither the host
+nor the runtime can tell apart; a host restarted
 after Ray accepted the job, before the reference was recorded, adopts it --
 even once Ray has forgotten the job it already finished.
 """
@@ -23,20 +25,38 @@ from typing import Any
 import pytest
 
 from tests.test_experiment.test_cross_compiler_controller import _history, _shape
+from tests.test_ray.kube_support import FakeKubernetes
 from tests.test_ray.ray_support import ProcessJobs
 from tests.training_fixtures import sft_candidate, tiny_dataset, tiny_model
 from xaytune.core.domain.objective import Objective, ObjectiveMetric
-from xaytune.ray import RayJobsConfig, RayJobsRuntime, RayTrainConfig, RayTrainRuntime
+from xaytune.ray import (
+    KubeRayJobsBackend,
+    RayJobsConfig,
+    RayJobsRuntime,
+    RayTrainConfig,
+    RayTrainRuntime,
+)
+
+_KUBERAY = {
+    "kind": "kuberay",
+    "namespace": "ml",
+    "context": "kind-xaytune",
+    "cluster": {"kind": "existing", "selector": {"ray.io/cluster": "trainers"}},
+}
 
 
-def _spec(root: Path, runtime: str) -> Any:
+def _spec(root: Path, runtime: str, submission: str = "ray-jobs") -> Any:
     from xaytune.experiment import CompilerSpec, ExperimentSpec, RuntimeSpec
 
     config = (
         {"root": str(root / "runtime")}
         if runtime == "local"
         else {
-            "address": "http://ray.test:8265",
+            **(
+                {"address": "http://ray.test:8265"}
+                if submission == "ray-jobs"
+                else {"submission": _KUBERAY}
+            ),
             "runtime_env": {},
             "shared_state_root": str(root / "ray-state"),
         }
@@ -54,23 +74,40 @@ def _spec(root: Path, runtime: str) -> Any:
     )
 
 
-def _runtimes(jobs: ProcessJobs) -> dict[str, Any]:
+def _runtimes(jobs: ProcessJobs, kube: FakeKubernetes | None = None) -> dict[str, Any]:
+    """The hosts' factories. Given *kube*, the configured KubeRay backend talks to it."""
     from xaytune.experiment.host import _local_runtime
 
-    return {
-        "local": _local_runtime,
-        "ray-jobs": lambda config: RayJobsRuntime(RayJobsConfig(**config), submission=jobs),
-        "ray-train": lambda config: RayTrainRuntime(RayTrainConfig(**config), submission=jobs),
-    }
+    def backend(config: RayJobsConfig | RayTrainConfig) -> Any:
+        if config.submission.kind == "kuberay":
+            assert kube is not None
+            return KubeRayJobsBackend(config.submission, api=kube)
+        return jobs
+
+    def ray_jobs(config: Any) -> RayJobsRuntime:
+        parsed = RayJobsConfig(**config)
+        return RayJobsRuntime(parsed, submission=backend(parsed))
+
+    def ray_train(config: Any) -> RayTrainRuntime:
+        parsed = RayTrainConfig(**config)
+        return RayTrainRuntime(parsed, submission=backend(parsed))
+
+    return {"local": _local_runtime, "ray-jobs": ray_jobs, "ray-train": ray_train}
 
 
-def _drive(root: Path, runtime: str, jobs: ProcessJobs) -> dict[str, Any]:
+def _drive(
+    root: Path,
+    runtime: str,
+    jobs: ProcessJobs,
+    submission: str = "ray-jobs",
+    kube: FakeKubernetes | None = None,
+) -> dict[str, Any]:
     from xaytune.experiment import EmbeddedControllerHost
 
     async def scenario() -> dict[str, Any]:
-        host = EmbeddedControllerHost(root / "state.db", runtimes=_runtimes(jobs))
+        host = EmbeddedControllerHost(root / "state.db", runtimes=_runtimes(jobs, kube))
         try:
-            handle = await host.submit(_spec(root, runtime))
+            handle = await host.submit(_spec(root, runtime, submission))
             result = await asyncio.wait_for(handle.wait(), timeout=180)
             return {
                 "result": result,
@@ -82,28 +119,37 @@ def _drive(root: Path, runtime: str, jobs: ProcessJobs) -> dict[str, Any]:
     return asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("submission", ["ray-jobs", "kuberay"])
 @pytest.mark.parametrize("kind", ["ray-jobs", "ray-train"])
-def test_the_same_spec_succeeds_identically_on_local_and_on_ray(tmp_path: Path, kind: str) -> None:
+def test_the_same_spec_succeeds_identically_on_local_and_on_ray(
+    tmp_path: Path, kind: str, submission: str
+) -> None:
     jobs = ProcessJobs()
+    kube = FakeKubernetes(jobs)
     try:
         local = _drive(tmp_path / "local", "local", jobs)
-        ray = _drive(tmp_path / "ray", kind, jobs)
+        ray = _drive(tmp_path / "ray", kind, jobs, submission, kube)
     finally:
         jobs.close()
     assert _shape(ray["result"]) == _shape(local["result"])
     assert _history(ray["history"]) == _history(local["history"])
     assert ("Run", "RunStatusChanged", "succeeded") in _history(ray["history"])
     assert len(jobs.jobs) == 1 and jobs.submissions == 1
+    assert len(kube.objects) == (1 if submission == "kuberay" else 0)
 
 
-def test_a_host_restarted_after_ray_accepted_the_job_adopts_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize("submission", ["ray-jobs", "kuberay"])
+def test_a_host_restarted_after_ray_accepted_the_job_adopts_it(
+    tmp_path: Path, submission: str
+) -> None:
     """The controller dies after Ray accepted the job, before recording its reference."""
     from xaytune.experiment import EmbeddedControllerHost
 
     jobs = ProcessJobs()
+    kube = FakeKubernetes(jobs)
 
     async def scenario() -> None:
-        first = EmbeddedControllerHost(tmp_path / "state.db", runtimes=_runtimes(jobs))
+        first = EmbeddedControllerHost(tmp_path / "state.db", runtimes=_runtimes(jobs, kube))
         issue = first._issue
 
         async def dies_after_ray_accepts(experiment_id, run_id, attempt_id, operation, plan, rt):
@@ -114,7 +160,7 @@ def test_a_host_restarted_after_ray_accepted_the_job_adopts_it(tmp_path: Path) -
 
         first._issue = dies_after_ray_accepts  # type: ignore[method-assign]
         try:
-            handle = await first.submit(_spec(tmp_path, "ray-jobs"))
+            handle = await first.submit(_spec(tmp_path, "ray-jobs", submission))
             experiment_id = handle.experiment_id
             while not jobs.jobs:
                 await asyncio.sleep(0.05)
@@ -122,7 +168,7 @@ def test_a_host_restarted_after_ray_accepted_the_job_adopts_it(tmp_path: Path) -
             first._issue = issue  # type: ignore[method-assign]
             await first.close()
 
-        second = EmbeddedControllerHost(tmp_path / "state.db", runtimes=_runtimes(jobs))
+        second = EmbeddedControllerHost(tmp_path / "state.db", runtimes=_runtimes(jobs, kube))
         try:
             handle = await second.attach(experiment_id)
             result = await asyncio.wait_for(handle.wait(), timeout=180)
@@ -131,6 +177,7 @@ def test_a_host_restarted_after_ray_accepted_the_job_adopts_it(tmp_path: Path) -
                 second.repository.events.events_for_experiment(str(experiment_id))
             )
             assert jobs.submissions == 1, "the restarted host adopted the job; it never resubmitted"
+            assert kube.creates == (1 if submission == "kuberay" else 0)
         finally:
             await second.close()
 

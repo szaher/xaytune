@@ -2003,10 +2003,152 @@ state root.
 
 ### PR-033c — KubeRayJobsBackend
 
-A second `RaySubmissionBackend`: a `RayJob` custom resource against an
-existing RayCluster (`clusterSelector`) or an ephemeral one
-(`rayClusterSpec`), later queued by Kueue. Runtimes are unchanged; Kubernetes
-concepts stay inside the backend.
+As built (`xaytune.ray.submission.kuberay`, `pip install xaytune[kuberay]`):
+a second `RaySubmissionBackend`, beside `RayJobsBackend`, that submits a
+KubeRay `RayJob` (`ray.io/v1`) through the Kubernetes API. `RayJobsRuntime`
+and `RayTrainRuntime` run on it unchanged.
+
+```text
+submit(id) → create RayJob xay-<sha256(id)[:32]>   (spec.jobId = id)
+               ├─ clusterSelector {ray.io/cluster: …}  an existing RayCluster
+               └─ rayClusterSpec  <template>            a RayCluster the RayJob owns
+info(id)   → get RayJob → Ray's job status (jobStatus; deployment failures → FAILED;
+             Suspended by Xaytune → STOPPED; any other wait → PENDING)
+stop(id)   → ephemeral: patch spec.suspend + xaytune.io/stop-requested (cluster deleted, RayJob kept)
+             existing:  nothing (KubeRay ignores suspend there; deleting would erase the status)
+             finished:  nothing
+```
+
+- **The RayJob is the record, and is never deleted.** Nothing in the
+  backend deletes a RayJob, and no configuration lets KubeRay delete one
+  (`DeleteSelf`): its status is the evidence a controller reads after a
+  restart, including how a job ended before its supervisor recorded it.
+- **Cancellation keeps the evidence.** `stop` is asynchronous and the
+  RayJob's later status says whether it stopped (the submission contract).
+  An ephemeral RayJob is suspended with a Xaytune marker; KubeRay deletes its
+  cluster and reports `Suspended`, which with the marker -- and only with it
+  -- reads as `STOPPED`, so the workload is `cancelled`, and stays so for a
+  restarted controller. A RayJob on an existing cluster cannot be suspended
+  (KubeRay ignores `suspend` with `clusterSelector`), so it is left as it is:
+  `PENDING`, "cancellation requested", until KubeRay starts it, when the
+  supervisor (or train driver) finds the durable `cancel.request` first and
+  ends `cancelled` without running the worker. Never a `STOPPED` that was not
+  observed.
+- **Configured, not assembled from the environment.** A runtime's
+  configuration names its submission: `submission: {kind: "ray-jobs",
+  address}` or `{kind: "kuberay", namespace, context, cluster, rayjob}`
+  (`address` alone stays shorthand for the first). `submission_backend()`
+  builds the one named; the runtime never learns which. `context` is
+  required -- a kubeconfig context, or `null` for the pod's own service
+  account -- and every request names `namespace`: neither the current
+  context nor a default namespace is used anywhere.
+- **Typed cluster choice.** `cluster` is `{kind: "existing", selector}`
+  (KubeRay's `clusterSelector`; `ray.io/cluster` required) or `{kind:
+  "ephemeral", template}` (a `RayClusterSpec` with a `headGroupSpec`). For an
+  ephemeral cluster `rayjob.deletion_policy` is required and is
+  `delete-cluster` (`shutdownAfterJobFinishes`, optional TTL): the cluster
+  goes, the RayJob stays. `delete-self` is refused (it deletes the record);
+  `keep-cluster` is refused (KubeRay suspends only a RayJob whose cluster is
+  shut down after it). There is no field for arbitrary RayJob spec. Fixed:
+  `K8sJobMode`, `backoffLimit: 0` (retrying is recovery, the controller's).
+- **Reserved keys.** `rayjob.labels` and `rayjob.annotations` refuse
+  Xaytune's keys (`xaytune.io/...` -- submission id and digest, the stop
+  marker -- and `xaytune.*`, the job metadata's request, environment and
+  placement digests and target), KubeRay's (`ray.io/...`), Kueue's
+  (`kueue.x-k8s.io/...`) and the `app.kubernetes.io/managed-by` label.
+- **No Kueue in this slice.** A Kueue label hands the RayJob's admission and
+  its `spec.suspend` to Kueue, which this slice's cancellation would contend
+  with; its keys are refused rather than fingerprinted. Kueue support --
+  admission, suspension and preemption, cancellation, restart, ownership --
+  is its own later slice. Xaytune creates no `ClusterQueue`, `LocalQueue`,
+  `ResourceFlavor` or `Workload`.
+- **Exactly once through the API server.** The RayJob's name is a pure
+  function of the submission id (a DNS-1035 label within KubeRay's 47
+  characters); Kubernetes refuses a second object under it. A create
+  answered `AlreadyExists` is accepted only if that RayJob records this
+  submission id (`xaytune.io/submission-id`) and the digest of this exact
+  resource (`xaytune.io/submission-digest`); anything else is an
+  `IdempotencyConflictError`, never an adoption. A retry, a lost answer, or a
+  restarted controller finds the same RayJob.
+- **Identity is checked on every read, not only at creation.** KubeRay does
+  not make a RayJob's cluster selector, template, entrypoint, environment or
+  resources immutable, so a RayJob edited after Xaytune created it could
+  otherwise be adopted as the original by a restarted controller. Every
+  `info`, `stop` and `AlreadyExists` adoption recomputes the RayJob's
+  identity (`rayjob_identity`) from the live object and compares it with the
+  bound `xaytune.io/submission-digest`; a mismatch is an
+  `IdempotencyConflictError`. The identity is one projection, applied to the
+  RayJob as created and as read: kind, name, namespace, labels, annotations
+  and the whole spec, without what legitimately changes -- `status`, server
+  metadata (uid, finalizers, resourceVersion, generation, managedFields),
+  `spec.suspend`, the stop marker, and the defaults the API server and
+  KubeRay 1.7 add (`ttlSecondsAfterFinished: 0`, `numOfHosts: 1`,
+  `priority: 0`, empty `scaleStrategy`, `metadata`, `resources`), each only
+  while it holds that default. Any other addition or change fails closed.
+- **Only the verified version is suspended.** `stop` reads and verifies the
+  RayJob, then patches it with that object's `metadata.resourceVersion` as
+  the precondition, so a write in between -- anyone's -- makes Kubernetes
+  refuse the patch (`409 Conflict`). The RayJob is then read and verified
+  again: still the bound identity (a status update, say) → suspended on the
+  new version; changed → `IdempotencyConflictError`, and the stale
+  cancellation is never applied. A RayJob that keeps changing is given up on
+  after a few attempts (`RayUnavailableError`, nothing applied).
+- **Placement is identity.** The protocol gained
+  `RaySubmissionBackend.placement_digest`: everything in the backend's
+  configuration that decides where a job runs. KubeRay's is the digest of
+  the whole `KubeRayConfig`, so a changed namespace, context, selector,
+  template, label, annotation or TTL under the same operation id is a
+  conflict (`differing == ("placement",)`) -- recorded in the job's metadata
+  and in `accepted.json`. `RayJobsBackend`'s is `None`: its address names
+  the cluster and nothing else places a job, and jobs accepted before PR-033c
+  keep their identity.
+- **Absence only when Kubernetes says so.** `info` returns `None` for a
+  `NotFound` `Status` naming this RayJob, nothing else: an unreachable API
+  server, `403`, `5xx`, or a 404 for the resource type itself (CRDs not
+  installed) raise `RayUnavailableError`. Errors name their status and
+  reason, never the server's body.
+- **What a RayJob cannot express is refused.** The RayJob has no field for
+  entrypoint memory, so the backend raises `RaySubmissionRefusedError`
+  before creating anything, and the runtime records it as it records its
+  own refusals (`rejected.json`, `UnsupportedPlanError`).
+- **Kubernetes stays below.** `kubernetes` is imported only by
+  `xaytune/ray/submission/kuberay.py`, lazily; nothing outside
+  `xaytune.ray.submission` and `xaytune.ray`'s exports imports the backend.
+- **Tests.** `FakeKubernetes` answers create, get and merge-patch as the API
+  server does (409, a `NotFound` naming the object, a plain 404 for a
+  missing type, unreachable, forbidden) and answers no delete; its operator
+  runs each RayJob's Ray job on `ProcessJobs` (real supervisors and workers)
+  and suspends as KubeRay 1.7 was observed to. Both runtimes run there
+  unchanged. Cancelling before the job runs: ephemeral → suspended, kept,
+  `cancelled`, still `cancelled` after a restart, never started; existing →
+  kept, `pending`, then, once started, `cancelled` with no training, under
+  both runtimes. The controller-level matrix yields the same history on
+  `local` and on `ray-jobs`/`ray-train` over the Jobs API or KubeRay,
+  including a host restarted after the RayJob was created. The fake stores
+  RayJobs with the server metadata and defaults a real cluster adds; a
+  RayJob edited after binding -- selector, entrypoint, environment,
+  resources, template, added fields, labels, annotations, job metadata -- is
+  refused on read, retry, stop and restart. The `kuberay` CI
+  job creates a kind cluster with the KubeRay operator (1.7.1) and runs the
+  backend against it: both cluster forms accepted, `AlreadyExists` and
+  conflicts, `NotFound`, real defaults read back as the bound identity and a
+  real edit refused, a stop that leaves an existing-cluster RayJob
+  untouched, a stop that suspends an ephemeral one (its cluster deleted, the
+  RayJob kept, `STOPPED` after reconstruction), an unreachable server -- and
+  real Ray jobs on a RayCluster the test creates: finished stays finished, a
+  failure is failed, an ephemeral cluster runs its job and goes while the
+  RayJob stays.
+
+Limitations kept explicit:
+
+- **Pre-start cancellation on an existing cluster** stays `pending` until
+  KubeRay starts the job, which then ends `cancelled` without running the
+  worker -- until KubeRay can suspend `clusterSelector` RayJobs. A job that
+  never starts (its cluster gone) stays pending, as on Ray's Jobs API.
+- **Xaytune on the cluster.** As with the Jobs API, the job's image (or
+  `runtime_env`) must provide Xaytune, and `shared_state_root` must be
+  mounted at the same path in the cluster's pods and on the controller (a
+  PVC). The CI job does not run Xaytune's supervisor on kind.
 
 ### PR-034 — RayTuneSearchProvider
 

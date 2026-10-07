@@ -75,6 +75,11 @@ eval = ["lm-eval[hf]==0.4.13"]
 # minor: both are integration surfaces, and the next minor is reviewed before
 # the range widens.
 ray = ["ray[default,train]>=2.59,<2.60"]
+# KubeRay (PR-033c): the Kubernetes client KubeRayJobsBackend creates, reads
+# and deletes RayJob resources with -- three CustomObjectsApi calls, stable
+# across the client's majors. The RayJob API itself is KubeRay's, checked in
+# CI against a pinned operator (the kuberay job).
+kuberay = ["kubernetes>=31"]
 wandb = ["wandb>=0.16"]
 mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]

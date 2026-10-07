@@ -137,8 +137,18 @@ training plan as a `TorchTrainer` worker group sized by the plan's
 Train -- with the job's driver as the one telemetry sequencer, relaying rank
 0's observations; evaluation plans run as one supervised job, so an
 experiment on `ray-train` still evaluates. Resources Ray Train would have to
-guess how to divide are refused. A KubeRay `RayJob` submission backend
-(PR-033c) composes with the same pieces.
+guess how to divide are refused.
+
+`KubeRayJobsBackend` (PR-033c, `submission: {kind: "kuberay", ...}`)
+submits either runtime's jobs as KubeRay `RayJob` resources -- on an existing
+RayCluster (`clusterSelector`) or on one the RayJob owns (`rayClusterSpec`)
+-- under a name derived from the operation id, so a retry or a restarted
+controller finds the RayJob it created and never makes another. Everything
+in its configuration is part of the job's identity (`placement_digest`). The
+RayJob is the job's record and is never deleted: stopping suspends an
+ephemeral RayJob and leaves one on an existing cluster to its supervisor's
+cancellation. Kueue is a later slice. The runtimes do not know Kubernetes is
+there.
 
 ### TrainingHubRuntime
 

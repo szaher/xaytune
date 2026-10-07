@@ -79,7 +79,7 @@ from xaytune.ray.runtime._workloads import (
     RayClusterConfig,
     RayWorkloads,
 )
-from xaytune.ray.submission import RayJobsBackend, RaySubmissionBackend
+from xaytune.ray.submission import RaySubmissionBackend, submission_backend
 from xaytune.runtimes import (
     OperationOutcome,
     RuntimeEventEnvelope,
@@ -118,9 +118,8 @@ class RayJobsRuntime:
 
     Args:
         config: The cluster, its environment and the shared state root.
-        submission: How jobs reach the cluster; a
-            :class:`~xaytune.ray.submission.RayJobsBackend` for
-            ``config.address`` unless given.
+        submission: How jobs reach the cluster; the backend
+            ``config.submission`` describes unless given.
     """
 
     descriptor = PluginDescriptor(
@@ -138,7 +137,9 @@ class RayJobsRuntime:
         self._workloads = RayWorkloads(
             backend=BACKEND,
             config=config,
-            submission=submission if submission is not None else RayJobsBackend(config.address),
+            submission=submission
+            if submission is not None
+            else submission_backend(config.submission),
             refuse=_refuse,
             launch=supervised_launch,
         )

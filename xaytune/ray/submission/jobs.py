@@ -4,7 +4,8 @@ Xaytune does not create the cluster. ``address`` names the job-submission
 (dashboard) endpoint of one that already runs -- a local ``ray start --head``,
 a cluster on VMs, or a RayCluster KubeRay manages -- and nothing here knows
 which. Submitting a ``RayJob`` custom resource instead is a different
-:class:`~xaytune.ray.submission.protocol.RaySubmissionBackend` (PR-033c).
+:class:`~xaytune.ray.submission.protocol.RaySubmissionBackend`,
+:class:`~xaytune.ray.submission.kuberay.KubeRayJobsBackend`.
 
 This is the only module that imports ``ray``, and it does so lazily:
 ``xaytune.ray`` imports without Ray installed, and only a backend actually
@@ -15,14 +16,29 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
+from xaytune.core.immutable import FrozenDomainModel
 from xaytune.ray.submission.protocol import RayJob, RayUnavailableError
 
-__all__ = ["REDIRECTING_VARIABLES", "RayJobsBackend"]
+__all__ = ["REDIRECTING_VARIABLES", "RayJobsBackend", "RayJobsBackendConfig"]
 
 REDIRECTING_VARIABLES = ("RAY_API_SERVER_ADDRESS", "RAY_ADDRESS")
 """Ray's SDK prefers these to the address it is given, in this order."""
+
+
+class RayJobsBackendConfig(FrozenDomainModel):
+    """Submission through the Ray Jobs API of the cluster at ``address``."""
+
+    kind: Literal["ray-jobs"] = "ray-jobs"
+    address: str
+    """The job-submission address of an existing cluster, such as ``http://127.0.0.1:8265``."""
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.address.startswith(("http://", "https://")):
+            raise ValueError(
+                f"address must be an http(s) job-submission address, not {self.address!r}"
+            )
 
 
 class RayJobsBackend:
@@ -39,6 +55,9 @@ class RayJobsBackend:
     Direct authentication and TLS settings for the Jobs API are not
     supported yet: the address carries no credentials.
     """
+
+    placement_digest: str | None = None
+    """``None``: the address says which cluster, and nothing else here places a job."""
 
     def __init__(self, address: str) -> None:
         self.address = address

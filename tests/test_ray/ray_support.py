@@ -54,6 +54,8 @@ class _Job:
 class ProcessJobs:
     """A fake Ray job manager that runs entrypoints as real processes."""
 
+    placement_digest: str | None = None
+
     def __init__(self, *, hold: bool = False) -> None:
         """*hold* keeps every new job pending until :meth:`release`."""
         self.jobs: dict[str, _Job] = {}

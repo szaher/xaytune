@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, model_validator
 
 from xaytune.core.clock import utc_now
 from xaytune.core.errors import IdempotencyConflictError
@@ -34,7 +34,13 @@ from xaytune.core.ids import OperationId
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.refs import RuntimeRef
 from xaytune.ray.runtime.supervisor import CLAIM
-from xaytune.ray.submission import RayJob, RaySubmissionBackend, RayUnavailableError
+from xaytune.ray.submission import (
+    RayJob,
+    RaySubmissionBackend,
+    RaySubmissionRefusedError,
+    RayUnavailableError,
+    SubmissionConfig,
+)
 from xaytune.runtimes import (
     OperationOutcome,
     RuntimeEventEnvelope,
@@ -72,19 +78,24 @@ _DIGEST = "xaytune.request_digest"
 _ENVIRONMENT = "xaytune.environment_digest"
 _TARGET_KIND = "xaytune.target_kind"
 _TARGET_ID = "xaytune.target_id"
+_PLACEMENT = "xaytune.placement_digest"
 
 
 class RayClusterConfig(FrozenDomainModel):
-    """Which cluster, its environment, and where state lives: what every Ray runtime needs.
+    """How jobs reach the cluster, their environment, and where state lives.
 
     All three are required; none is read from the environment or defaulted,
     so the record says which cluster and which environment ran a workload.
     It is persisted with the experiment: credentials are never configuration
-    -- the address carries none, and neither may ``runtime_env``.
+    -- no submission configuration carries any, and neither may
+    ``runtime_env``.
+
+    ``address`` alone is shorthand for the Ray Jobs API of that cluster:
+    ``{"address": a}`` is ``{"submission": {"kind": "ray-jobs", "address": a}}``.
     """
 
-    address: str
-    """The job-submission address of an existing cluster, such as ``http://127.0.0.1:8265``."""
+    submission: SubmissionConfig
+    """How jobs reach the cluster: ``ray-jobs`` (an address) or ``kuberay`` (RayJob resources)."""
     runtime_env: FrozenDict
     """Ray's ``runtime_env`` for every job, as Ray defines it; ``{}`` runs in the cluster's own.
 
@@ -94,18 +105,21 @@ class RayClusterConfig(FrozenDomainModel):
     shared_state_root: str
     """v1: an absolute directory mounted at this same path on the controller and every node."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _address_is_shorthand(cls, data: Any) -> Any:
+        if isinstance(data, Mapping) and "address" in data:
+            if "submission" in data:
+                raise ValueError("give address or submission, not both")
+            data = dict(data)
+            data["submission"] = {"kind": "ray-jobs", "address": data.pop("address")}
+        return data
+
     def model_post_init(self, __context: Any) -> None:
-        reasons = []
-        if not self.address.startswith(("http://", "https://")):
-            reasons.append(
-                f"address must be an http(s) job-submission address, not {self.address!r}"
-            )
         if not Path(self.shared_state_root).is_absolute():
-            reasons.append(
+            raise ValueError(
                 f"shared_state_root must be an absolute path, not {self.shared_state_root!r}"
             )
-        if reasons:
-            raise ValueError("; ".join(reasons))
 
 
 @dataclass(frozen=True)
@@ -143,6 +157,7 @@ class RayWorkloads:
     ) -> None:
         self._backend = backend
         self._jobs = submission
+        self._placement = submission.placement_digest
         self._runtime_env = config.runtime_env
         self._refuse = refuse
         self._launch = launch
@@ -162,14 +177,16 @@ class RayWorkloads:
         The plan is written to the workload directory before Ray is asked, so
         a job never exists without the plan its supervisor reads. A job Ray
         already holds under this id is returned if it was submitted for the
-        same plan in the same ``runtime_env``, and refused as a conflict
+        same plan in the same ``runtime_env``, placed the same way (the
+        backend's ``placement_digest``), and refused as a conflict
         otherwise -- including when the submission itself failed but a retry
         finds Ray accepted it. Once Ray has the job, ``accepted.json`` records
         it, so a cluster that later forgets the job cannot make it look new.
 
         Raises:
-            UnsupportedPlanError: The plan cannot run here; recorded, so a
-                lookup later learns nothing was started.
+            UnsupportedPlanError: The plan cannot run here -- or the submission
+                backend cannot express it; recorded, so a lookup later learns
+                nothing was started.
             IdempotencyConflictError: This id names a different request.
             RayUnavailableError: Ray could not be asked; nothing is concluded.
         """
@@ -196,8 +213,8 @@ class RayWorkloads:
 
         existing = await self._info(external_id)
         if existing is not None:
-            _require_same(external_id, existing.metadata, digest, environment)
-            _record_accepted(paths, digest, environment)
+            _require_same(external_id, existing.metadata, digest, environment, self._placement)
+            _record_accepted(paths, digest, environment, self._placement)
             return self._ref(external_id)
 
         recorded_acceptance = read_json(paths.directory / ACCEPTED)
@@ -207,9 +224,15 @@ class RayWorkloads:
                 {
                     _DIGEST: str(recorded_acceptance.get("request_digest")),
                     _ENVIRONMENT: str(recorded_acceptance.get("environment_digest")),
+                    **(
+                        {_PLACEMENT: str(recorded_acceptance["placement_digest"])}
+                        if "placement_digest" in recorded_acceptance
+                        else {}
+                    ),
                 },
                 digest,
                 environment,
+                self._placement,
             )
         if self._forgotten(operation_id) is not None:
             # Ray forgot a job it had: returned, never submitted a second time.
@@ -238,10 +261,18 @@ class RayWorkloads:
                     _ENVIRONMENT: environment,
                     _TARGET_KIND: plan.target.kind,
                     _TARGET_ID: plan.target.id,
+                    **({_PLACEMENT: self._placement} if self._placement is not None else {}),
                 },
                 resources=dict(launch.resources),
                 runtime_env=self._runtime_env,
             )
+        except RaySubmissionRefusedError as refused:
+            # Nothing was sent: refused like a plan this runtime cannot run.
+            write_atomic(
+                paths.directory / REJECTED,
+                {"request_digest": digest, "detail": str(refused), "at": utc_now().isoformat()},
+            )
+            raise UnsupportedPlanError(str(refused)) from None
         except RayUnavailableError:
             # Ray may have accepted it and the answer been lost -- or refused
             # a duplicate id raced in by another submitter. Its job store is
@@ -249,8 +280,8 @@ class RayWorkloads:
             accepted = await self._info(external_id)
             if accepted is None:
                 raise
-            _require_same(external_id, accepted.metadata, digest, environment)
-        _record_accepted(paths, digest, environment)
+            _require_same(external_id, accepted.metadata, digest, environment, self._placement)
+        _record_accepted(paths, digest, environment, self._placement)
         return self._ref(external_id)
 
     # -- asking what happened ---------------------------------------------
@@ -493,14 +524,19 @@ class RayWorkloads:
 
 
 def _require_same(
-    external_id: str, metadata: Mapping[str, str], digest: str, environment: str
+    external_id: str,
+    metadata: Mapping[str, str],
+    digest: str,
+    environment: str,
+    placement: str | None,
 ) -> None:
-    """The job under this id was submitted for this plan, in this ``runtime_env``."""
+    """The job under this id was submitted for this plan, in this ``runtime_env``, placed so."""
     differing = tuple(
         field
         for field, recorded, expected in (
             ("request_digest", metadata.get(_DIGEST), digest),
             ("runtime_env", metadata.get(_ENVIRONMENT), environment),
+            ("placement", metadata.get(_PLACEMENT), placement),
         )
         if recorded != expected
     )
@@ -508,7 +544,9 @@ def _require_same(
         raise IdempotencyConflictError(external_id, differing)
 
 
-def _record_accepted(paths: WorkloadPaths, digest: str, environment: str) -> None:
+def _record_accepted(
+    paths: WorkloadPaths, digest: str, environment: str, placement: str | None
+) -> None:
     """Durable evidence that Ray accepted the job, outliving Ray's own memory of it."""
     if read_json(paths.directory / ACCEPTED) is None:
         write_atomic(
@@ -516,6 +554,7 @@ def _record_accepted(paths: WorkloadPaths, digest: str, environment: str) -> Non
             {
                 "request_digest": digest,
                 "environment_digest": environment,
+                **({"placement_digest": placement} if placement is not None else {}),
                 "at": utc_now().isoformat(),
             },
         )

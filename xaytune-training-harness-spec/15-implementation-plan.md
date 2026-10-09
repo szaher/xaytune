@@ -2236,8 +2236,31 @@ Acceptance:
   `local`, `ray-jobs` or `ray-train`
   (`tests/test_experiment/test_search_host.py`).
 
+**2. The Ray Tune adapter** (`xaytune.ray.search`, extra `ray-tune`):
+
+- `RayTuneSearchProvider` (`kind="ray-tune"`) is a `SequentialSearchProvider`
+  over Tune's `OptunaSearch`. It uses a seeded `TPESampler` (`tpe`, the
+  default) or `RandomSampler` (`random`).
+- `tune_search_space` converts the typed space to Tune's domains. Integer
+  ranges are inclusive in Xaytune and exclusive at the top in Tune. Tune
+  then converts the domains to Optuna distributions.
+- Tune is told `measured` as COMPLETE with the value. Everything else, and
+  a repeat of the base candidate, is FAIL, never given a value.
+- Engine: `{"ray": <exact>, "optuna": <exact>}`, read from the distributions'
+  metadata at bind. Another release, even a patch inside the pinned
+  minors, is refused.
+- A `choice` with values that Python equality merges (`1`/`1.0`/`True`,
+  `0`/`False`) is refused, because Optuna's categorical cannot tell them
+  apart. Distinct values are supported.
+- Only the searcher interface is used: no `Tuner`, no `ray.init()`, no Ray
+  runtime, backend or cluster. Ray Tune and Optuna are imported in this
+  module alone, lazily, and a test pins that.
+- CI: the `ray` job installs the extra and runs the Tune tests under
+  `XAYTUNE_REQUIRE_RAY_TUNE=1`.
+
 Not here: parallel suggestions, searching from more than one root, warm
-starts from the root's own result, multi-objective search.
+starts from the root's own result, multi-objective search, other Tune
+searchers (each needs its own library pin and a determinism check).
 
 ### PR-035 — TorchFTResilienceProvider
 

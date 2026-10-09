@@ -800,6 +800,39 @@ spec.planner = PlannerSpec(kind="search", config={"provider": {
   The planner's spec fingerprint covers the provider, its space, algorithm
   and seed.
 
+**Ray Tune** is the first search provider (`xaytune.ray.search`, installed
+with `pip install xaytune[ray-tune]`):
+
+```python
+from xaytune.ray.search import RayTuneSearchProvider
+
+planners = {**PLANNERS, "search": search_planner_factory(
+    {"ray-tune": RayTuneSearchProvider.from_spec}
+)}
+spec.planner = PlannerSpec(kind="search", config={"provider": {
+    "kind": "ray-tune",
+    "config": {"algorithm": "tpe", "seed": 7, "search_space": {...}},
+}})
+```
+
+- It uses Tune's `OptunaSearch` with a seeded Optuna sampler: `tpe` (the
+  default) or `random`. The search space is converted to Tune's domains,
+  and the mode follows the objective's direction.
+- Only Tune's searcher interface is used. There is no `Tuner`, no trial
+  runner and no `ray.init()`, and no Ray cluster is touched, so the search
+  is the same whether candidates run on `local`, `ray-jobs` or `ray-train`.
+- A `measured` trial reaches Tune as a completed trial with its value.
+  Every other outcome, and a repeat of the base candidate, reaches Tune as a
+  failed trial, with no value.
+- The engine is the exact installed `ray` and `optuna` releases. Binding
+  reads them from the distributions' metadata, without importing either,
+  and records them. A recorded search is refused on any other release,
+  even a patch release inside the pinned minors.
+- A `choice` whose values Xaytune keeps distinct but Python equality merges
+  is refused: `1`, `1.0` and `True`, or `0` and `False`. Optuna keeps
+  categorical choices by Python equality and could not tell them apart.
+  Distinct values such as `["bf16", "fp16"]` are searched.
+
 ## Local checkpoint bundles
 
 `xaytune.checkpoints` provides a codec, local store and manager. The initial

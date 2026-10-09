@@ -799,8 +799,9 @@ def test_ray_is_imported_by_the_ray_runtime_alone() -> None:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         )
     )
-    # The Jobs client, and the Ray Train driver Ray runs on the cluster -- each lazily.
-    assert importers == ["ray/runtime/train_driver.py", "ray/submission/jobs.py"]
+    # The Jobs client, the Ray Train driver Ray runs on the cluster, and Ray Tune's
+    # searcher (PR-034) -- each lazily.
+    assert importers == ["ray/runtime/train_driver.py", "ray/search.py", "ray/submission/jobs.py"]
 
 
 def test_the_local_runtime_still_refuses_ray_plans(tmp_path: Path) -> None:

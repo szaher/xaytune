@@ -30,8 +30,13 @@ from xaytune.core.domain.actions.contract import ActionDescriptor, ActionSpec, M
 from xaytune.core.domain.agent_invocation import InMemoryAgentInvocationJournal
 from xaytune.core.domain.budget import BudgetDimension, BudgetStatus, DimensionStatus
 from xaytune.core.domain.decision import DecisionOutcome
-from xaytune.core.domain.planning import ActionProposal, PlanningContext
+from xaytune.core.domain.planning import (
+    ActionProposal,
+    PlanningContext,
+    planning_context_identity_v1,
+)
 from xaytune.core.domain.specs import PlannerSpec
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 from xaytune.planning import (
@@ -321,7 +326,11 @@ def test_provenance_names_the_bound_planner_and_the_context_it_saw() -> None:
     planner, _ = bind([answer(str(parent.node_id))])
     (proposal,) = propose(planner, ctx)
     provenance = proposal.provenance
-    assert provenance.context_fingerprint == ctx.input_fingerprint()
+    # The context as the model is shown it -- v1 -- not the context's current identity.
+    assert (provenance.context_identity_version, provenance.context_fingerprint) == (
+        1,
+        fingerprint(planning_context_identity_v1(ctx)),
+    )
     assert provenance.planner_name == "llm"
     assert provenance.planner_provider == "xaytune"
     assert provenance.planner_spec_kind == "llm"

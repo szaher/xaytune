@@ -715,6 +715,91 @@ Every model call the planner makes is recorded in the experiment's state
 - An action proposal names the call it came from (`agent_invocation_id`),
   and the host checks the record agrees before reporting it.
 
+**Search planners** (`xaytune.search`) let a search algorithm propose the
+next candidate. The search proposes; Xaytune owns the experiment, candidate
+identity, lineage, execution, decisions and durability. Like the LLM planner,
+a search planner is never a default: register it with the providers you have.
+
+```python
+from xaytune.planning import PLANNERS
+from xaytune.search import search_planner_factory
+
+host = EmbeddedControllerHost(state, planners={
+    **PLANNERS, "search": search_planner_factory({"my-search": MySearch.from_spec}),
+})
+spec.planner = PlannerSpec(kind="search", config={"provider": {
+    "kind": "my-search",
+    "config": {
+        "seed": 7,
+        "search_space": {"parameters": [
+            {"name": "lr", "type": "float", "path": "training.optimization.learning_rate",
+             "low": 1e-5, "high": 1e-3, "log": True},
+            {"name": "rank", "type": "choice", "path": "training.adapter.rank",
+             "values": [8, 16, 32]},
+        ]},
+    },
+}})
+```
+
+- **The search space** is typed: `float` and `int` ranges (optionally
+  log-scale) and `choice`s of JSON scalars. Each parameter sets one field of
+  the candidate, by its dotted path; the field must exist in the base
+  candidate. `metadata` and `training.api_version` are refused because they
+  are not identity: every value would be the same candidate.
+- **What is searched.** The experiment's root candidate is the base. Every
+  proposal is the base with the parameters' fields set, validated as a whole
+  `CandidateSpec`, branched from the root. It goes through PR-025 branching
+  like any planner's proposal.
+- **Observations** come from the record. For each trial, the planner reads
+  the outcome from its status and its latest decision:
+  - `measured`: exactly one unsliced measurement of the objective's primary
+    metric among the results the decision used. This is the only outcome
+    with a value.
+  - `unmeasured`: completed without such a measurement. The value is never 0.
+  - `rejected`, `failed` and `cancelled` are reported as they are.
+
+  The objective's direction is the one the search optimizes. Telling a
+  provider the same observation twice changes nothing; telling it a
+  different one for the same candidate is refused.
+- **Restarts make no difference.** The provider keeps nothing durable of its
+  own. For every suggestion it reseeds its algorithm and replays the record
+  into it. Restarting therefore gives the same next candidate, whether the
+  host died before a suggestion, after one it never branched (that candidate
+  is suggested again, and branching it again yields the same node), or
+  after branching. A candidate the experiment already has is never proposed
+  again. A record the algorithm does not reproduce is refused, for example
+  a hand-made child or another seed.
+- **Every trial is proven, not matched.** A candidate that equals the
+  search's suggestion is accepted as its trial only if the node's durable
+  branch origin (PR-025) shows that this search proposed it:
+  - this planner, as bound;
+  - this provider, as bound, its engine included;
+  - this search space;
+  - the same suggestion index and parameter values;
+  - the same history before it.
+
+  A candidate made by hand or by another planner is refused, even when it
+  equals the next suggestion. The planning context carries each node's
+  branch origin, and its identity is now version 2. The LLM planner, which
+  never shows the model branch origins, still identifies its rounds by
+  version 1, so a recorded model call is replayed, not repeated.
+- **The engine is bound.** A provider whose algorithm comes from a library
+  records that library's exact installed releases in its bound spec
+  (`config.engine`), and every proposal names them. A recorded search is
+  refused on any other release, even a patch release that would reproduce
+  every recorded suggestion: the next suggestion, which a restart must
+  reproduce, could still differ.
+- **One at a time.** A search proposes one candidate, and waits while the
+  trial is in flight. Asking for more is refused until parallel admission is
+  designed.
+- Each proposal's `mutation["search"]` names:
+  - the provider, its engine, and the fingerprint of its bound spec;
+  - the search-space, search-context and observation-history fingerprints;
+  - the suggestion index and the parameter values.
+
+  The planner's spec fingerprint covers the provider, its space, algorithm
+  and seed.
+
 ## Local checkpoint bundles
 
 `xaytune.checkpoints` provides a codec, local store and manager. The initial

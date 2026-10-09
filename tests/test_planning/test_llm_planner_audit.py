@@ -95,7 +95,7 @@ def test_the_record_answers_who_asked_what_of_which_model_and_what_came_back() -
     intent = only(journal).intent
     assert intent.experiment_id == ctx.experiment_id
     assert (intent.planner_kind, intent.planner_version) == ("llm", "1.0.0")
-    assert intent.context_fingerprint == ctx.input_fingerprint()
+    _recorded_as_before_pr_034(only(journal), ctx)
     assert intent.prompt_version == "xaytune.llm-planner/v1"
     assert intent.prompt_fingerprint == planner.config.prompt_fingerprint
     assert intent.request_fingerprint == request.fingerprint(MODEL)
@@ -319,3 +319,97 @@ def test_a_derivation_bug_after_the_answer_never_asks_the_model_again(
     assert only(journal).status is S.COMPLETED
     require_derived_from(made, only(journal))
     assert len(model.requests) == 1, "the model was asked once, ever"
+
+
+# ---- PR-034: the planning context's identity moved to v2; the model's did not -----------------
+
+
+def _with_branch_origin(ctx: Any) -> Any:
+    """*ctx* after PR-034: a node now carries a branch origin the model is never shown."""
+    from xaytune.core.domain.planning import CandidateBranchOrigin, ProposalProvenance
+
+    origin = CandidateBranchOrigin(
+        proposal_identity_version=1,
+        proposal_fingerprint="sha256:a-branched-proposal",
+        provenance=ProposalProvenance(
+            planner_provider="xaytune",
+            planner_name="search",
+            planner_version="1.0.0",
+            planner_api_version="xaytune.plugins/v1alpha1",
+            planner_spec_kind="search",
+            planner_spec_version="1.0.0",
+            planner_spec_identity_version=1,
+            planner_spec_fingerprint="sha256:search-spec",
+            context_identity_version=2,
+            context_fingerprint="sha256:earlier",
+        ),
+        mutation=FrozenDict({"search": {"suggestion": 0}}),
+    )
+    (first, *rest) = ctx.nodes
+    return ctx.model_copy(
+        update={"nodes": (first.model_copy(update={"branch_origin": origin}), *rest)}
+    )
+
+
+def _recorded_as_before_pr_034(invocation: Any, ctx: Any) -> None:
+    """What the planner recorded before PR-034: context identity v1, and its fingerprint."""
+    from xaytune.core.domain.planning import planning_context_identity_v1
+    from xaytune.core.fingerprint import fingerprint
+
+    assert invocation.intent.context_identity_version == 1
+    assert invocation.intent.context_fingerprint == fingerprint(planning_context_identity_v1(ctx))
+
+
+def test_the_model_is_shown_the_same_request_whatever_the_model_is_not_shown() -> None:
+    parent = node()
+    before = context(parent)
+    after = _with_branch_origin(before)
+    assert after.input_fingerprint() != before.input_fingerprint(), "the context identity moved"
+    planner, _ = planner_for(ScriptedAgentModel([], model=MODEL))
+    assert planner.request(after) == planner.request(before)
+    assert planner.request(after).fingerprint(MODEL) == planner.request(before).fingerprint(MODEL)
+
+
+def test_an_answered_v1_round_is_finished_after_pr_034_without_asking_again() -> None:
+    parent = node()
+    before = context(parent)
+    model = ScriptedAgentModel([answer(str(parent.node_id), evidence=refs(parent))], model=MODEL)
+    planner, journal = planner_for(model)
+
+    def crash(*_: Any) -> Any:
+        raise SystemExit("the process stops after the answer is recorded")
+
+    journal.completed = crash  # type: ignore[method-assign]
+    with pytest.raises(SystemExit):
+        propose(planner, before)
+    recorded = only(journal)
+    assert recorded.status is S.ANSWERED
+    _recorded_as_before_pr_034(recorded, before)
+    del journal.completed
+
+    # Upgraded: the same experiment's context now carries a branch origin.
+    upgraded = ScriptedAgentModel([], model=MODEL)
+    restarted, _ = planner_for(upgraded, journal)
+    (made,) = propose(restarted, _with_branch_origin(before))
+    assert upgraded.requests == () and len(model.requests) == 1, "the model was asked once, ever"
+    assert len(journal.invocations) == 1 and only(journal).status is S.COMPLETED
+    require_derived_from(made, only(journal))
+    assert made.provenance.context_identity_version == 1
+    assert made.provenance.context_fingerprint == recorded.intent.context_fingerprint
+
+
+def test_a_completed_v1_round_replays_its_exact_proposal_after_pr_034() -> None:
+    parent = node()
+    before = context(parent)
+    model = ScriptedAgentModel([answer(str(parent.node_id), evidence=refs(parent))], model=MODEL)
+    planner, journal = planner_for(model)
+    (first,) = propose(planner, before)
+    _recorded_as_before_pr_034(only(journal), before)
+
+    upgraded = ScriptedAgentModel([], model=MODEL)
+    restarted, _ = planner_for(upgraded, journal)
+    (again,) = propose(restarted, _with_branch_origin(before))
+    assert again == first
+    assert again.proposal_fingerprint() == only(journal).proposal_fingerprint
+    assert upgraded.requests == () and len(journal.invocations) == 1
+    require_derived_from(again, only(journal))

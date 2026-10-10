@@ -1,7 +1,13 @@
 # Agent Harness Optimization
 
-> **Planned; not yet implemented.** This chapter proposes another experiment
-> type in the existing control plane. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
+> **H02 (domain contract) in review; execution not implemented.** H02 adds
+> `AgentHarnessSpec`, `HarnessFingerprint` v1 and the `ExperimentCandidate`
+> envelope as a pure domain contract. It performs no inference, tool
+> execution or evaluation, and has no submission path. Its concrete
+> decisions are ADR-018 §"H02 concrete decisions", still `Proposed`.
+>
+> This chapter proposes another experiment type in the existing control
+> plane. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
 > remains `Proposed`. Names and schemas below are conceptual contracts, not
 > public APIs or persistence schemas. The H track in the
 > [implementation plan](15-implementation-plan.md#harness-optimization-track-planned)

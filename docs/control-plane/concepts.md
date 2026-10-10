@@ -622,6 +622,16 @@ it. No built-in runtime or compiler declares one yet. Through the daemon,
 such a refusal fails the request: it is not retried. An experiment without
 a resilience spec runs exactly as before.
 
+`TorchFTResilienceProvider` (`kind="torchft"`) is the first provider. It
+binds exactly `torchft` 0.2.0, the stable release installed by
+`pip install 'xaytune[torchft]'` on Linux x86_64. It reads the version from
+package metadata and never imports TorchFT. It accepts only a replicated
+group of at least two replica groups, with atomic checkpoints at
+optimizer-step boundaries. In this release no runtime hosts its request, so
+the provider can be configured and its request built, but an experiment that
+uses it is refused at submission. Hosting it under Ray Train comes with
+distributed failure testing.
+
 ## Planning
 
 When every candidate of an open experiment is decided on its merits

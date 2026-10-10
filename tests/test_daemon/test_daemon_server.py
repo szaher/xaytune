@@ -23,6 +23,7 @@ from xaytune.checkpoints import CheckpointManager, LocalCheckpointStore, Seriali
 from xaytune.compilation.native import NativeCompiler
 from xaytune.core.domain.policy import PolicyVerdict
 from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.domain.resilience import ResiliencePolicy, ResilienceSpec
 from xaytune.core.ids import ExperimentId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.state.status import ExperimentStatus, RunAttemptStatus, RunStatus
@@ -478,6 +479,86 @@ def test_the_daemon_delegates_recovery_only_to_providers_it_was_given(tmp_path: 
         assert experiment.resilience is not None and experiment.resilience.version == "1.0.0"
         assert runtime.training_plans
         assert all(RESILIENCE in plan.runtime_options for plan in runtime.training_plans)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    ("installed", "refusal"),
+    [
+        ({"torchft": "0.2.0"}, "UnsupportedResilienceError"),
+        ({}, "ResilienceProviderConfigurationError"),
+    ],
+)
+def test_a_resilience_request_nothing_can_carry_fails_once_and_is_never_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed: dict[str, str],
+    refusal: str,
+) -> None:
+    """PR-035 review: a definitive resilience refusal is FAILED, not left PENDING to retry.
+
+    TorchFT against a runtime that hosts no resilience request (every built-in
+    one) is refused before admission; so is TorchFT where it is not installed.
+    Either is a judgement on the request: it reaches FAILED, nothing is
+    recorded, and later sweeps never submit it again.
+    """
+    from tests.test_experiment.adaptive_fixtures import LoRACompiler
+    from xaytune.resilience import torchft as torchft_module
+
+    monkeypatch.setattr(torchft_module, "_installed", installed.get)
+    binds: list[Any] = []
+
+    def provider(spec: Any) -> Any:
+        binds.append(spec)
+        return torchft_module.torchft_resilience_provider(spec)
+
+    manager = CheckpointManager(SerializedStateCodec(), LocalCheckpointStore(tmp_path / "bundles"))
+    runtime = AdaptiveRuntime(manager, tmp_path, oom_rank=None)  # hosts no resilience request
+    config = DaemonConfig(
+        compilers={"native": LoRACompiler},
+        runtimes={"local": lambda config: runtime},
+        evaluators=EVALUATORS,
+        planners=PLANNERS,
+        decision_engine=AdaptiveThresholdDecisionEngine(),
+        policy=RulePolicyEngine(default=PolicyVerdict.ALLOW),
+        checkpoint_manager=manager,
+        recovery_request_for_incident=None,
+        resilience_providers={"torchft": provider},
+    )
+    torchft = ResilienceSpec(
+        kind="torchft",
+        config=FrozenDict(
+            {
+                "lighthouse_address": "http://lighthouse.internal:29510",
+                "min_replica_size": 2,
+                "quorum_timeout_seconds": 120.0,
+                "timeout_seconds": 60.0,
+                "use_async_quorum": True,
+            }
+        ),
+        policy=ResiliencePolicy(delegate=("per-step-worker-recovery",)),
+    )
+    spec = adaptive_spec(tmp_path).model_copy(update={"resilience": torchft})
+    client = DaemonClient(tmp_path / "state.db")
+
+    async def scenario() -> None:
+        request = client.submit(spec)
+        daemon = LocalDaemonControllerServer(tmp_path / "state.db", config, poll_interval=0.05)
+        async with _serving(daemon):
+            await _until(lambda: _state(client, request) is ControllerRequestState.FAILED)
+            failed = client.request(request.id)
+            tried = len(binds)
+            await asyncio.sleep(0.5)  # ten more sweeps
+            assert client.request(request.id) == failed, "a FAILED request is never re-processed"
+            assert len(binds) == tried, "nor its submission attempted again"
+        assert failed.error is not None and failed.error["type"] == refusal
+        counts = _counts(client)
+        assert (counts["experiments"], counts["runs"], counts["runtime_operations"]) == (0, 0, 0)
+        assert runtime.submitted == {}
 
     try:
         asyncio.run(scenario())

@@ -80,6 +80,13 @@ ray = ["ray[default,train]>=2.59,<2.60"]
 # to one minor: another release may suggest differently, and the replay
 # refuses a record it does not reproduce.
 ray-tune = ["ray[tune]>=2.59,<2.60", "optuna>=5.0,<5.1"]
+# TorchFT (PR-035): TorchFTResilienceProvider binds this exact stable release,
+# read from its metadata and never imported -- the request it builds is
+# TorchFT's configuration, and another release may mean something else by it.
+# Kept equal to SUPPORTED_TORCHFT in xaytune/resilience/torchft.py. TorchFT
+# publishes wheels for Linux x86_64 only; elsewhere the extra installs nothing
+# and the provider refuses to bind. Nightlies are not supported.
+torchft = ["torchft==0.2.0; sys_platform == 'linux' and platform_machine == 'x86_64'"]
 # KubeRay (PR-033c): the Kubernetes client KubeRayJobsBackend creates, reads
 # and deletes RayJob resources with -- three CustomObjectsApi calls, stable
 # across the client's majors. The RayJob API itself is KubeRay's, checked in

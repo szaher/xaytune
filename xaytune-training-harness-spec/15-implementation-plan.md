@@ -2264,6 +2264,121 @@ searchers (each needs its own library pin and a determinism check).
 
 ### PR-035 — TorchFTResilienceProvider
 
+A resilience-provider integration, not a runtime. TorchFT never owns
+experiment state, retries, lineage, budgets or recovery policy. Two commits.
+
+**1. The generic resilience contract** (`xaytune.core.domain.resilience`,
+`xaytune.resilience.provider`):
+
+```text
+TrainingExecutionSpec
+        ↓  resolve_training_attempt                     attempt lineage (Xaytune)
+ResolvedExecutionPlan
+        ↓  augment_execution_plan(provider, plan, ...)  adds ONE request, checked
+ResolvedExecutionPlan + runtime_options["resilience"]
+        ↓  RuntimeBackend.submit_or_get                 carries it, never interprets it
+```
+
+- **What is delegated**: `ResiliencePolicy(delegate=(...))`, canonical
+  (sorted, unique, non-empty). v1 has one responsibility,
+  `per-step-worker-recovery`: a worker of the attempt's group fails, and
+  the survivors keep training. Restarting or resuming the attempt and
+  every other recovery decision are not delegable.
+- **Which provider**: `ResilienceSpec(kind, version, engine,
+  implementation, config, policy)` on `ExperimentSpec.resilience` and
+  `Experiment.resilience`. Like a `PlannerSpec`, it is bound at
+  submission. Three things are recorded, and a caller cannot supply any of
+  them:
+  - the provider's `plugin_version`;
+  - the exact `engine` releases;
+  - the `implementation`: the descriptor's publisher, name, plugin API and
+    version, plus the `request_schema` it emits. `bind_resilience_provider`
+    binds this from the provider itself, so no factory can misstate it.
+  `kind` is only a registry key, so another implementation registered under
+  the same kind, version and engine still binds to a different spec. A
+  restarted host binds the recorded spec again and compares it whole. Any
+  difference raises `ImplementationMismatchError` before a plan is built,
+  for a recorded attempt or a new one. No
+  provider is built in: `resilience_providers=` on the host and
+  `DaemonConfig.resilience_providers` both default to none.
+- **The request**: `ResilienceRequest` under
+  `runtime_options["resilience"]`, holding `provider`,
+  `provider_version`, `engine`, `spec_fingerprint`, `delegate`,
+  `request_schema` and the provider's own `parameters`. It is part of
+  `request_digest` and of the training execution fingerprint, because
+  only restore and interventions are excluded from that.
+- **`augment_execution_plan` holds the provider to the contract**:
+  - It augments twice, and the two results must be equal.
+  - The result must be the input plus exactly that one key. A changed
+    spec, config, target or any other option is a
+    `ResilienceContractError`.
+  - The request must be canonical for the bound spec, and the plan must
+    survive a JSON round trip.
+- **Fail closed, before submission** (`UnsupportedResilienceError`). The
+  request is refused for:
+  - an evaluation plan (evaluations are never augmented);
+  - a plan that already carries a request;
+  - a runtime that recovers workers per step itself
+    (`resilience.per_step=True`), because one responsibility has one owner;
+  - a runtime that does not declare hosting the provider's
+    `request_schema` in `extensions["resilience_requests"]`;
+  - a compiler that does not declare its worker honours that schema;
+  - whatever the provider itself refuses (topology, checkpoints, engine).
+  No built-in runtime or compiler declares a schema, so with these
+  defaults a resilience spec is refused. Under the daemon, this refusal and
+  a provider refusing its spec (`ResilienceProviderConfigurationError`, for
+  example a missing engine) are both definitive, so the request is `FAILED`
+  and never retried. A provider breaking its contract
+  (`ResilienceContractError`) is a plugin defect, and the request stays
+  `PENDING`.
+- **Unchanged without it**: an experiment with no resilience spec builds
+  exactly the plans it did, and `ExperimentSpec.submission_payload()`
+  omits the absent field, so daemon payload digests are unchanged.
+  Evaluation plans are never touched.
+
+**2. `TorchFTResilienceProvider`** (`xaytune.resilience.torchft`,
+`kind="torchft"`):
+
+- **Engine**: `{"torchft": "0.2.0"}`, read from distribution metadata at
+  bind. `torchft` is never imported. Any other release is refused, and so
+  is `torchft-nightly`. The `torchft` extra pins
+  `torchft==0.2.0; sys_platform == 'linux' and platform_machine == 'x86_64'`,
+  because TorchFT publishes wheels for that platform only. On any other
+  platform the provider refuses to bind, as not installed.
+- **Config**: every TorchFT setting is stated, none defaulted:
+  `lighthouse_address`, `min_replica_size`, `quorum_timeout_seconds`,
+  `timeout_seconds`, `use_async_quorum`. The one exception is
+  `replica_group_size`, which defaults to 1. The lighthouse runs outside
+  Xaytune. Its address is an http(s) host and port, never with
+  credentials.
+- **Request** (`xaytune.torchft/v1alpha1`): those settings plus
+  `replica_groups`. `MANAGER_PARAMETERS` names the `torchft.Manager`
+  argument each setting is in 0.2.0. CI checks those names against the
+  installed signature.
+- **Refused** (`UnsupportedResilienceError`):
+  - fewer than two replica groups, fewer than `min_replica_size`, or a
+    worker count the groups do not divide;
+  - mid-accumulation or non-atomic checkpoints, or checkpoints on a runtime
+    that does not commit atomically;
+  - a checkpoint restore, intervention directives or managed numerical
+    recovery. Each addresses one managed worker, and restoring a replicated
+    group is PR-036's to prove;
+  - any policy but `per-step-worker-recovery`.
+- **No runtime hosts it yet.** Local, Ray Jobs and Ray Train declare no
+  request schema, and none implements the `resilience` option, so a
+  request that reached one would be refused, not dropped. No built-in
+  compiler declares it either. Only test doubles do.
+- CI: the `torchft` job installs the extra on Linux, asserts the release,
+  and runs the resilience tests under `XAYTUNE_REQUIRE_TORCHFT=1`.
+
+Not here (PR-036):
+- Ray Train hosting TorchFT: launching TorchFT-enabled workers, a failed
+  replica's replacement and rejoin, and quorum and process-group
+  reconfiguration with live recovery;
+- a built-in worker that honours the request;
+- restoring a replicated group from a checkpoint;
+- destructive worker, node and driver failure tests.
+
 ### PR-036 — distributed failure tests
 
 Exit:

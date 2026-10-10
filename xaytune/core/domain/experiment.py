@@ -19,6 +19,7 @@ from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
 from xaytune.core.domain.planning import CandidateBranchOrigin
+from xaytune.core.domain.resilience import ResilienceSpec
 from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.errors import InvalidTransitionError
 from xaytune.core.ids import (
@@ -111,6 +112,13 @@ class Experiment(AggregateModel):
     ``None`` -- the default, and every record written before PR-024 -- means
     no planner was chosen: an experiment that reaches the planning stage
     waits for someone to propose by hand.
+    """
+
+    resilience: ResilienceSpec | None = None
+    """Which resilience provider recovers workers inside an attempt, bound (PR-035).
+
+    ``None`` -- the default, and every record written before PR-035 -- means
+    nothing is delegated: every plan is exactly what it was before.
     """
 
     evaluation: EvaluationSpec | None = None

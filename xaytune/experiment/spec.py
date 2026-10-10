@@ -22,6 +22,7 @@ from xaytune.core.domain.candidate import CandidateSpec
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
+from xaytune.core.domain.resilience import ResilienceSpec
 from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 
@@ -67,6 +68,12 @@ class ExperimentSpec(FrozenDomainModel):
             host binds it at submission -- resolving the kind, validating the
             config, recording the version -- and refuses one it cannot bind.
             Nothing invokes it yet: proposals are consumed from PR-025/026.
+        resilience: Which resilience provider the experiment delegates
+            in-attempt worker recovery to, and its policy (PR-035). Bound at
+            submission like the planner -- version and engine release recorded
+            -- and refused, before anything is recorded, unless the runtime
+            and compiler both declare they carry the provider's request.
+            ``None`` delegates nothing, and leaves every plan unchanged.
     """
 
     name: str = Field(min_length=1)
@@ -81,6 +88,7 @@ class ExperimentSpec(FrozenDomainModel):
     budget: BudgetSpec | None = None
     numerical_recovery: NumericalRecoveryPolicyV1 | None = None
     planner: PlannerSpec | None = None
+    resilience: ResilienceSpec | None = None
 
     def submission_payload(self) -> FrozenDict:
         """The spec as the canonical JSON a daemon request carries (ADR-004 §3).
@@ -88,7 +96,10 @@ class ExperimentSpec(FrozenDomainModel):
         A request's ``payload_digest`` is the fingerprint of exactly this, and
         admission is refused for a submission derived from any other spec.
         """
-        return FrozenDict(self.model_dump(mode="json"))
+        # Absent rather than null when unset, so a spec written before PR-035
+        # still has the payload -- and the digest -- it had then.
+        exclude = {"resilience"} if self.resilience is None else None
+        return FrozenDict(self.model_dump(mode="json", exclude=exclude))
 
     @field_validator("compiler", "runtime", "planner")
     @classmethod
@@ -101,6 +112,19 @@ class ExperimentSpec(FrozenDomainModel):
         if spec is not None and spec.version is not None:
             raise ValueError(
                 "version is resolved by the host at submission and recorded; do not supply it"
+            )
+        return spec
+
+    @field_validator("resilience")
+    @classmethod
+    def _unbound_resilience(cls, spec: ResilienceSpec | None) -> ResilienceSpec | None:
+        # Bound by the host, for the reason compiler and runtime versions are.
+        if spec is not None and (
+            spec.version is not None or spec.engine is not None or spec.implementation is not None
+        ):
+            raise ValueError(
+                "a resilience provider's version, engine and implementation are resolved by "
+                "the host at submission and recorded; do not supply them"
             )
         return spec
 

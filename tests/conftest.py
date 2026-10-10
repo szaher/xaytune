@@ -7,6 +7,7 @@ REQUIRE_TRL_ENV = "XAYTUNE_REQUIRE_TRL"
 REQUIRE_RAY_ENV = "XAYTUNE_REQUIRE_RAY"
 REQUIRE_KUBERAY_ENV = "XAYTUNE_REQUIRE_KUBERAY"
 REQUIRE_RAY_TUNE_ENV = "XAYTUNE_REQUIRE_RAY_TUNE"
+REQUIRE_TORCHFT_ENV = "XAYTUNE_REQUIRE_TORCHFT"
 
 
 def pytest_configure(config):
@@ -30,11 +31,16 @@ def pytest_configure(config):
         "ray_tune: needs Ray Tune and Optuna (the ray-tune extra); skipped without them, "
         f"failed if {REQUIRE_RAY_TUNE_ENV}=1",
     )
+    config.addinivalue_line(
+        "markers",
+        "torchft: needs the stable TorchFT release installed (the torchft extra, Linux x86_64); "
+        f"skipped without it, failed if {REQUIRE_TORCHFT_ENV}=1",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Under ``XAYTUNE_REQUIRE_TRL=1`` a skipped TRL test is a failed one; Ray, KubeRay, Tune too.
+    """Under ``XAYTUNE_REQUIRE_TRL=1`` a skipped TRL test is a failed one; likewise the others.
 
     TRL is optional, so its tests skip when it is absent -- and a CI job that
     lost the extra would then pass having tested none of it. CI sets the
@@ -47,6 +53,7 @@ def pytest_runtest_makereport(item, call):
         ("ray", REQUIRE_RAY_ENV, "Ray"),
         ("kuberay", REQUIRE_KUBERAY_ENV, "KubeRay"),
         ("ray_tune", REQUIRE_RAY_TUNE_ENV, "Ray Tune"),
+        ("torchft", REQUIRE_TORCHFT_ENV, "TorchFT"),
     ):
         if (
             report.skipped

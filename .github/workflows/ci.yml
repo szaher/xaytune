@@ -78,6 +78,29 @@ jobs:
         env:
           XAYTUNE_REQUIRE_LMEVAL: "1"
 
+  # TorchFTResilienceProvider (PR-035) against the real installed release:
+  # the extra's pin must be the release the provider binds, read from its
+  # metadata, and the engine tests must run, not skip (XAYTUNE_REQUIRE_TORCHFT).
+  # Linux x86_64 is the only platform TorchFT publishes wheels for. Nothing
+  # imports torchft: no runtime hosts its request until PR-036.
+  torchft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --locked --extra dev --extra torchft
+      - run: >-
+          uv run --locked python -c "from importlib.metadata import version;
+          from xaytune.resilience.torchft import SUPPORTED_TORCHFT as pinned;
+          found = version('torchft'); assert found == pinned, (found, pinned);
+          print('torchft', found)"
+      - run: >-
+          uv run --locked python -m pytest -q --tb=short
+          tests/test_resilience
+          tests/test_experiment/test_resilience_host.py
+        env:
+          XAYTUNE_REQUIRE_TORCHFT: "1"
+
   # The Ray runtimes (PR-033a/b) against a real local Ray head, with the `ray`
   # extra resolved from uv.lock. The matrix runs every RayJobsRuntime and
   # RayTrainRuntime scenario against a stand-in for Ray's job manager; this

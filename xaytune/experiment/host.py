@@ -119,6 +119,7 @@ from xaytune.core.domain.operation import RuntimeOperation, RuntimeOperationTarg
 from xaytune.core.domain.planning import CandidateProposal
 from xaytune.core.domain.policy import GovernedAction
 from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.domain.resilience import ResilienceSpec
 from xaytune.core.domain.run import Run, RunAttempt, RunSeedOrigin
 from xaytune.core.domain.specs import CompilerSpec, PlannerSpec, RuntimeSpec
 from xaytune.core.errors import ConcurrentModificationError, XaytuneError
@@ -192,6 +193,12 @@ from xaytune.resilience.oom import OOMRecoveryPlanner
 from xaytune.resilience.oom_execution import (
     OOMCheckpointUnavailableError,
     OOMRecoveryExecutor,
+)
+from xaytune.resilience.provider import (
+    ExecutionCapabilities,
+    ResilienceProvider,
+    augment_execution_plan,
+    bind_resilience_provider,
 )
 from xaytune.resilience.recovery import RecoveryCoordinator
 from xaytune.runtimes import RuntimeBackend, RuntimeEventEnvelope, RuntimeStatus, StreamCursor
@@ -370,6 +377,10 @@ class EmbeddedControllerHost:
             ``no-op``). A spec's planner is bound at submission and recorded,
             and invoked whenever the experiment's next stage is planning
             (PR-026).
+        resilience_providers: Resilience provider factories by kind, each
+            binding a ``ResilienceSpec`` (PR-035). None is built in, so the
+            default is none: an experiment that names one is refused unless
+            the host was given it explicitly.
         controller_host: The host recorded on every experiment this one
             admits. Defaults to a new ``embedded`` reference; a host that
             delegates its control to this one -- the local daemon (PR-027)
@@ -397,6 +408,8 @@ class EmbeddedControllerHost:
         checkpoint_manager: CheckpointManager | None = None,
         recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None = None,
         planners: Mapping[str, Callable[[PlannerSpec], Planner]] | None = None,
+        resilience_providers: Mapping[str, Callable[[ResilienceSpec], ResilienceProvider]]
+        | None = None,
         controller_host: ControllerHostRef | None = None,
         lease_fence: ControllerLeaseFence | None = None,
     ) -> None:
@@ -416,6 +429,7 @@ class EmbeddedControllerHost:
         self._runtime_factories = dict({"local": _local_runtime} if runtimes is None else runtimes)
         self._evaluators = dict(_default_evaluators() if evaluators is None else evaluators)
         self._planners = dict(PLANNERS if planners is None else planners)
+        self._resilience_providers = dict(resilience_providers or {})
         self._decision_engine = (
             ThresholdDecisionEngine() if decision_engine is None else decision_engine
         )
@@ -453,7 +467,12 @@ class EmbeddedControllerHost:
             UnsupportedEvaluationError: If the evaluator cannot run the
                 evaluation exactly as declared.
             UnsupportedBudgetError: If the budget limits something nothing
-                measures. Nothing is recorded in any of these cases: a spec
+                measures.
+            ResilienceProviderConfigurationError: If the resilience provider
+                refuses its spec, or its engine is not installed.
+            UnsupportedResilienceError: If the plan, runtime and compiler
+                cannot carry the provider's request. Nothing is recorded in
+                any of these cases: a spec
                 that cannot run is refused at submission, not after.
 
         A budget that has nothing left for the first run is not refused: the
@@ -495,9 +514,16 @@ class EmbeddedControllerHost:
                 raise UnsupportedNumericalRecoveryError(refused)
         evaluation = None if spec.evaluation is None else self._bind_evaluation(spec.evaluation)
         planner = None if spec.planner is None else self._planner(spec.planner).spec
+        resilience = None if spec.resilience is None else self._resilience(spec.resilience).spec
 
         experiment = self._new_experiment(
-            spec, compiler, runtime, evaluation, planner, experiment_id or ExperimentId.generate()
+            spec,
+            compiler,
+            runtime,
+            evaluation,
+            planner,
+            experiment_id or ExperimentId.generate(),
+            resilience=resilience,
         )
         node = self._new_node(experiment, spec)
         run = self._new_run(node, spec.seed)
@@ -1309,7 +1335,7 @@ class EmbeddedControllerHost:
         if restore_action_id is None:
             receipt = self.repository.numerical_recovery_executions.for_successor(str(attempt.id))
             restore_action_id = None if receipt is None else str(receipt.action_id)
-        return resolve_training_attempt(
+        plan = resolve_training_attempt(
             spec,
             attempt,
             experiment.runtime.kind,
@@ -1317,6 +1343,17 @@ class EmbeddedControllerHost:
             numerical_recovery=experiment.numerical_recovery is not None
             and spec.checkpoint.format == "native-torch/v1",
             restore_action_id=restore_action_id,
+        )
+        provider = self._recorded_resilience(experiment)
+        if provider is None:
+            return plan
+        return augment_execution_plan(
+            provider,
+            plan,
+            capabilities=ExecutionCapabilities(
+                runtime=self._recorded_runtime(experiment).capabilities(),
+                compiler=compiler.capabilities(),
+            ),
         )
 
     async def _issue(
@@ -2273,6 +2310,8 @@ class EmbeddedControllerHost:
         evaluation: EvaluationSpec | None,
         planner: PlannerSpec | None,
         experiment_id: ExperimentId,
+        *,
+        resilience: ResilienceSpec | None = None,
     ) -> Experiment:
         """The experiment *spec* describes, not yet recorded."""
         return Experiment(
@@ -2293,6 +2332,7 @@ class EmbeddedControllerHost:
             numerical_recovery=spec.numerical_recovery,
             evaluation=evaluation,
             planner=planner,
+            resilience=resilience,
         )
 
     def _new_node(self, experiment: Experiment, spec: ExperimentSpec) -> ExperimentNode:
@@ -2774,6 +2814,44 @@ class EmbeddedControllerHost:
             )
         return source
 
+    def _resilience(self, spec: ResilienceSpec) -> ResilienceProvider:
+        """Bind *spec* to a resilience provider installed here.
+
+        Raises:
+            UnknownImplementationError: If this host has no provider of the kind.
+            ResilienceProviderConfigurationError: If the provider refuses the spec.
+        """
+        if spec.kind not in self._resilience_providers:
+            raise UnknownImplementationError(
+                f"no resilience provider of kind {spec.kind!r}; this host knows "
+                f"{sorted(self._resilience_providers)}"
+            )
+        return bind_resilience_provider(spec, self._resilience_providers)
+
+    def _recorded_resilience(self, experiment: Experiment) -> ResilienceProvider | None:
+        """The resilience provider the record names, bound exactly as recorded, or ``None``.
+
+        Bound afresh from the record, then compared whole: a host with another
+        provider version or engine release installed would rebuild a different
+        request, so it is refused here, before any plan is built from it.
+
+        Raises:
+            ImplementationMismatchError: If this host binds the recorded spec
+                to another version, engine release or configuration.
+        """
+        spec = experiment.resilience
+        if spec is None:
+            return None
+        provider = self._resilience(spec)
+        if provider.spec != spec:
+            bound = provider.spec
+            raise ImplementationMismatchError(
+                f"the record's resilience provider {spec.kind!r} is {_identity(spec)}, but "
+                f"this host binds {_identity(bound)}; continuing with a different provider is "
+                f"refused"
+            )
+        return provider
+
     def _recorded_planner(self, experiment: Experiment) -> Planner | None:
         """The planner the record names, at the version it names, or ``None`` if it names none.
 
@@ -2830,6 +2908,18 @@ def _is_refusal(exc: BaseException) -> bool:
     from xaytune.runtimes import UnsupportedPlanError
 
     return isinstance(exc, UnsupportedPlanError)
+
+
+def _identity(spec: ResilienceSpec) -> str:
+    """A bound resilience spec's implementation, version and engine, for a refusal."""
+    implementation = spec.implementation
+    named = (
+        "an unidentified implementation"
+        if implementation is None
+        else f"{implementation.provider}/{implementation.name} {implementation.plugin_version} "
+        f"({implementation.api_version}, emitting {implementation.request_schema})"
+    )
+    return f"{named}, version {spec.version}, engine {dict(spec.engine or {})}"
 
 
 def _require_version(

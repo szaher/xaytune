@@ -13,7 +13,7 @@ action id and no timestamp. Those belong to the record that accepts it.
 
 **Same context, same proposals.** :class:`PlanningContext` is a curated,
 serializable projection of durable state -- never a repository, a runtime or
-anything with a handle. Its identity is :func:`planning_context_identity_v1`,
+anything with a handle. Its identity is :func:`planning_context_identity_v2`,
 an explicit versioned projection, so a field added to a summary later does
 not silently change the identity of contexts already planned on. Every
 proposal carries that fingerprint with the planner's identity
@@ -71,9 +71,12 @@ __all__ = [
     "settled_for_planning",
     "planner_spec_identity_v1",
     "planning_context_identity_v1",
+    "planning_context_identity_v2",
+    "branch_origin_identity",
+    "provenance_identity",
 ]
 
-PLANNING_CONTEXT_IDENTITY_VERSION = 1
+PLANNING_CONTEXT_IDENTITY_VERSION = 2
 
 
 def planning_candidate_projection_v1(candidate: CandidateSpec) -> Mapping[str, Any]:
@@ -190,6 +193,9 @@ class NodeSummary(FrozenDomainModel):
     candidate_fingerprint: str
     decisions: tuple[DecisionSummary, ...] = ()
     evaluations: tuple[EvaluationSummary, ...] = ()
+    branch_origin: CandidateBranchOrigin | None = None
+    """The proposal the node materializes, as branching recorded it (PR-025); ``None``
+    for a node that was not branched. A search reads it to prove each trial is its own."""
 
     @model_validator(mode="after")
     def _fingerprint_is_current(self) -> NodeSummary:
@@ -238,8 +244,8 @@ class PlanningContext(FrozenDomainModel):
         return frozenset(node.candidate_fingerprint for node in self.nodes)
 
     def input_fingerprint(self) -> str:
-        """The identity of this context: :func:`planning_context_identity_v1`, hashed."""
-        return fingerprint(planning_context_identity_v1(self))
+        """The identity of this context: :func:`planning_context_identity_v2`, hashed."""
+        return fingerprint(planning_context_identity_v2(self))
 
 
 def planning_context_identity_v1(context: PlanningContext) -> Mapping[str, Any]:
@@ -312,7 +318,7 @@ def planning_context_identity_v1(context: PlanningContext) -> Mapping[str, Any]:
     budget = context.budget
     return {
         "kind": "planning-context",
-        "identity_version": PLANNING_CONTEXT_IDENTITY_VERSION,
+        "identity_version": 1,
         "experiment_id": str(context.experiment_id),
         "experiment_status": context.experiment_status.value,
         "objective": {
@@ -343,6 +349,58 @@ def planning_context_identity_v1(context: PlanningContext) -> Mapping[str, Any]:
             }
             for d in sorted(budget.dimensions, key=lambda d: d.dimension.value)
         ],
+    }
+
+
+def planning_context_identity_v2(context: PlanningContext) -> Mapping[str, Any]:
+    """What makes two planning contexts the same, version 2: version 1, plus branch origins.
+
+    Version 1 (:func:`planning_context_identity_v1`) is kept unchanged: it
+    was the identity of every context planned on before, and the LLM planner
+    shows it to the model. Version 2 adds each node's ``branch_origin``
+    (PR-034), which a search reads to prove its history: the proposal's
+    identity version and fingerprint, its full provenance, the mutation and
+    the evidence, sorted.
+    """
+    identity = dict(planning_context_identity_v1(context))
+    nodes = sorted(context.nodes, key=lambda n: str(n.node_id))
+    identity["identity_version"] = PLANNING_CONTEXT_IDENTITY_VERSION
+    identity["nodes"] = [
+        {**projected, "branch_origin": branch_origin_identity(node.branch_origin)}
+        for projected, node in zip(identity["nodes"], nodes, strict=True)
+    ]
+    return identity
+
+
+def branch_origin_identity(origin: CandidateBranchOrigin | None) -> Mapping[str, Any] | None:
+    """Every field of a branch origin, explicitly, for the identities that include one."""
+    if origin is None:
+        return None
+    return {
+        "proposal_identity_version": origin.proposal_identity_version,
+        "proposal_fingerprint": origin.proposal_fingerprint,
+        "provenance": provenance_identity(origin.provenance),
+        "mutation": thaw(origin.mutation),
+        "evidence_refs": sorted(
+            ({"kind": ref.kind, "id": ref.id} for ref in origin.evidence_refs),
+            key=lambda ref: (ref["kind"], ref["id"]),
+        ),
+    }
+
+
+def provenance_identity(provenance: ProposalProvenance) -> Mapping[str, Any]:
+    """Every field of a proposal's provenance, explicitly."""
+    return {
+        "planner_provider": provenance.planner_provider,
+        "planner_name": provenance.planner_name,
+        "planner_version": provenance.planner_version,
+        "planner_api_version": provenance.planner_api_version,
+        "planner_spec_kind": provenance.planner_spec_kind,
+        "planner_spec_version": provenance.planner_spec_version,
+        "planner_spec_identity_version": provenance.planner_spec_identity_version,
+        "planner_spec_fingerprint": provenance.planner_spec_fingerprint,
+        "context_identity_version": provenance.context_identity_version,
+        "context_fingerprint": provenance.context_fingerprint,
     }
 
 
@@ -617,3 +675,7 @@ class CandidateBranchOrigin(FrozenDomainModel):
             mutation=proposal.mutation,
             evidence_refs=proposal.evidence_refs,
         )
+
+
+NodeSummary.model_rebuild()
+PlanningContext.model_rebuild()

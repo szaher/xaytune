@@ -3,12 +3,14 @@
 ```text
 xaytune.ray
 ├── submission   how a job reaches a cluster    RayJobsBackend, KubeRayJobsBackend
-└── runtime      what runs there                RayJobsRuntime, RayTrainRuntime
+├── runtime      what runs there                RayJobsRuntime, RayTrainRuntime
+└── search       what to try next               RayTuneSearchProvider (not re-exported)
 ```
 
 A runtime composes a submission backend; neither inherits from the other, so
 Ray Train over KubeRay is a pairing, not a class. Ray Tune is a search
-provider (PR-034) and not a runtime.
+provider (PR-034, :mod:`xaytune.ray.search`) and not a runtime: it touches no
+cluster, and runs the same whatever executes the candidates.
 
 Xaytune does not manage clusters. The Ray Jobs API backend submits to an
 existing one, named by its address; the KubeRay backend creates ``RayJob``

@@ -2681,6 +2681,7 @@ class ControlPlaneRepository:
                         for decision in aggregates.decisions_for_node(str(node.id))
                     ),
                     evaluations=tuple(evaluations),
+                    branch_origin=node.branch_origin,
                 )
             )
         return PlanningContext(

@@ -174,7 +174,12 @@ def require_provenance_of(planner: Planner, provenance: ProposalProvenance) -> N
     Raises:
         PlannerConfigurationError: Naming every field that disagrees.
     """
-    expected = _provenance_for(planner, provenance.context_fingerprint)
+    # The context it was planned against is the provenance's own, at the
+    # identity version it was computed under: a node branched before an
+    # identity version changed is still this planner's.
+    expected = _provenance_for(
+        planner, provenance.context_fingerprint, provenance.context_identity_version
+    )
     actual = provenance
     wrong = [
         f"{name}: {getattr(actual, name)!r} is not {getattr(expected, name)!r}"
@@ -185,7 +190,11 @@ def require_provenance_of(planner: Planner, provenance: ProposalProvenance) -> N
         raise PlannerConfigurationError(planner.spec.kind, tuple(wrong))
 
 
-def _provenance_for(planner: Planner, context_fingerprint: str) -> ProposalProvenance:
+def _provenance_for(
+    planner: Planner,
+    context_fingerprint: str,
+    context_identity_version: int = PLANNING_CONTEXT_IDENTITY_VERSION,
+) -> ProposalProvenance:
     descriptor, spec = planner.descriptor, planner.spec
     assert spec.version is not None, "a planner always runs under a bound spec"
     return ProposalProvenance(
@@ -205,7 +214,7 @@ def _provenance_for(planner: Planner, context_fingerprint: str) -> ProposalProve
                 api_version=descriptor.api_version,
             )
         ),
-        context_identity_version=PLANNING_CONTEXT_IDENTITY_VERSION,
+        context_identity_version=context_identity_version,
         context_fingerprint=context_fingerprint,
     )
 

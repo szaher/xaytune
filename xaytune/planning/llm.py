@@ -101,6 +101,7 @@ from xaytune.core.domain.planning import (
     EvidenceRef,
     PlanningContext,
     Proposal,
+    ProposalProvenance,
     planning_context_identity_v1,
 )
 from xaytune.core.domain.specs import PlannerSpec
@@ -113,7 +114,7 @@ from xaytune.planning import (
     _bound_spec,
     _descriptor,
     _planning_stage,
-    _provenance,
+    _provenance_for,
 )
 
 __all__ = [
@@ -125,6 +126,14 @@ __all__ = [
 ]
 
 LLM_PLANNER_PROMPT_VERSION = "xaytune.llm-planner/v1"
+
+_MODEL_CONTEXT_IDENTITY = planning_context_identity_v1
+_MODEL_CONTEXT_IDENTITY_VERSION = 1
+"""The planning-context projection the model is shown, and its identity version.
+
+It identifies an invocation round and the proposals derived from it, so it
+stays v1 while the model is shown v1 -- whatever the planning context's
+current identity version is (PR-034 moved it to v2)."""
 
 _SYSTEM_PROMPT_V1 = """\
 You are the planner of a machine-learning fine-tuning experiment run by xaytune.
@@ -298,7 +307,7 @@ class LLMPlanner:
     def request(self, context: PlanningContext) -> AgentModelRequest:
         """What the model is asked about *context*: built from it and the bound spec alone."""
         document = {
-            "planning_context": planning_context_identity_v1(context),
+            "planning_context": _MODEL_CONTEXT_IDENTITY(context),
             "allowed_actions": [allowed.shown for allowed in self._allowed.values()],
         }
         return AgentModelRequest(
@@ -476,14 +485,14 @@ class LLMPlanner:
             action=spec,
             reason=proposal["reason"],
             evidence_refs=evidence,
-            provenance=_provenance(self, context),
+            provenance=self._round_provenance(context),
             agent_invocation_id=invocation.id,
         )
 
     def _intent(
         self, context: PlanningContext, request: AgentModelRequest
     ) -> AgentInvocationIntent:
-        provenance = _provenance(self, context)
+        provenance = self._round_provenance(context)
         return AgentInvocationIntent(
             experiment_id=context.experiment_id,
             planner_kind=self.spec.kind,
@@ -497,6 +506,25 @@ class LLMPlanner:
             request_fingerprint=request.fingerprint(self.config.model),
             request=FrozenDict(request.model_dump(mode="json")),
             agent_model=FrozenDict(self.model.descriptor.model_dump(mode="json")),
+        )
+
+    def _round_provenance(self, context: PlanningContext) -> ProposalProvenance:
+        """This planner, and the context *as the model is shown it*: the round's identity.
+
+        The model sees :func:`planning_context_identity_v1`, so a round is
+        identified by that projection at that version -- not by the planning
+        context's current identity, which also covers what the model is never
+        shown (branch origins, PR-034). A round recorded before PR-034 is the
+        same round after it: it is found, replayed from its answer, and the
+        model is not asked again. The invocation's intent and the proposal
+        derived from it carry this same provenance, so a recorded proposal
+        derives again exactly. Showing the model a richer context is a
+        deliberate change of this contract, with its own version.
+        """
+        return _provenance_for(
+            self,
+            fingerprint(_MODEL_CONTEXT_IDENTITY(context)),
+            context_identity_version=_MODEL_CONTEXT_IDENTITY_VERSION,
         )
 
     def _require_bound_model(self, *, consequence: str) -> None:

@@ -6,6 +6,7 @@ import pytest
 REQUIRE_TRL_ENV = "XAYTUNE_REQUIRE_TRL"
 REQUIRE_RAY_ENV = "XAYTUNE_REQUIRE_RAY"
 REQUIRE_KUBERAY_ENV = "XAYTUNE_REQUIRE_KUBERAY"
+REQUIRE_RAY_TUNE_ENV = "XAYTUNE_REQUIRE_RAY_TUNE"
 
 
 def pytest_configure(config):
@@ -24,11 +25,16 @@ def pytest_configure(config):
         "kuberay: needs a Kubernetes context with the KubeRay operator (XAYTUNE_KUBERAY_CONTEXT) "
         f"and the kuberay extra; skipped without them, failed if {REQUIRE_KUBERAY_ENV}=1",
     )
+    config.addinivalue_line(
+        "markers",
+        "ray_tune: needs Ray Tune and Optuna (the ray-tune extra); skipped without them, "
+        f"failed if {REQUIRE_RAY_TUNE_ENV}=1",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Under ``XAYTUNE_REQUIRE_TRL=1`` a skipped TRL test is a failed one; Ray and KubeRay likewise.
+    """Under ``XAYTUNE_REQUIRE_TRL=1`` a skipped TRL test is a failed one; Ray, KubeRay, Tune too.
 
     TRL is optional, so its tests skip when it is absent -- and a CI job that
     lost the extra would then pass having tested none of it. CI sets the
@@ -40,6 +46,7 @@ def pytest_runtest_makereport(item, call):
         ("trl", REQUIRE_TRL_ENV, "TRL"),
         ("ray", REQUIRE_RAY_ENV, "Ray"),
         ("kuberay", REQUIRE_KUBERAY_ENV, "KubeRay"),
+        ("ray_tune", REQUIRE_RAY_TUNE_ENV, "Ray Tune"),
     ):
         if (
             report.skipped

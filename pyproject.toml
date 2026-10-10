@@ -75,6 +75,11 @@ eval = ["lm-eval[hf]==0.4.13"]
 # minor: both are integration surfaces, and the next minor is reviewed before
 # the range widens.
 ray = ["ray[default,train]>=2.59,<2.60"]
+# Ray Tune (PR-034): RayTuneSearchProvider drives Tune's OptunaSearch with a
+# seeded Optuna sampler, replaying the record for every suggestion. Both pinned
+# to one minor: another release may suggest differently, and the replay
+# refuses a record it does not reproduce.
+ray-tune = ["ray[tune]>=2.59,<2.60", "optuna>=5.0,<5.1"]
 # KubeRay (PR-033c): the Kubernetes client KubeRayJobsBackend creates, reads
 # and deletes RayJob resources with -- three CustomObjectsApi calls, stable
 # across the client's majors. The RayJob API itself is KubeRay's, checked in

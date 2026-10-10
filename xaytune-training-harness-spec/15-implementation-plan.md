@@ -2152,7 +2152,115 @@ Limitations kept explicit:
 
 ### PR-034 — RayTuneSearchProvider
 
-Keep separate from runtime.
+Keep separate from runtime. Ray Tune searches; Xaytune owns experiments,
+candidate identity, lineage, execution, decisions and durability. This PR is
+two layers, in two commits.
+
+**1. The generic search contract** (`xaytune.core.domain.search`, `xaytune.search`):
+
+```text
+PlanningContext ──SearchPlanner──▶ SearchContext ──SearchProvider.suggest(count=1)──▶ CandidateProposal
+                     │ observe(observation_of(node)) for every ended trial
+                     ▼
+            branching (PR-025), realization (PR-026): unchanged
+```
+
+- **SearchProvider**: `suggest(context, count=1) -> tuple[CandidateProposal, ...]`
+  and `observe(observation) -> None`. A provider is bound from a
+  `SearchProviderSpec` the way a planner is, with a descriptor, a version
+  and a canonical config.
+- **SearchPlanner** (`kind="search"`) reaches a provider through the
+  existing planner path. It is registered explicitly with
+  `search_planner_factory(providers)`. Its spec records the bound provider,
+  so the planner-spec fingerprint on every proposal's provenance covers the
+  provider, its version, search space, algorithm and seed. The controller
+  gets no search-specific code.
+- **SearchContext**: the experiment's one root candidate as the base; every
+  candidate the experiment has; the objective; the provenance its proposals
+  carry. Its identity is `search_context_identity_v1`.
+- **SearchSpace**: typed `float`, `int` and `choice` parameters, sorted by
+  name. Each sets one field of the base candidate by its dotted path.
+  `metadata` and `training.api_version` are refused because they are not
+  identity. Every suggestion becomes a full validated
+  `CandidateSpec` (`apply_parameters`).
+- **CandidateObservation**: derived from the record by `observation_of`.
+  `measured` is the only outcome with a value. The others are `unmeasured`
+  (no unambiguous primary measurement, never 0), `rejected`, `failed` and
+  `cancelled`.
+- **Restart and idempotency**, through `SequentialSearchProvider`:
+  - The provider keeps no durable state. For every suggestion it reseeds its
+    algorithm and replays the record.
+  - A suggestion repeating the base or a trial is told what is known of
+    that candidate and skipped, so it is never proposed. The number of
+    repeats in a row is bounded.
+  - A suggestion the experiment has is a trial. It is told its
+    observation, or the search waits while the trial is in flight.
+  - The first new candidate is proposed, once every other candidate is
+    accounted for. Otherwise the record is not this search's history, and
+    `SearchHistoryError` is raised.
+  - Every trial must be proven by its node's durable branch origin, not
+    matched by candidate. The origin must show this planner as bound; this
+    provider as bound, engine included; this search space; the suggestion
+    index; the values; and the history-prefix fingerprint. A coincident
+    hand-made or other-planner candidate is refused. `NodeSummary` carries
+    `branch_origin`, and the planning context identity is now
+    `planning_context_identity_v2`: v1 plus every origin. A node branched
+    under v1 is still its planner's.
+  - The LLM planner still shows the model v1, so its invocation round and
+    its proposals' provenance stay identified by v1 (version 1, the v1
+    fingerprint). A round recorded before PR-034, whether ANSWERED or
+    COMPLETED, is found and replayed after it, and the model is not asked
+    again. Showing the model a richer context is a deliberate change to the
+    LLM contract, with its own version.
+  - The engine is bound: `config.engine` records the exact installed
+    releases of the libraries that implement the algorithm. A recorded
+    engine other than the installed one is refused at binding. Replay alone
+    cannot catch a release that reproduces the history but changes the next
+    suggestion.
+  - The same observation twice is idempotent; a different one for the same
+    candidate raises `ObservationConflictError`.
+  - Each proposal's `mutation["search"]` names the provider's spec
+    fingerprint, the search-space, context and history identities, the
+    suggestion index and the values.
+- **Sequential only.** `count > 1` raises `SearchRefusedError` until
+  parallel admission and scheduling are designed.
+
+Acceptance:
+
+- the same configuration and record give the same proposal;
+- a restarted host makes exactly the same search, whether it died before a
+  suggestion, after a suggestion it never branched (which it branches
+  identically), or after branching;
+- an existing candidate is never proposed;
+- the same search runs identically whether the experiment's runtime is
+  `local`, `ray-jobs` or `ray-train`
+  (`tests/test_experiment/test_search_host.py`).
+
+**2. The Ray Tune adapter** (`xaytune.ray.search`, extra `ray-tune`):
+
+- `RayTuneSearchProvider` (`kind="ray-tune"`) is a `SequentialSearchProvider`
+  over Tune's `OptunaSearch`. It uses a seeded `TPESampler` (`tpe`, the
+  default) or `RandomSampler` (`random`).
+- `tune_search_space` converts the typed space to Tune's domains. Integer
+  ranges are inclusive in Xaytune and exclusive at the top in Tune. Tune
+  then converts the domains to Optuna distributions.
+- Tune is told `measured` as COMPLETE with the value. Everything else, and
+  a repeat of the base candidate, is FAIL, never given a value.
+- Engine: `{"ray": <exact>, "optuna": <exact>}`, read from the distributions'
+  metadata at bind. Another release, even a patch inside the pinned
+  minors, is refused.
+- A `choice` with values that Python equality merges (`1`/`1.0`/`True`,
+  `0`/`False`) is refused, because Optuna's categorical cannot tell them
+  apart. Distinct values are supported.
+- Only the searcher interface is used: no `Tuner`, no `ray.init()`, no Ray
+  runtime, backend or cluster. Ray Tune and Optuna are imported in this
+  module alone, lazily, and a test pins that.
+- CI: the `ray` job installs the extra and runs the Tune tests under
+  `XAYTUNE_REQUIRE_RAY_TUNE=1`.
+
+Not here: parallel suggestions, searching from more than one root, warm
+starts from the root's own result, multi-objective search, other Tune
+searchers (each needs its own library pin and a determinism check).
 
 ### PR-035 — TorchFTResilienceProvider
 

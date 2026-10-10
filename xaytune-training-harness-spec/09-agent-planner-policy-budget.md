@@ -47,29 +47,75 @@ Later:
 
 - LLMPlanner
 - CompositePlanner
-- SearchProviderPlanner
+- SearchPlanner (PR-034, §3)
 
 ## 3. SearchProvider
 
-Search providers propose parameterized candidates.
+Search providers propose parameterized candidates (PR-034, `xaytune.search`).
 
 ```python
 class SearchProvider(Protocol):
+    descriptor: PluginDescriptor
+    spec: SearchProviderSpec             # kind, bound version, canonical config
+
     async def suggest(
         self,
         context: SearchContext,
-        count: int,
-    ) -> list[CandidateProposal]: ...
+        count: int = 1,
+    ) -> tuple[CandidateProposal, ...]: ...
 
     async def observe(
         self,
-        result: CandidateObservation,
+        observation: CandidateObservation,
     ) -> None: ...
 ```
 
+A search provider searches; Xaytune owns experiments, candidate identity,
+lineage, execution, decisions and durability. A provider never creates a
+node, launches training or talks to a runtime, and mints no id or timestamp.
+
+- **SearchPlanner** (`kind="search"`) is the planner a provider is reached
+  through. It is registered explicitly, never built in. Its spec records the
+  bound provider spec: search space, algorithm and seed. The planner's spec
+  fingerprint on every proposal's provenance therefore covers them, and
+  branching (PR-025) governs search proposals unchanged.
+- **SearchContext**: the experiment's single root candidate as the base;
+  every candidate the experiment has, by node and current fingerprint; the
+  objective; and the provenance proposals carry. Its identity is the
+  explicit `search_context_identity_v1`.
+- **SearchSpace**: typed `float`, `int` and `choice` parameters, kept in
+  name order. Each sets one field of the base candidate by its dotted path.
+  Every suggestion is applied and validated as a full `CandidateSpec`.
+- **CandidateObservation**: derived from the record by `observation_of`.
+  The outcome is `measured` (with a value), `unmeasured`, `rejected`,
+  `failed` or `cancelled`. A missing measurement is never a value. Observing
+  the same thing twice is idempotent; a different observation of the same
+  candidate is a conflict.
+- **Restart determinism.** A sequential provider reseeds its algorithm for
+  every suggestion and replays the record into it: matched trials are told
+  their observations, and repeats are skipped and never proposed. Same
+  configuration and same record give the same next proposal. A record the
+  algorithm does not reproduce is refused.
+- **Proven history.** A trial is accepted only if its node's durable branch
+  origin shows that this search proposed it. The origin must name the
+  planner and provider as bound, the engine, the space, the suggestion
+  index, the values and the history prefix. An equal candidate made any
+  other way is refused.
+- **Bound engine.** The exact releases of the algorithm's libraries are
+  part of the provider's bound spec. A recorded search is refused on any
+  other release.
+- **One at a time.** `count` is 1 until parallel admission and scheduling
+  are designed.
+
+Each proposal's `mutation["search"]` records:
+
+- the provider, its engine and its spec fingerprint;
+- the search-space, search-context and observation-history identities;
+- the suggestion index and the parameter values.
+
 Adapters:
 
-- RayTuneSearchProvider
+- RayTuneSearchProvider (PR-034, `xaytune.ray.search`)
 - OptunaSearchProvider
 - KatibSearchProvider
 

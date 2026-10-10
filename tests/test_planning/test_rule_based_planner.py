@@ -35,6 +35,7 @@ from xaytune.core.domain.planning import (
     planning_context_identity_v1,
 )
 from xaytune.core.domain.specs import PlannerSpec
+from xaytune.core.fingerprint import fingerprint
 from xaytune.core.ids import DecisionId, EvaluationId, ExperimentId, ExperimentNodeId
 from xaytune.core.immutable import FrozenDict
 from xaytune.core.refs import DatasetRef, ModelRef
@@ -477,6 +478,41 @@ def test_the_identity_projection_is_explicit_and_versioned() -> None:
     assert identity["budget"] is None
 
 
+def test_identity_v2_is_v1_plus_every_nodes_branch_origin() -> None:
+    """PR-034: a search proves its history from branch origins, so they are context identity."""
+    from xaytune.core.domain.planning import (
+        CandidateBranchOrigin,
+        branch_origin_identity,
+        planning_context_identity_v2,
+    )
+
+    parent = node(0.79)
+    (proposal,) = propose(planner(), context(parent))
+    child = node(0.81, rank=32, spec=proposal.candidate).model_copy(
+        update={
+            "parent_ids": (parent.node_id,),
+            "branch_origin": CandidateBranchOrigin.of(proposal),
+        }
+    )
+    ctx = context(parent, child)
+    v1, v2 = planning_context_identity_v1(ctx), planning_context_identity_v2(ctx)
+    assert (v1["identity_version"], v2["identity_version"]) == (1, 2)
+    assert PLANNING_CONTEXT_IDENTITY_VERSION == 2
+    assert {k: v for k, v in v2.items() if k not in ("identity_version", "nodes")} == {
+        k: v for k, v in v1.items() if k not in ("identity_version", "nodes")
+    }
+    for old, new in zip(v1["nodes"], v2["nodes"], strict=True):
+        assert {k: v for k, v in new.items() if k != "branch_origin"} == old
+    origins = {n["node_id"]: n["branch_origin"] for n in v2["nodes"]}
+    assert origins[str(parent.node_id)] is None
+    assert origins[str(child.node_id)] == branch_origin_identity(child.branch_origin)
+    assert set(origins[str(child.node_id)]) == set(CandidateBranchOrigin.model_fields)
+
+    unbranched = context(parent, child.model_copy(update={"branch_origin": None}))
+    assert unbranched.input_fingerprint() != ctx.input_fingerprint()
+    assert ctx.input_fingerprint() == fingerprint(v2)
+
+
 def test_a_stale_candidate_fingerprint_is_refused() -> None:
     spec = candidate(16)
     with pytest.raises(ValueError, match="not the current identity"):
@@ -636,7 +672,7 @@ def test_the_identity_projections_cover_every_field_of_their_models() -> None:
         PlanningContext: {"experiment_id", "experiment_status", "objective", "nodes", "budget"},
         NodeSummary: {
             "node_id", "status", "parent_ids", "candidate", "candidate_fingerprint",
-            "decisions", "evaluations",
+            "decisions", "evaluations", "branch_origin",
         },
         DecisionSummary: {
             "decision_id", "evaluation_cycle", "outcome", "engine_name", "engine_version",
@@ -699,3 +735,18 @@ def test_the_planner_spec_identity_is_explicit_and_versioned() -> None:
             "api_version": descriptor.api_version,
         },
     }
+
+
+def test_a_node_branched_under_context_identity_v1_is_still_this_planners() -> None:
+    """PR-034 moved the context identity to v2; a PLANNED node from before must still run."""
+    from xaytune.planning import require_provenance_of
+
+    (proposal,) = propose(planner(), context(node(0.79)))
+    before = proposal.provenance.model_copy(
+        update={"context_identity_version": 1, "context_fingerprint": "sha256:v1-context"}
+    )
+    require_provenance_of(planner(), before)
+    with pytest.raises(PlannerConfigurationError, match="planner_spec_fingerprint"):
+        require_provenance_of(
+            planner({"kind": "increase-lora-rank", "factor": 4, "max_rank": 64}), before
+        )

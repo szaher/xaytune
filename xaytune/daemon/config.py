@@ -30,19 +30,21 @@ from __future__ import annotations
 import importlib
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from xaytune.checkpoints import CheckpointManager
 from xaytune.compilation import TrainerCompiler
 from xaytune.core.domain.incident import Incident
 from xaytune.core.domain.recovery import RecoveryRequest
+from xaytune.core.domain.resilience import ResilienceSpec
 from xaytune.core.domain.specs import PlannerSpec
 from xaytune.core.errors import XaytuneError
 from xaytune.decision import DecisionEngine
 from xaytune.evaluation import Evaluator
 from xaytune.planning import Planner
 from xaytune.policy import PolicyEngine
+from xaytune.resilience.provider import ResilienceProvider
 from xaytune.runtimes import RuntimeBackend
 
 __all__ = ["DaemonConfig", "DaemonConfigurationError", "load_config"]
@@ -67,6 +69,10 @@ class DaemonConfig:
     renewed every third of that, and after a crash the next daemon waits for
     it to expire -- so it bounds both how fast a dead daemon is replaced and
     how long the event loop may stall before the daemon loses its lease.
+
+    ``resilience_providers`` (PR-035) defaults to none: no provider is built
+    in, so an empty mapping is not a silent choice of one -- an experiment
+    naming a provider the daemon was not given is refused.
     """
 
     compilers: Mapping[str, Callable[[], TrainerCompiler]]
@@ -77,6 +83,9 @@ class DaemonConfig:
     policy: PolicyEngine
     checkpoint_manager: CheckpointManager | None
     recovery_request_for_incident: Callable[[Incident], RecoveryRequest | None] | None
+    resilience_providers: Mapping[str, Callable[[ResilienceSpec], ResilienceProvider]] = field(
+        default_factory=dict
+    )
     lease_ttl_seconds: float = 30.0
 
     def __post_init__(self) -> None:

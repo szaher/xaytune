@@ -120,6 +120,10 @@ from xaytune.experiment.host import (
 )
 from xaytune.experiment.spec import ExperimentSpec
 from xaytune.planning import PlannerConfigurationError
+from xaytune.resilience.provider import (
+    ResilienceProviderConfigurationError,
+    UnsupportedResilienceError,
+)
 from xaytune.storage.control_plane import (
     AdmissionRefusedError,
     ApprovalConflictError,
@@ -149,6 +153,8 @@ _SUBMIT_REFUSALS: tuple[type[Exception], ...] = (
     UnsupportedBudgetError,
     UnsupportedNumericalRecoveryError,
     PlannerConfigurationError,
+    ResilienceProviderConfigurationError,
+    UnsupportedResilienceError,
     AdmissionRefusedError,
 )
 """The refusals that make a submission ``FAILED``, and only before admission.
@@ -157,9 +163,13 @@ Each is a definitive answer about the request itself: its payload is not a
 valid spec, or not the canonical form of the spec it parses to; it names an
 implementation this daemon does not have, or has at another version; the
 candidate, evaluation, budget, numerical-recovery policy or planner
-configuration is refused by what would run it; its experiment id is taken.
-Anything else -- a plugin raising a plain ``ValueError``, the database busy,
-an environment problem -- is not a judgement on the request: it stays
+configuration is refused by what would run it; its resilience provider refuses
+its configuration or its installed engine, or the runtime, compiler and
+provider cannot carry the request it delegates (PR-035); its experiment id is
+taken. Anything else -- a plugin raising a plain ``ValueError``, a resilience
+provider breaking its contract (``ResilienceContractError``, a defect in the
+plugin, not in the request), the database busy, an environment problem -- is
+not a judgement on the request: it stays
 ``PENDING`` and is tried again, because ``FAILED`` cannot be undone."""
 
 _ATTACH_REFUSALS: tuple[type[Exception], ...] = (
@@ -317,6 +327,7 @@ class LocalDaemonControllerServer:
                 runtimes=config.runtimes,
                 evaluators=config.evaluators,
                 planners=config.planners,
+                resilience_providers=config.resilience_providers,
                 decision_engine=config.decision_engine,
                 policy=config.policy,
                 checkpoint_manager=config.checkpoint_manager,

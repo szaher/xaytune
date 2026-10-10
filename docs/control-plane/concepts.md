@@ -581,6 +581,47 @@ An incident proposes no response. It creates no Action, runtime operation, new
 attempt, or experiment node. Recovery plans and recovery execution remain later
 work.
 
+## Resilience providers
+
+An experiment can delegate one recovery responsibility to a *resilience
+provider*: `per-step-worker-recovery`. With it, when a worker of the
+attempt's group fails, the surviving workers keep training. Nothing else is
+delegated. Incidents, recovery policy and episodes, checkpoint eligibility,
+retry and resume decisions, interventions, attempt and run state, budgets,
+lineage, and evaluation after recovery all stay with the controller. A
+provider's recovery is telemetry. It never creates an attempt, and it never
+makes a failed attempt successful.
+
+```python
+ExperimentSpec(
+    ...,
+    resilience=ResilienceSpec(
+        kind="torchft",
+        config={...},
+        policy=ResiliencePolicy(delegate=("per-step-worker-recovery",)),
+    ),
+)
+EmbeddedControllerHost(..., resilience_providers={"torchft": ...})
+```
+
+The host binds the spec at submission. It records the provider's version,
+the exact releases of the engine it drives, and the implementation itself:
+the plugin descriptor and the request schema it emits. Each training plan then
+carries one versioned request under `runtime_options["resilience"]`. That
+covers the first attempt, every recovery successor, and every planned
+candidate. Evaluation plans carry none. The request is part of the request
+digest, so a restarted host rebuilds the same request. If the host has
+another implementation, version or engine release installed, even under the same kind, it refuses to
+continue.
+
+The provider only adds that request; it launches nothing. A provider that
+changes anything else in the plan is refused. A submission is also refused,
+with nothing recorded, unless the runtime declares that it hosts the
+provider's request schema and the compiler declares that its worker honours
+it. No built-in runtime or compiler declares one yet. Through the daemon,
+such a refusal fails the request: it is not retried. An experiment without
+a resilience spec runs exactly as before.
+
 ## Planning
 
 When every candidate of an open experiment is decided on its merits

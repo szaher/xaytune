@@ -2264,6 +2264,78 @@ searchers (each needs its own library pin and a determinism check).
 
 ### PR-035 — TorchFTResilienceProvider
 
+A resilience-provider integration, not a runtime. TorchFT never owns
+experiment state, retries, lineage, budgets or recovery policy. Two commits.
+
+**1. The generic resilience contract** (`xaytune.core.domain.resilience`,
+`xaytune.resilience.provider`):
+
+```text
+TrainingExecutionSpec
+        ↓  resolve_training_attempt                     attempt lineage (Xaytune)
+ResolvedExecutionPlan
+        ↓  augment_execution_plan(provider, plan, ...)  adds ONE request, checked
+ResolvedExecutionPlan + runtime_options["resilience"]
+        ↓  RuntimeBackend.submit_or_get                 carries it, never interprets it
+```
+
+- **What is delegated**: `ResiliencePolicy(delegate=(...))`, canonical
+  (sorted, unique, non-empty). v1 has one responsibility,
+  `per-step-worker-recovery`: a worker of the attempt's group fails, and
+  the survivors keep training. Restarting or resuming the attempt and
+  every other recovery decision are not delegable.
+- **Which provider**: `ResilienceSpec(kind, version, engine,
+  implementation, config, policy)` on `ExperimentSpec.resilience` and
+  `Experiment.resilience`. Like a `PlannerSpec`, it is bound at
+  submission. Three things are recorded, and a caller cannot supply any of
+  them:
+  - the provider's `plugin_version`;
+  - the exact `engine` releases;
+  - the `implementation`: the descriptor's publisher, name, plugin API and
+    version, plus the `request_schema` it emits. `bind_resilience_provider`
+    binds this from the provider itself, so no factory can misstate it.
+  `kind` is only a registry key, so another implementation registered under
+  the same kind, version and engine still binds to a different spec. A
+  restarted host binds the recorded spec again and compares it whole. Any
+  difference raises `ImplementationMismatchError` before a plan is built,
+  for a recorded attempt or a new one. No
+  provider is built in: `resilience_providers=` on the host and
+  `DaemonConfig.resilience_providers` both default to none.
+- **The request**: `ResilienceRequest` under
+  `runtime_options["resilience"]`, holding `provider`,
+  `provider_version`, `engine`, `spec_fingerprint`, `delegate`,
+  `request_schema` and the provider's own `parameters`. It is part of
+  `request_digest` and of the training execution fingerprint, because
+  only restore and interventions are excluded from that.
+- **`augment_execution_plan` holds the provider to the contract**:
+  - It augments twice, and the two results must be equal.
+  - The result must be the input plus exactly that one key. A changed
+    spec, config, target or any other option is a
+    `ResilienceContractError`.
+  - The request must be canonical for the bound spec, and the plan must
+    survive a JSON round trip.
+- **Fail closed, before submission** (`UnsupportedResilienceError`). The
+  request is refused for:
+  - an evaluation plan (evaluations are never augmented);
+  - a plan that already carries a request;
+  - a runtime that recovers workers per step itself
+    (`resilience.per_step=True`), because one responsibility has one owner;
+  - a runtime that does not declare hosting the provider's
+    `request_schema` in `extensions["resilience_requests"]`;
+  - a compiler that does not declare its worker honours that schema;
+  - whatever the provider itself refuses (topology, checkpoints, engine).
+  No built-in runtime or compiler declares a schema, so with these
+  defaults a resilience spec is refused. Under the daemon, this refusal and
+  a provider refusing its spec (`ResilienceProviderConfigurationError`, for
+  example a missing engine) are both definitive, so the request is `FAILED`
+  and never retried. A provider breaking its contract
+  (`ResilienceContractError`) is a plugin defect, and the request stays
+  `PENDING`.
+- **Unchanged without it**: an experiment with no resilience spec builds
+  exactly the plans it did, and `ExperimentSpec.submission_payload()`
+  omits the absent field, so daemon payload digests are unchanged.
+  Evaluation plans are never touched.
+
 ### PR-036 — distributed failure tests
 
 Exit:

@@ -425,3 +425,61 @@ def test_the_daemon_drives_the_adaptive_loop_to_its_end(tmp_path: Path) -> None:
         asyncio.run(scenario())
     finally:
         client.close()
+
+
+def test_the_daemon_delegates_recovery_only_to_providers_it_was_given(tmp_path: Path) -> None:
+    """PR-035: ``DaemonConfig.resilience_providers`` reaches the controller; none by default."""
+    from tests.test_resilience.resilience_support import (
+        HonouringCompiler,
+        HostingRuntime,
+        providers,
+        resilience_spec,
+    )
+    from xaytune.core.execution_controls import RESILIENCE
+
+    manager = CheckpointManager(SerializedStateCodec(), LocalCheckpointStore(tmp_path / "bundles"))
+    runtime = HostingRuntime(manager, tmp_path, oom_rank=None)
+
+    def config(**overrides: Any) -> DaemonConfig:
+        return DaemonConfig(
+            compilers={"native": HonouringCompiler},
+            runtimes={"local": lambda config: runtime},
+            evaluators=EVALUATORS,
+            planners=PLANNERS,
+            decision_engine=AdaptiveThresholdDecisionEngine(),
+            policy=RulePolicyEngine(default=PolicyVerdict.ALLOW),
+            checkpoint_manager=manager,
+            recovery_request_for_incident=None,
+            **overrides,
+        )
+
+    assert config().resilience_providers == {}
+    spec = adaptive_spec(tmp_path).model_copy(update={"resilience": resilience_spec()})
+    client = DaemonClient(tmp_path / "state.db")
+
+    async def scenario() -> None:
+        refused = client.submit(spec)
+        daemon = LocalDaemonControllerServer(tmp_path / "state.db", config(), poll_interval=0.05)
+        async with _serving(daemon):
+            await _until(lambda: _state(client, refused) is ControllerRequestState.FAILED)
+        error = client.request(refused.id).error
+        assert error is not None and error["type"] == "UnknownImplementationError"
+
+        accepted = client.submit(spec)
+        daemon = LocalDaemonControllerServer(
+            tmp_path / "state.db", config(resilience_providers=providers()), poll_interval=0.05
+        )
+        async with _serving(daemon):
+            await client.wait_for_handoff(accepted.id, timeout=_TIMEOUT)
+            await _until(
+                lambda: client.aggregates.load_experiment(str(accepted.experiment_id)).is_terminal
+            )
+        experiment = client.aggregates.load_experiment(str(accepted.experiment_id))
+        assert experiment.resilience is not None and experiment.resilience.version == "1.0.0"
+        assert runtime.training_plans
+        assert all(RESILIENCE in plan.runtime_options for plan in runtime.training_plans)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        client.close()

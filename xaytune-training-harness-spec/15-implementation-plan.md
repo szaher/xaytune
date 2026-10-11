@@ -120,7 +120,9 @@ matter of record rather than of review:
 
 ### Still Proposed, and what each actually blocks
 
-None. Every ADR is accepted, ratified or superseded.
+| ADR | Blocks |
+|---|---|
+| ADR-021 — trajectory artifacts and provenance | H05's trajectory format, writer and store; does not gate Phase 5/6 |
 
 The durable harness path (ADR-019 §M1–M6) is a proposed strategy, not an ADR
 decision. It gets its own review before that work starts.
@@ -152,7 +154,7 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** ADR-018 and ADR-019
-(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-004 was accepted on
+(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 is proposed with H05. ADR-004 was accepted on
 2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
@@ -2591,3 +2593,69 @@ Not here:
 - persistence of manifests;
 - binding a behavior environment into scientific identity, which needs a new
   harness schema version.
+
+### H05 — Trajectory artifacts and provenance
+
+**Architecture proposed, revised after three reviews.** ADR-021 proposes
+T1–T11. Nothing is implemented until it is reviewed: no trajectory format,
+no writer, no store and no migration. A recorded trajectory is evidence of an
+execution, not proof that it can be reproduced.
+
+```text
+open.json (attempt instance minted, no-overwrite) ─→ OPEN
+  blobs first ─→ write-ahead tail (start events fsynced before each call)
+  ─→ chunks rolled (bounded, hash-chained) ─→ progress.json advances
+run-terminated ─→ final chunk ─→ result.json ─→ staged manifest, verified
+  ══ COMMIT POINT: result.json hard-linked to the declared result ══
+  ─→ staged manifest linked ─→ SEALED complete
+     (staged evidence lost ─→ SEALED partial, result unattested)
+before the commit: writer lost / recording failed / secret ─→ SEALED partial, no result
+reconcile_trajectories: lock free ─→ complete the seal or seal partial; lock held ─→ skip
+```
+
+- **Four identities, kept apart:** the request digest, the replicate, the
+  durable attempt ordinal, and a minted, persisted `AttemptInstanceId`,
+  which is the trajectory's identity.
+- **Integrity:** gapless sequences, earlier-only parents, a hash chain, and
+  a sealed manifest whose counts agree with its `HarnessRunResult`.
+- **Commit point:** the result's publication can't be rolled back, so
+  everything is staged and verified before it. Publication is proved by
+  link identity (`st_dev`, `st_ino`) on one host. A recording-enabled
+  replay returns a result only once its attempt is sealed `complete` and
+  verified.
+- **Four checks:**
+  - `validate_manifest`: the manifest alone;
+  - `verify_trajectory`: the evidence (chunks, events, blobs, result
+    agreement), checkable before the commit point;
+  - `verify_publication`: the published result's link identity, after the
+    commit point;
+  - `check_availability`: whether the blobs are still present.
+- **Disposition vs availability:** capture disposition is immutable and in
+  the manifest. Current availability (`available`, `expired`, `missing`,
+  `corrupt`) is observed, so authorized expiry never changes a sealed
+  manifest. Blobs are stored per attempt, so one trajectory's retention
+  can't delete another's content. Rules for any future shared blobs are
+  fixed now.
+- **Replay:** `recorded-responses` is the minimum eligible level, and a
+  re-drive calls no real model or tool. The comparison projection is
+  versioned, verification is independent of the writer, and host tools are
+  not assumed pure.
+- **Security:** the registered-secret set is frozen at open, and a value
+  from it fails closed as a sanitized partial seal. A secret discovered late
+  quarantines the whole attempt, with no retrospective claim. Held-out reference
+  artifacts are excluded, but an answer equal to the reference is allowed.
+- **Recording is opt-in, through existing fields** (`outputs` and a
+  `config` block). With recording off, specs, fingerprints and request
+  digests are byte-identical to H03's. H02–H04 identities,
+  `HarnessRunResult` v1alpha1 and the database schema are unchanged.
+- **Chunk bounds** are validated per run, and trajectories get a dedicated
+  `agent_trajectory` artifact kind.
+
+Not here:
+- the persistence migration (ADR-019 M1–M6);
+- cross-host reconciliation;
+- streaming telemetry;
+- real adapters (H08–H11);
+- scoring (H06);
+- retention enforcement;
+- multi-tenant access control.

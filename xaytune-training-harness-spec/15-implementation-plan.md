@@ -2465,3 +2465,35 @@ provenance, enforces policy/budgets, and returns an immutable harness artifact.
 One validated adapter is sufficient; H09–H11 need not delay H12. Expand later
 into middleware, delegation, persistent memory and joint model+harness work.
 Search providers remain pluggable; no particular optimizer is required.
+
+### H02 — AgentHarnessSpec, HarnessFingerprint and the candidate envelope
+
+A domain contract only. ADR-018 §"H02 concrete decisions" proposes D1–D10, and
+the PR stays draft until they are accepted.
+
+```text
+ExperimentCandidate(envelope_version="xaytune.candidate/v1alpha1")
+  payload (by kind)
+  ├─ TrainingCandidate(kind="training", spec=CandidateSpec)        → candidate v2 (v1 for lookup)
+  └─ AgentHarnessCandidate(kind="agent-harness", harness=AgentHarnessSpec) → agent-harness v1
+read_candidate(mapping): envelope, or a historical unwrapped CandidateSpec → training
+```
+
+- **`AgentHarnessSpec`** (`xaytune.agent-harness/v1alpha1`) has five
+  sections: model binding, instructions, tools, context policy and stopping
+  policy. Every behavior-changing field is required. Content is inline or
+  digest-pinned. Memory, middleware, delegation and routing are refused.
+- **`harness_fingerprint`** hashes the explicit `harness_identity_v1`
+  projection with the canonical encoder.
+  - It covers model, generation, instruction and tool content by digest,
+    the enabled tools, context and stopping.
+  - It excludes metadata, reference locations, disabled tools, seeds,
+    benchmarks and execution.
+- **Compatibility**: `CandidateSpec`, its v1/v2 projections and pinned
+  fingerprints, `CandidateSpecSnapshot`, `ExperimentSpec` payloads, planning
+  identities and request digests are unchanged. Tests pin each of them.
+
+Not here: compile, run or score a harness; persist one; submit, branch or
+plan one; search or mutate harnesses; memory or delegation. H03 owns
+persistence through a versioned envelope column and kind-dispatched
+compilation. H07 owns proposals and branching.

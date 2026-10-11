@@ -186,6 +186,51 @@ The `kind` vocabulary is closed. Learning rate, optimizer, LoRA rank, data, sche
 
 `TrainingIntervention` itself is not in this package yet — it arrives with the controller work. The rule is recorded here so the distinction is not rediscovered from the older binary model.
 
+## Agent harness candidates (H02, domain contract only)
+
+A training candidate changes weights. An **agent harness** candidate keeps
+the model fixed and changes how it is operated: instructions, tool
+definitions and the enabled tools, context policy, and stopping policy.
+H02 adds the data contract and its identity. Nothing runs, scores or submits
+a harness yet; that is H03 onward. The decisions are in ADR-018 §"H02
+concrete decisions", which is still `Proposed`.
+
+```python
+from xaytune.core.domain.candidate_envelope import ExperimentCandidate, read_candidate
+from xaytune.core.domain.harness import AgentHarnessSpec, require_tools_authorized
+
+harness = AgentHarnessSpec.model_validate(record)   # every behavior field stated
+harness.harness_fingerprint()                       # HarnessFingerprint v1
+require_tools_authorized(harness, authorized)       # compares only; grants nothing
+
+envelope = ExperimentCandidate.agent_harness(harness)
+read_candidate(envelope.model_dump(mode="json")) == envelope
+read_candidate(old_candidate_spec_json).kind        # CandidateKind.TRAINING
+```
+
+- **Model binding**: provider, model, a pinned `revision` and/or
+  `artifact_digest`, and explicit generation settings. A moving alias
+  (`latest`, `main`, ...) is refused.
+- **Content**: inline text, or `ContentRef(uri, digest="sha256:...")`.
+  Identity is the digest of the bytes, so where the bytes live does not
+  matter. A locator must use `https`, `s3`, `gs` or `hf`, and name a host
+  or bucket and an object. Local paths, `file:`, `data:` and `http:` are
+  refused, as are userinfo and any query or fragment. Errors never echo
+  the rejected value.
+- **Fingerprint**:
+  - covers the model and generation settings, the instructions, each
+    *enabled* tool's id, version, description, schema and contract, the
+    context policy and the stopping policy;
+  - excludes `metadata`, reference locations, disabled tools, seeds,
+    benchmarks and execution;
+  - is domain-separated from training identity.
+- **Refused, not ignored**: memory, middleware, delegation, routing, any
+  permission field, and unknown schema versions or envelope kinds.
+- **Training is unchanged**: `CandidateSpec`, its v1/v2 fingerprints, node
+  snapshots and every submission and planning path. An unwrapped historical
+  `CandidateSpec` record reads as a training candidate without being
+  rewritten.
+
 ## Recovery decisions (PR-019)
 
 `RecoveryEpisode` owns coordination for one failed typed attempt. Its immutable

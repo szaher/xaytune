@@ -70,6 +70,116 @@ distinguishable as harness inputs. The output artifact's lineage is not the
 training hypothesis. A joint proposal may have unresolved model bindings,
 but it cannot claim a resolved harness identity before those inputs exist.
 
+## H02 concrete decisions (proposed with H02; pending acceptance)
+
+H02 settles the wire shape and identity rules that the table above left open.
+These choices are proposed here alongside the H02 implementation PR, and the
+status stays `Proposed` until a reviewer accepts them. The PR stays in draft
+until then.
+
+**D1. Envelope and naming.** The envelope is
+`ExperimentCandidate(envelope_version="xaytune.candidate/v1alpha1", payload=...)`.
+`payload` is a union discriminated by `kind`:
+
+- `TrainingCandidate(kind="training", spec=CandidateSpec)`
+- `AgentHarnessCandidate(kind="agent-harness", harness=AgentHarnessSpec)`
+
+`CandidateKind` names the two kinds. The version is required when parsing; only the constructors fill it in.
+Version negotiation is an exact match:
+the reader accepts only the envelope and payload versions it implements, and
+refuses any other version or kind. Nothing defaults to training, and nothing
+is coerced between kinds.
+
+**D2. Historical training records.** `read_candidate()` treats a mapping
+without `envelope_version` as a historical, unwrapped `CandidateSpec`:
+
+- it validates the mapping through the existing class and wraps it as
+  training without rewriting it;
+- a `CandidateSpecSnapshot` reads only at `spec_version == "1"`;
+- an unwrapped mapping that carries a harness `schema_version` is refused,
+  not guessed at.
+
+The training payload serializes `CandidateSpec` exactly as it serializes
+today. Training identity is unchanged:
+
+- `candidate_fingerprint()` is still v2;
+- `candidate_fingerprints_for_lookup()` is still `(v2, v1)`;
+- no stored hash is relabelled or recomputed.
+
+**D3. Separate scientific identities.** `harness_identity_v1` is an
+explicit projection with `type="agent-harness", version=1`. It is
+domain-separated from `type="candidate"` (training v1/v2), so the two can
+never collide. The envelope defines no third, combined hash: a candidate's
+scientific fingerprint is its payload's.
+
+**D4. The model is in harness identity.** The binding covers provider,
+model, an immutable `revision` and/or `artifact_digest`, and explicit
+generation settings. A binding with neither pin is refused, and so is a
+mutable alias (`latest`, `main`, `head`, `stable`, ...). `ModelRef`-style
+evidence beyond these fields is H03's resolution step.
+
+**D5. Content identity is by digest.** A prompt, tool description or
+behavior-defining artifact is either inline text or a `ContentRef(uri,
+digest)` (`sha256:` only).
+
+- Its identity is the SHA-256 of its bytes. An inline value and a reference
+  with the same bytes are the same science, and moving a reference does not
+  change it.
+- A `ContentRef` locator must be one of a closed set of portable schemes:
+  `https`, `s3`, `gs` and `hf`. It must name a host, bucket or namespace and
+  an object.
+- Refused locators:
+  - a local path, a `file:` URI, `data:`, `javascript:` or `http:`;
+  - one with userinfo;
+  - one with any query or fragment. Content is addressed by digest, and a
+    query string is where signed URLs keep their credentials.
+- Refusals never echo the rejected value: every harness and envelope model
+  hides its input in errors.
+
+**D6. Only reachable behavior is identity.**
+- The projection includes the enabled tools and their definitions
+  (description, input schema, contract reference).
+- A declared-but-disabled tool cannot reach the model, so editing it does not
+  change identity.
+- `metadata`, at any level, never enters identity.
+
+**D7. No implicit behavior defaults.** Every behavior-changing field of v1
+is required:
+- generation: temperature, top_p, max output tokens, stop sequences;
+- context: budget, selection, overflow, per-result cap;
+- stopping: turns, total tokens, tool calls, termination conditions.
+
+`None` is accepted only where it is an explicit, documented choice ("no
+cap"). Provider-specific generation knobs are a typed scalar map, and they
+enter identity.
+
+**D8. Out of v1, refused rather than ignored.** Persistent memory, middleware,
+multi-agent delegation, routing/fallback models, reasoning-specific schemas,
+and `BehaviorEnvironmentContract` are absent. Unknown fields are refused
+(`extra="forbid"`). Each area returns as a new schema version with its own
+projection, never as an untyped extension map.
+
+**D9. Authority.** A harness carries no permission or grant field. Its
+enabled tools are a request. `require_tools_authorized(harness, authorized)`
+is a pure check for H03, which compares the request against an externally
+resolved authorized set. It grants nothing, and `PolicyEngine` is not
+extended to candidates. `CandidateProposal` and `ActionProposal` stay
+distinct.
+
+**D10. Durable integration is deferred, by design.** `CandidateSpecSnapshot`,
+`ExperimentNode`, `ExperimentSpec`, `NodeSummary`, `PlanningContext`,
+`CandidateProposal`, branching and fingerprint lookup still carry
+`CandidateSpec` only. H02 adds no persistence migration and no submission
+path. A harness candidate therefore cannot be submitted, which is accurate:
+nothing can execute one yet.
+
+H03 and H07 own:
+- a versioned snapshot or envelope column, read through `read_candidate`;
+- kind-dispatched compile, validation and lookup;
+- planner and branching support for harness proposals.
+
+Each needs its own migration review.
+
 ## Alternatives considered
 
 - **Put AgentHarnessSpec inside CandidateSpec:** rejected for the proposed

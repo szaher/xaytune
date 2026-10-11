@@ -127,18 +127,23 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   - ADR-017 holds the reuse policy split out of ADR-006. It was accepted on
     2026-10-01 with a conservative v1: training artifact reuse is disabled, and
     matching fingerprints are evidence, never authority. That unblocks band G
-  - [ADR-018](adrs/ADR-018-agent-harness-candidates.md) proposes first-class harness
-    candidates while preserving CandidateSpec; it gates the future H02–H12 track,
-    not current recovery or generic planner work
+  - [ADR-018](adrs/ADR-018-agent-harness-candidates.md) makes harness candidates
+    first-class while preserving CandidateSpec. It was accepted on 2026-10-11 with
+    its H02 decisions D1–D10, as merged in #74, and gates the H02–H12 track, not
+    current recovery or generic planner work
+  - [ADR-019](adrs/ADR-019-harness-compilation-and-execution.md) decides H03's
+    harness compiler, `AgentExecutionSpec`, execution identity and deterministic
+    in-process runner (E1–E10, accepted 2026-10-11, #75). It also records a
+    proposed, unimplemented migration strategy for a durable harness target
 
   ADR status is **not** a single block. It is:
 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017 |
+  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | ADR-018 |
+  | Still `Proposed` | none |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.
@@ -150,8 +155,10 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   journal, the Action substrate and the projections as well as the experiment
   aggregates. ADR-008 was accepted on 2026-09-22, which unblocked band C.
   ADR-009 was accepted on 2026-09-28, settling the checkpoint-layer gate for
-  band F and the legacy read-surface contract for PR-018. The remaining proposed
-  ADR, ADR-018, gates the separate harness track.
+  band F and the legacy read-surface contract for PR-018. ADR-018 was accepted
+  on 2026-10-11 after H02 merged, and ADR-019 (H03's E1–E10) the same day,
+  after H03's review. ADR-019's durable-path migration strategy (M1–M6) is
+  not one of its decisions; the follow-up decides it.
   ADR-017 was accepted on 2026-10-01, unblocking band G. ADR-004 was accepted on
   2026-10-03, unblocking band H: it was expanded before acceptance with the
   local daemon's SQLite request mailbox, atomic initial admission, flock

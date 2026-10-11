@@ -113,16 +113,14 @@ matter of record rather than of review:
 | ADR-015 — durable evaluation lifecycle | PR-005 evaluation tables |
 | ADR-016 — specs versus implementations | PR-005 experiment record |
 | ADR-017 — reuse policy | band G; accepted 2026-10-01 with v1 training-artifact reuse disabled |
+| ADR-018 — agent harness candidates | the H02–H12 harness track; accepted 2026-10-11 with H02's D1–D10 as merged in #74 |
+| ADR-019 — harness compilation and execution | H03; E1–E10 accepted 2026-10-11 (#75). Its M1–M6 migration strategy is proposed only, and is decided by the durable follow-up |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
 
-This remains `Proposed`. It names the work it gates, so nothing is blocked
-that does not depend on it:
-
-| ADR | Blocks |
-|---|---|
-| ADR-018 — agent harness candidates | future H02–H12 harness track; does not gate Phase 5/6 |
+None. The durable harness path (ADR-019 §M1–M6) is a proposed strategy, not
+an ADR decision; it gets its own review before that work starts.
 
 ### Superseded
 
@@ -150,8 +148,8 @@ freezes what" reason: PR-004 is where the tables and revision-based persistence
 are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
-**No ADR now blocks work that is ready to start.** The remaining `Proposed`
-one, ADR-018, gates the separate harness track. ADR-004 was accepted on
+**No ADR now blocks work that is ready to start.** ADR-018 and ADR-019
+(E1–E10) were accepted on 2026-10-11. ADR-004 was accepted on
 2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
@@ -2433,9 +2431,9 @@ separate from Phase 11's training integrations and experiment-memory plugins.
 ## Harness Optimization track (planned)
 
 [Chapter 23](23-agent-harness-optimization.md) defines the proposed architecture.
-[ADR-018](adrs/ADR-018-agent-harness-candidates.md) remains `Proposed`: H01 is
-specification/review only; H02 onward requires acceptance and the generic
-experiment/planner foundation. Existing historical PR numbers remain intact.
+[ADR-018](adrs/ADR-018-agent-harness-candidates.md) was accepted on 2026-10-11,
+after H02 (#74) merged. H03's execution decisions are proposed separately in
+[ADR-019](adrs/ADR-019-harness-compilation-and-execution.md). Existing historical PR numbers remain intact.
 
 **Current implementation priority is unchanged:** PR-019 RecoveryPlan/coordinator,
 PR-020 adaptive OOM recovery, PR-021 numerical recovery, PR-024 RuleBasedPlanner,
@@ -2468,8 +2466,8 @@ Search providers remain pluggable; no particular optimizer is required.
 
 ### H02 — AgentHarnessSpec, HarnessFingerprint and the candidate envelope
 
-A domain contract only. ADR-018 §"H02 concrete decisions" proposes D1–D10, and
-the PR stays draft until they are accepted.
+**Complete:** merged as #74 (`35bbd87e`). A domain contract only. ADR-018
+§"H02 concrete decisions" D1–D10 were accepted on 2026-10-11.
 
 ```text
 ExperimentCandidate(envelope_version="xaytune.candidate/v1alpha1")
@@ -2494,6 +2492,57 @@ read_candidate(mapping): envelope, or a historical unwrapped CandidateSpec → t
   identities and request digests are unchanged. Tests pin each of them.
 
 Not here: compile, run or score a harness; persist one; submit, branch or
-plan one; search or mutate harnesses; memory or delegation. H03 owns
-persistence through a versioned envelope column and kind-dispatched
-compilation. H07 owns proposals and branching.
+plan one; search or mutate harnesses; memory or delegation. H07 owns
+proposals and branching. Persistence through a versioned envelope column was
+planned for H03; ADR-019 defers it to the durable harness path (see H03).
+
+### H03 — Harness compiler, execution spec and deterministic runner
+
+**Complete** (#75). It is a compiler and local runner foundation, **not**
+end-to-end harness execution through Xaytune. ADR-019 E1–E10 were accepted on
+2026-10-11. Cancellation, restart and idempotency hold in-process only; their
+durable versions are deferred.
+
+The durable path is a separate, required follow-up milestone:
+- durable harness attempts;
+- controller submission and runtime execution;
+- durable cancellation, restart and idempotency.
+
+ADR-019 §"Migration strategy for the durable path" proposes its design (not
+accepted, not implemented), and §"Acceptance criteria" lists what stays
+deferred.
+
+```text
+AgentHarnessSpec ─resolve_harness_content(source)→ ResolvedHarnessContent   (digests verified)
+      └──────────── HarnessCompiler.compile(harness, context) ──────────────┐
+                                                                            ↓
+AgentExecutionSpec (xaytune.agent-execution/v1alpha1)    harness fp + execution fp
+      ↓ ScriptedHarnessRunner.run(spec, model, toolbox, authorized_tools)
+HarnessRunResult (xaytune.agent-run-result/v1alpha1)     published once, at the declared output
+```
+
+- **`HarnessCompiler`** (`xaytune.harness-compiler/v1alpha1`) is a sibling
+  of `TrainerCompiler`. It provides typed capabilities, `supports()` with
+  every reason, and a deterministic `compile()` that runs nothing.
+- **`AgentExecutionSpec`** is a sibling of the training and evaluation specs,
+  but it is not in the `ExecutionSpec` union. Its validators re-derive every
+  derived field.
+- **Identities:** `agent_execution_fingerprint` is the operational identity
+  and leaves `harness_fingerprint` alone. `agent_run_request_digest` is the
+  literal idempotency key.
+- **`ScriptedHarnessRunner`** is in-process and deterministic.
+  - It consumes every behavior field.
+  - It enforces an externally supplied authorized tool set.
+  - It refuses every requirement it does not implement.
+  - It is idempotent, restartable and cancellable.
+
+**The design boundary.** A harness attempt can reach a `RuntimeBackend` only
+as a `ResolvedExecutionPlan`, and that needs a new target kind. The kind is
+an attempt table, and it is constrained in `actions`, `incidents`,
+`recovery_episodes` and `budget_ledger`. That needs a reviewed migration
+(ADR-019 §"The boundary H03 stops at"), so H03 adds no target kind, no union
+member and no plan. No historical plan, request digest or fingerprint moves.
+
+Not here: the durable path and harness persistence, real model adapters
+(H08–H11), benchmarks and tasks (H04), trajectories (H05), evaluation and
+optimization (H06/H07), memory, delegation, joint mode.

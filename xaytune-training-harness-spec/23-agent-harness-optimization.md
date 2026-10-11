@@ -1,15 +1,19 @@
 # Agent Harness Optimization
 
-> **H02 (domain contract) in review; execution not implemented.** H02 adds
-> `AgentHarnessSpec`, `HarnessFingerprint` v1 and the `ExperimentCandidate`
-> envelope as a pure domain contract. It performs no inference, tool
-> execution or evaluation, and has no submission path. Its concrete
-> decisions are ADR-018 §"H02 concrete decisions", still `Proposed`.
+> **H02 and H03 complete; no durable execution.**
+> H02 (#74) added `AgentHarnessSpec`, `HarnessFingerprint` v1 and the
+> `ExperimentCandidate` envelope. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
+> was accepted on 2026-10-11 with its D1–D10.
 >
-> This chapter proposes another experiment type in the existing control
-> plane. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
-> remains `Proposed`. Names and schemas below are conceptual contracts, not
-> public APIs or persistence schemas. The H track in the
+> H03 (#75) added the harness compiler, `AgentExecutionSpec` and a
+> deterministic in-process runner. Their decisions are
+> [ADR-019](adrs/ADR-019-harness-compilation-and-execution.md) E1–E10,
+> accepted on 2026-10-11. A harness still cannot be submitted to a controller
+> or runtime. That needs the migration ADR-019 proposes, which is neither
+> accepted nor implemented.
+>
+> Apart from what H02 and H03 implement, the names and schemas below are
+> conceptual contracts, not public APIs or persistence schemas. The H track in the
 > [implementation plan](15-implementation-plan.md#harness-optimization-track-planned)
 > schedules future work; this specification authorizes no implementation.
 
@@ -266,10 +270,12 @@ and custom production-agent adapters. Adapter support must be explicit and
 refuse unsupported settings rather than silently drop a mutation.
 
 Current `ExecutionSpec` and target/telemetry dispatch support training and
-evaluation only. This proposal does not claim existing runtimes can submit a
-harness workload today. H03 must review versioned workload/target/telemetry
-extensions and preserve historical plan/request digests, using generic dispatch
-rather than vendor branches in runtime.
+evaluation only. H03 reviewed them (ADR-019). A harness target kind is an
+attempt table that four shipped tables constrain, so H03 stops there: it
+compiles and runs a harness in-process, and adds nothing to the union, the
+target kinds or the plan. Historical plan and request digests are therefore
+unchanged. The durable path keeps generic dispatch rather than vendor
+branches in runtime.
 
 ## 7. Repeatable tasks and environments
 

@@ -2,11 +2,21 @@
 
 ## Status
 
-Proposed — 2026-09-28.
+Accepted — 2026-10-11. Proposed 2026-09-28.
 
-Gates the future H02–H12 harness track. It does not gate or reorder PR-019–021
-recovery or PR-024–026 planner/branching/adaptive MVP work. This is a decision
-proposal for architectural review, not acceptance or implementation authority.
+The project owner accepted the H02 concrete decisions D1–D10 as implemented in
+[PR #74](https://github.com/szaher/xaytune/pull/74), merge commit `35bbd87e`.
+Accepting them changes none of their semantics: the text of D1–D10 below is
+the text #74 merged.
+
+Acceptance settles the candidate envelope, the harness identity and the
+compatibility rules. It does **not** settle H03's execution, runtime,
+telemetry or persistence contracts. Those are proposed separately in
+[ADR-019](ADR-019-harness-compilation-and-execution.md) and are reviewed on
+their own.
+
+Gates the H02–H12 harness track. It does not gate or reorder PR-019–021
+recovery or PR-024–026 planner/branching/adaptive MVP work.
 
 ## Context
 
@@ -32,7 +42,7 @@ harness specification and scientific fingerprint; compile through a sibling
 harness compiler into the existing resolved-plan/runtime architecture. No
 candidate class, persistence schema or runtime changes occur in this spec PR.
 
-The following answers are proposals while this ADR remains `Proposed`:
+The following answers were proposed with the ADR on 2026-09-28. D1–D10 below settle what they left open:
 
 | Review question | Proposed answer / unresolved boundary |
 |---|---|
@@ -70,12 +80,11 @@ distinguishable as harness inputs. The output artifact's lineage is not the
 training hypothesis. A joint proposal may have unresolved model bindings,
 but it cannot claim a resolved harness identity before those inputs exist.
 
-## H02 concrete decisions (proposed with H02; pending acceptance)
+## H02 concrete decisions (accepted 2026-10-11)
 
 H02 settles the wire shape and identity rules that the table above left open.
-These choices are proposed here alongside the H02 implementation PR, and the
-status stays `Proposed` until a reviewer accepts them. The PR stays in draft
-until then.
+They were proposed with the H02 implementation PR (#74) and accepted after it
+merged, unchanged.
 
 **D1. Envelope and naming.** The envelope is
 `ExperimentCandidate(envelope_version="xaytune.candidate/v1alpha1", payload=...)`.

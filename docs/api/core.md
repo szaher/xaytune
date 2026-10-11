@@ -191,9 +191,10 @@ The `kind` vocabulary is closed. Learning rate, optimizer, LoRA rank, data, sche
 A training candidate changes weights. An **agent harness** candidate keeps
 the model fixed and changes how it is operated: instructions, tool
 definitions and the enabled tools, context policy, and stopping policy.
-H02 adds the data contract and its identity. Nothing runs, scores or submits
-a harness yet; that is H03 onward. The decisions are in ADR-018 §"H02
-concrete decisions", which is still `Proposed`.
+H02 adds the data contract and its identity. H03 compiles and runs one
+deterministically (see [Agent Harness](harness.md)); nothing scores or submits
+one yet. The decisions are in ADR-018 §"H02 concrete decisions", accepted on
+2026-10-11.
 
 ```python
 from xaytune.core.domain.candidate_envelope import ExperimentCandidate, read_candidate

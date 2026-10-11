@@ -50,6 +50,7 @@ nav:
   - API Reference:
       - Overview: api/index.md
       - Control-Plane Core: api/core.md
+      - Agent Harness: api/harness.md
       - Recipes: api/recipes.md
       - Data Pipeline: api/data.md
       - Trainer: api/trainer.md

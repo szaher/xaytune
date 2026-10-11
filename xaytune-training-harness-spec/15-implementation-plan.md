@@ -115,12 +115,15 @@ matter of record rather than of review:
 | ADR-017 — reuse policy | band G; accepted 2026-10-01 with v1 training-artifact reuse disabled |
 | ADR-018 — agent harness candidates | the H02–H12 harness track; accepted 2026-10-11 with H02's D1–D10 as merged in #74 |
 | ADR-019 — harness compilation and execution | H03; E1–E10 accepted 2026-10-11 (#75). Its M1–M6 migration strategy is proposed only, and is decided by the durable follow-up |
+| ADR-020 — pinned benchmark and task contracts | H04; B1–B9 accepted 2026-10-11 (#76). Trajectories (H05), evaluation wiring and scoring (H06) and persistence stay deferred |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
 
-None. The durable harness path (ADR-019 §M1–M6) is a proposed strategy, not
-an ADR decision; it gets its own review before that work starts.
+None. Every ADR is accepted, ratified or superseded.
+
+The durable harness path (ADR-019 §M1–M6) is a proposed strategy, not an ADR
+decision. It gets its own review before that work starts.
 
 ### Superseded
 
@@ -149,7 +152,7 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** ADR-018 and ADR-019
-(E1–E10) were accepted on 2026-10-11. ADR-004 was accepted on
+(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-004 was accepted on
 2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
@@ -2546,3 +2549,45 @@ member and no plan. No historical plan, request digest or fingerprint moves.
 Not here: the durable path and harness persistence, real model adapters
 (H08–H11), benchmarks and tasks (H04), trajectories (H05), evaluation and
 optimization (H06/H07), memory, delegation, joint mode.
+
+### H04 — Pinned benchmark and task contracts
+
+**Complete (#76).** ADR-020 B1–B9 were accepted on 2026-10-11. H04 covers
+contracts and resolution only. Nothing here runs, scores or persists a
+benchmark.
+
+```text
+BenchmarkSuiteRequest(id, revision or alias)
+  ─resolve_benchmark_suite(source)→ ResolvedBenchmarkSuite   every fingerprint verified
+      ref = BenchmarkSuiteRef(id, pinned revision, suite_fingerprint)
+      manifest: ordered members (task id, revision, task_fingerprint)
+      tasks: TaskSpec (agent-visible inputs; held-out reference by ContentRef only)
+verify_suite_content(suite, source)                             bytes again, after loading
+record_assignment(suite, sampling, seed) → TaskAssignment      run provenance; paired by seed
+verify_assignment(suite, sampling, a)    → a, or refused        a stored record is a claim
+benchmark_cohort(ref, sampling)          → cohort key           necessary, not sufficient
+```
+
+- Tasks and suites have explicit v1 identity projections. Metadata and
+  locators are excluded.
+- Held-out references never reach `agent_visible(task)`.
+- Sampling is deterministic and uses no Python `random`.
+- `reproducibility` is `static` or `snapshot`; dynamic services are refused
+  in v1. The reset semantics (`per-task`) are recorded in suite identity.
+- Comparability needs all of C1–C4 (ADR-020 B7). H04 supplies C1, the
+  benchmark cohort, and C2, matched assignments. Scoring and units (C3) and
+  execution conditions (C4) are H06/H07.
+- A benchmark is never harness identity.
+- Loading a resolved suite checks its structure only. Its bytes are checked
+  against a source, again, before anything executes or evaluates on it.
+- A recorded assignment is verified against its suite, policy and seed
+  before it is compared.
+
+Not here:
+- wiring a resolved task into `AgentExecutionSpec`, which stays with H06's
+  evaluation path and keeps H03's identities unchanged;
+- scoring and `EvaluationFingerprint` (H06);
+- trajectories (H05);
+- persistence of manifests;
+- binding a behavior environment into scientific identity, which needs a new
+  harness schema version.

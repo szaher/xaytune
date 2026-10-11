@@ -1,6 +1,7 @@
 # Agent Harness Optimization
 
-> **H02, H03 and H04 complete; no durable execution.**
+> **H02, H03 and H04 complete; H05 (trajectory artifacts) proposed; no
+> durable execution.**
 > H02 (#74) added `AgentHarnessSpec`, `HarnessFingerprint` v1 and the
 > `ExperimentCandidate` envelope. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
 > was accepted on 2026-10-11 with its D1–D10.
@@ -18,6 +19,14 @@
 > [ADR-020](adrs/ADR-020-benchmark-and-task-contracts.md) B1–B9, accepted on
 > 2026-10-11. Tasks are not yet wired into execution or scoring (H06), and
 > trajectories (H05) and persistence are deferred.
+>
+> H05's architecture is proposed in
+> [ADR-021](adrs/ADR-021-trajectory-artifacts-and-provenance.md)
+> (`Proposed`). It covers the trajectory event schema, attribution and
+> causality, chunk and manifest integrity, completeness and replay levels,
+> and redaction, access and retention. A recorded trajectory is evidence of
+> an execution, not proof that it can be reproduced. Nothing is implemented
+> yet.
 >
 > Apart from what H02, H03 and H04 implement, the names and schemas below are
 > conceptual contracts, not public APIs or persistence schemas. The H track in the

@@ -140,6 +140,11 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     sampling, benchmark cohorts and verified, matched task assignments
     (B1–B9, accepted 2026-10-11, #76). Trajectories (H05), evaluation (H06)
     and persistence stay deferred
+  - [ADR-021](adrs/ADR-021-trajectory-artifacts-and-provenance.md) proposes
+    H05's trajectory artifacts: a closed event schema, attribution and
+    causality, chunk and manifest integrity, declared completeness and
+    replay levels, and redaction, access and retention. A trajectory is
+    evidence of an execution, not proof that it can be reproduced
 
   ADR status is **not** a single block. It is:
 
@@ -148,7 +153,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   | Ratified by merged implementation | ADR-002, ADR-010 |
   | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | none |
+  | Still `Proposed` | ADR-021 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.

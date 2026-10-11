@@ -1,6 +1,6 @@
 # Agent Harness Optimization
 
-> **H02 and H03 complete; no durable execution.**
+> **H02, H03 and H04 complete; no durable execution.**
 > H02 (#74) added `AgentHarnessSpec`, `HarnessFingerprint` v1 and the
 > `ExperimentCandidate` envelope. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
 > was accepted on 2026-10-11 with its D1–D10.
@@ -12,7 +12,14 @@
 > or runtime. That needs the migration ADR-019 proposes, which is neither
 > accepted nor implemented.
 >
-> Apart from what H02 and H03 implement, the names and schemas below are
+> H04 (#76) added pinned `TaskSpec` and benchmark-suite contracts, their
+> resolution, deterministic sampling, benchmark cohorts and verified, matched
+> task assignments. Their decisions are
+> [ADR-020](adrs/ADR-020-benchmark-and-task-contracts.md) B1–B9, accepted on
+> 2026-10-11. Tasks are not yet wired into execution or scoring (H06), and
+> trajectories (H05) and persistence are deferred.
+>
+> Apart from what H02, H03 and H04 implement, the names and schemas below are
 > conceptual contracts, not public APIs or persistence schemas. The H track in the
 > [implementation plan](15-implementation-plan.md#harness-optimization-track-planned)
 > schedules future work; this specification authorizes no implementation.

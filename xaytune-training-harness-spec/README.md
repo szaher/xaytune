@@ -135,13 +135,18 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     harness compiler, `AgentExecutionSpec`, execution identity and deterministic
     in-process runner (E1–E10, accepted 2026-10-11, #75). It also records a
     proposed, unimplemented migration strategy for a durable harness target
+  - [ADR-020](adrs/ADR-020-benchmark-and-task-contracts.md) decides H04's pinned
+    task and benchmark-suite contracts, their resolution, deterministic task
+    sampling, benchmark cohorts and verified, matched task assignments
+    (B1–B9, accepted 2026-10-11, #76). Trajectories (H05), evaluation (H06)
+    and persistence stay deferred
 
   ADR status is **not** a single block. It is:
 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019 |
+  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
   | Still `Proposed` | none |
 
@@ -158,7 +163,8 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   band F and the legacy read-surface contract for PR-018. ADR-018 was accepted
   on 2026-10-11 after H02 merged, and ADR-019 (H03's E1–E10) the same day,
   after H03's review. ADR-019's durable-path migration strategy (M1–M6) is
-  not one of its decisions; the follow-up decides it.
+  not one of its decisions; the follow-up decides it. ADR-020 (H04's B1–B9)
+  was accepted on 2026-10-11 after H04's review.
   ADR-017 was accepted on 2026-10-01, unblocking band G. ADR-004 was accepted on
   2026-10-03, unblocking band H: it was expanded before acceptance with the
   local daemon's SQLite request mailbox, atomic initial admission, flock

@@ -145,7 +145,13 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     causality, chunk and manifest integrity, declared completeness and
     replay levels, and redaction, access and retention (T1–T11, accepted
     2026-10-12, #77). A trajectory is evidence of an execution, not proof
-    that it can be reproduced. Its implementation is reviewed separately
+    that it can be reproduced. Implemented in #78
+  - [ADR-022](adrs/ADR-022-harness-evaluation-scoring-and-comparison.md)
+    proposes H06's harness evaluation: tasks wired into execution, per-replicate
+    run evidence as the subject, two evaluators on the existing protocol, a
+    versioned metric catalog with units and explicit absences, replicate
+    aggregation with uncertainty, and comparability C3 and C4. `Objective`
+    and the decision engines are unchanged
 
   ADR status is **not** a single block. It is:
 
@@ -154,7 +160,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
   | Ratified by merged implementation | ADR-002, ADR-010 |
   | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020, ADR-021 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
-  | Still `Proposed` | none |
+  | Still `Proposed` | ADR-022 |
 
   No ADR is half-accepted: status is a gate, so ADR-006's open reuse-policy half
   was split into ADR-017 rather than leaving one document in two states.

@@ -47,12 +47,16 @@ _CHILD = textwrap.dedent(
     store = AggregateStore(connection)
 
     # Read before signalling, so both processes have the same revision in hand.
+    # The signal appears atomically: the parent waits for the file to exist,
+    # so it must never exist empty, half-written, before its revision is in it.
+    import os, time
     experiment = store.load_experiment(experiment_id)
-    open(ready_path, "w").write(str(experiment.revision))
+    with open(ready_path + ".tmp", "w") as handle:
+        handle.write(str(experiment.revision))
+    os.replace(ready_path + ".tmp", ready_path)
 
     # Wait for the parent to release us; both writes are then in flight against
     # the same starting revision.
-    import os, time
     while not os.path.exists(go_path):
         time.sleep(0.01)
 

@@ -2,13 +2,22 @@
 
 ## Status
 
-Proposed — 2026-10-11, with H05. Revised the same day after architecture
-reviews of [PR #77](https://github.com/szaher/xaytune/pull/77) at `cb8fb1d`,
-`2dbc68b` and `40144cf`.
+Accepted — 2026-10-12. Proposed 2026-10-11 with H05, and revised the same
+day after architecture reviews of
+[PR #77](https://github.com/szaher/xaytune/pull/77) at `cb8fb1d`, `2dbc68b`
+and `40144cf`. PR #77 merged it as `Proposed` (`c07c4af`).
 
-This is an architecture proposal only. No trajectory format, writer, store or
-persistence migration is implemented until it is reviewed. The H05 PR stays a
-draft until then.
+The project owner approved decisions **T1–T11** in the architecture review of
+PR #77. This status records that architectural acceptance only. It does not
+approve the implementation in
+[PR #78](https://github.com/szaher/xaytune/pull/78), which passes its own code
+review and CI before it merges.
+
+**Wording aligned at acceptance** (no decision changed), after the
+implementation review of PR #78:
+- T3's causality: a context change names the event it follows, and the model
+  call it prepared names the context change;
+- F17: changed harness logic diverges; a changed spec is `ineligible`.
 
 **Revision 2 changes:**
 - a persisted attempt-instance identity (T3);
@@ -223,7 +232,10 @@ different content are a conflict, and are refused.
   earlier event:
   - a finish names its start;
   - a tool call names the model call that requested it;
-  - a context change names the model call it prepared;
+  - a context change names the event it follows: the run's start, or the
+    finish that preceded it;
+  - a model call names the event it follows, which is the context change
+    when one prepared it;
   - `run-terminated` names the event that ended the run.
 - Parents always have lower sequences, so the causal graph is acyclic by
   construction.
@@ -914,7 +926,7 @@ The implementation must handle each scenario as stated:
 | F14 | A blob is deleted with no expiry record, or before its retention | Reported `missing`, as an integrity incident |
 | F15 | A blob's bytes change | Reported `corrupt` |
 | F16 | An edited, dropped, reordered or replaced chunk, or an edited sealed manifest | Refused, with the specific reason |
-| F17 | A re-drive with a changed harness | `diverged`, at the first differing sequence and field |
+| F17 | A re-drive with changed harness logic under the same `AgentExecutionSpec` | `diverged`, at the first differing sequence and field. A changed spec has another request digest, so it is `ineligible` (prerequisite 4), not a divergence |
 | F18 | A re-drive of a trajectory whose consumed tool result was redacted or expired | `ineligible`, naming each unmet prerequisite |
 | F19 | The writer attempts to record its own replay verification | Refused |
 | F20 | A correct agent answer equals the held-out reference | Recorded normally. The reference artifact remains unreachable |

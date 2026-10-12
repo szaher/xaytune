@@ -6,7 +6,7 @@
     scored. Liveness, publication proof and reconciliation hold on one host
     only. The decisions are in
     [ADR-021](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/adrs/ADR-021-trajectory-artifacts-and-provenance.md),
-    which is `Proposed`.
+    accepted on 2026-10-12.
 
 A trajectory is **evidence of an execution, not proof that it can be
 reproduced**. It records what happened, and declares how much of it was

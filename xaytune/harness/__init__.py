@@ -37,6 +37,7 @@ from xaytune.harness.content import (
     UnverifiedContentError,
     resolve_harness_content,
 )
+from xaytune.harness.replay import replay_prerequisites, verify_replay
 from xaytune.harness.runner import (
     RUNNER,
     CancelSignal,
@@ -52,6 +53,7 @@ from xaytune.harness.runner import (
     ScriptedHarnessModel,
     ScriptedHarnessRunner,
     ScriptExhaustedError,
+    UnattestedResultError,
     run_scripted_harness,
 )
 
@@ -81,8 +83,11 @@ __all__ = [
     "ScriptExhaustedError",
     "ScriptedHarnessModel",
     "ScriptedHarnessRunner",
+    "UnattestedResultError",
     "UnsupportedHarnessError",
     "UnverifiedContentError",
+    "replay_prerequisites",
     "resolve_harness_content",
     "run_scripted_harness",
+    "verify_replay",
 ]

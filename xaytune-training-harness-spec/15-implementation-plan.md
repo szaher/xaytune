@@ -116,13 +116,12 @@ matter of record rather than of review:
 | ADR-018 — agent harness candidates | the H02–H12 harness track; accepted 2026-10-11 with H02's D1–D10 as merged in #74 |
 | ADR-019 — harness compilation and execution | H03; E1–E10 accepted 2026-10-11 (#75). Its M1–M6 migration strategy is proposed only, and is decided by the durable follow-up |
 | ADR-020 — pinned benchmark and task contracts | H04; B1–B9 accepted 2026-10-11 (#76). Trajectories (H05), evaluation wiring and scoring (H06) and persistence stay deferred |
+| ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77). Acceptance is architectural: the implementation (#78) is reviewed on its own. Scoring (H06) and persistence stay deferred |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
 
-| ADR | Blocks |
-|---|---|
-| ADR-021 — trajectory artifacts and provenance | H05's trajectory format, writer and store; does not gate Phase 5/6 |
+None. Every ADR is accepted, ratified or superseded.
 
 The durable harness path (ADR-019 §M1–M6) is a proposed strategy, not an ADR
 decision. It gets its own review before that work starts.
@@ -154,7 +153,7 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** ADR-018 and ADR-019
-(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 is proposed with H05. ADR-004 was accepted on
+(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 (H05's T1–T11) was accepted on 2026-10-12. ADR-004 was accepted on
 2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
@@ -2596,9 +2595,11 @@ Not here:
 
 ### H05 — Trajectory artifacts and provenance
 
-**Architecture proposed, revised after three reviews.** ADR-021 proposes
-T1–T11. Nothing is implemented until it is reviewed: no trajectory format,
-no writer, no store and no migration. A recorded trajectory is evidence of an
+**Architecture accepted (2026-10-12, #77); implementation in review.**
+ADR-021 decides T1–T11. The implementation (core contracts in
+`xaytune.core.trajectory`, the local writer, store, verification and
+reconciliation in `xaytune.trajectory`, and recording and replay in the
+scripted runner) adds no migration and no table. A recorded trajectory is evidence of an
 execution, not proof that it can be reproduced.
 
 ```text

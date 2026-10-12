@@ -52,6 +52,7 @@ nav:
       - Control-Plane Core: api/core.md
       - Agent Harness: api/harness.md
       - Benchmarks: api/benchmarks.md
+      - Trajectories: api/trajectories.md
       - Recipes: api/recipes.md
       - Data Pipeline: api/data.md
       - Trainer: api/trainer.md

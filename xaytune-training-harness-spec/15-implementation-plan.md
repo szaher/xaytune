@@ -2596,9 +2596,11 @@ Not here:
 
 ### H05 — Trajectory artifacts and provenance
 
-**Architecture proposed, revised after three reviews.** ADR-021 proposes
-T1–T11. Nothing is implemented until it is reviewed: no trajectory format,
-no writer, no store and no migration. A recorded trajectory is evidence of an
+**Architecture proposed, revised after three reviews; implementation in
+review.** ADR-021 proposes T1–T11. The implementation (core contracts in
+`xaytune.core.trajectory`, the local writer, store, verification and
+reconciliation in `xaytune.trajectory`, and recording and replay in the
+scripted runner) adds no migration and no table. A recorded trajectory is evidence of an
 execution, not proof that it can be reproduced.
 
 ```text

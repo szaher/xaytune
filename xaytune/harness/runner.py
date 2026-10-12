@@ -54,8 +54,10 @@ import fcntl
 import json
 import os
 import tempfile
+import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -84,6 +86,13 @@ from xaytune.core.execution import DependencySpec, ResourceRequirements
 from xaytune.core.fingerprint import fingerprint
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel, thaw
 from xaytune.core.support import SupportResult
+from xaytune.core.trajectory import (
+    TRAJECTORY_SCHEMA,
+    TrajectoryAttribution,
+    TrajectoryRecordingSpec,
+    TrajectoryTask,
+    WriterIdentity,
+)
 from xaytune.harness.compiler import (
     HARNESS_COMPILER_API,
     SCRIPTED_RUNNER,
@@ -91,7 +100,20 @@ from xaytune.harness.compiler import (
     TOKEN_COUNTER,
     scripted_harness_refusals,
 )
+from xaytune.harness.recording import EventRecorder, messages_digest
 from xaytune.harness.templates import render_template, template_refusals
+from xaytune.trajectory._files import UnsafePathError, device_of, digest_of, same_file
+from xaytune.trajectory.reconcile import reconcile_attempt
+from xaytune.trajectory.sealing import read_manifest
+from xaytune.trajectory.store import LocalTrajectoryStore
+from xaytune.trajectory.verify import verify_publication, verify_trajectory
+from xaytune.trajectory.writer import (
+    WRITER,
+    Redactor,
+    SecretDetectedError,
+    TrajectoryRecordingError,
+    TrajectoryWriter,
+)
 
 __all__ = [
     "RUNNER",
@@ -108,6 +130,7 @@ __all__ = [
     "ScriptExhaustedError",
     "ScriptedHarnessModel",
     "ScriptedHarnessRunner",
+    "UnattestedResultError",
     "run_scripted_harness",
 ]
 
@@ -259,6 +282,17 @@ class HarnessRunConflictError(RuntimeError):
     """A different request's result is already published where this one would go."""
 
 
+class UnattestedResultError(HarnessRunConflictError):
+    """A recording run's result is published, but no sealed, verified trajectory attests it.
+
+    Never answered by executing again: the result is committed (ADR-021 T4).
+    """
+
+    def __init__(self, reasons: tuple[str, ...]) -> None:
+        self.reasons = reasons
+        super().__init__("the published result is not attested: " + "; ".join(reasons))
+
+
 # ---- the runner -------------------------------------------------------------------------------
 
 
@@ -280,8 +314,17 @@ class ScriptedHarnessRunner:
         toolbox: HarnessToolbox,
         authorized_tools: Collection[str],
         cancel: CancelSignal | None = None,
+        trajectory_secrets: Iterable[str] = (),
+        redactor: Redactor | None = None,
     ) -> HarnessRunResult:
         """Run *spec* once, or return the result already published for it.
+
+        A spec that declares a trajectory output is recorded (ADR-021): every
+        start is durable before its call, the evidence is staged and verified
+        before the result is published, and a published result is returned
+        only once its attempt is sealed ``complete`` and verified.
+        *trajectory_secrets* is the registered-secret set, frozen when the
+        attempt opens.
 
         Raises:
             HarnessRunRefusedError: Before anything executes, with every
@@ -291,6 +334,10 @@ class ScriptedHarnessRunner:
                 one pinned.
             HarnessRunConflictError: If the output holds a different
                 request's result, or a result that does not match this spec.
+            UnattestedResultError: If a recording run's published result is
+                not attested by a sealed, verified trajectory.
+            TrajectoryRecordingError: If a recording run could not record. No
+                result was published unless the message says it was committed.
         """
         reasons = list(_spec_refusals(spec))
         try:
@@ -317,7 +364,18 @@ class ScriptedHarnessRunner:
         expected = _attribution(spec)
         location = Path(spec.outputs[0].uri)
         location.parent.mkdir(parents=True, exist_ok=True)
+        recording = _recording_of(spec)
         with _exclusive(location):
+            if recording is not None:
+                return _recorded_run(
+                    spec,
+                    recording,
+                    location,
+                    expected,
+                    _Run(spec, model, toolbox, cancel),
+                    trajectory_secrets,
+                    redactor,
+                )
             if location.exists():
                 return _published(location, expected)
             result = _Run(spec, model, toolbox, cancel).result(expected["request_digest"])
@@ -347,11 +405,14 @@ def _spec_refusals(spec: AgentExecutionSpec) -> tuple[str, ...]:
     """Every requirement of *spec* this runner does not implement (ADR-019 E9)."""
     reasons: list[str] = []
     expected = {"compiler_api": HARNESS_COMPILER_API, "token_counter": TOKEN_COUNTER}
-    if dict(spec.config) != expected:
+    config = dict(spec.config)
+    block = config.pop("trajectory", None)
+    if config != expected:
         reasons.append(
             f"config must be exactly {expected}: this runner speaks one compiler API and "
             f"counts tokens one way"
         )
+    reasons.extend(_recording_refusals(spec, block))
     if spec.entrypoint != SCRIPTED_RUNNER_ENTRYPOINT:
         reasons.append("the entrypoint is not this runner's")
     if spec.arguments:
@@ -374,7 +435,8 @@ def _spec_refusals(spec: AgentExecutionSpec) -> tuple[str, ...]:
         reasons.append(f"the only capability this runner provides is {SCRIPTED_RUNNER!r}")
     if spec.telemetry.heartbeat_seconds is not None or spec.telemetry.endpoint is not None:
         reasons.append("telemetry heartbeats and endpoints are not supported: one result only")
-    if len(spec.outputs) != 1 or spec.outputs[0].kind != AGENT_RUN_RESULT_SCHEMA:
+    results = [o for o in spec.outputs if o.kind == AGENT_RUN_RESULT_SCHEMA]
+    if len(results) != 1 or spec.outputs[0].kind != AGENT_RUN_RESULT_SCHEMA:
         reasons.append(f"the spec must declare exactly one {AGENT_RUN_RESULT_SCHEMA} output")
     else:
         location = PurePosixPath(spec.outputs[0].uri)
@@ -387,6 +449,166 @@ def _spec_refusals(spec: AgentExecutionSpec) -> tuple[str, ...]:
             template_refusals(template.syntax, spec.text_of(template.content), template.variables)
         )
     return tuple(dict.fromkeys(reasons))
+
+
+# ---- recording (ADR-021 T9) ---------------------------------------------------------------------
+
+RECORDING_RUNNER = WriterIdentity(name=RUNNER.name, version=RUNNER.version)
+
+
+def _recording_refusals(spec: AgentExecutionSpec, block: Any) -> list[str]:
+    """Every way *spec* is neither the H03 shape nor the recording shape (T9)."""
+    outputs = spec.outputs
+    trajectories = [o for o in outputs if o.kind == TRAJECTORY_SCHEMA]
+    if block is None and not trajectories:
+        if len(outputs) != 1:
+            return [f"the spec must declare exactly one {AGENT_RUN_RESULT_SCHEMA} output"]
+        return []
+    reasons: list[str] = []
+    if block is None:
+        reasons.append("a trajectory output needs config['trajectory'], its recording spec")
+    if not trajectories:
+        reasons.append("config['trajectory'] needs a trajectory output to record into")
+    if len(trajectories) > 1:
+        reasons.append("a spec records at most one trajectory")
+    if (
+        len(outputs) != 2
+        or outputs[0].kind != AGENT_RUN_RESULT_SCHEMA
+        or outputs[1].kind != TRAJECTORY_SCHEMA
+        or outputs[1].name != "trajectory"
+    ):
+        reasons.append(
+            "a recording spec declares exactly two outputs: the result, then the trajectory"
+        )
+    else:
+        directory = PurePosixPath(outputs[1].uri)
+        if not directory.is_absolute() or ".." in directory.parts:
+            reasons.append("the trajectory output must be an absolute local path without '..'")
+    if block is not None:
+        try:
+            recording = TrajectoryRecordingSpec.model_validate(thaw(block))
+        except ValidationError:
+            reasons.append(
+                "config['trajectory'] is not a valid "
+                "xaytune.agent-trajectory-recording/v1alpha1 recording spec"
+            )
+        else:
+            if recording.writer != WRITER:
+                reasons.append("the recording spec names a trajectory writer this runner lacks")
+    return reasons
+
+
+def _recording_of(spec: AgentExecutionSpec) -> TrajectoryRecordingSpec | None:
+    block = spec.config.get("trajectory")
+    return None if block is None else TrajectoryRecordingSpec.model_validate(thaw(block))
+
+
+def _trajectory_attribution(spec: AgentExecutionSpec) -> TrajectoryAttribution:
+    return TrajectoryAttribution(
+        request_digest=agent_run_request_digest(spec),
+        execution_fingerprint=agent_execution_fingerprint(spec),
+        harness_fingerprint=spec.harness_fingerprint,
+        task=TrajectoryTask(task_id=spec.task.task_id),
+        seed=spec.seed,
+        replicate=spec.replicate,
+    )
+
+
+def _recorded_run(
+    spec: AgentExecutionSpec,
+    recording: TrajectoryRecordingSpec,
+    location: Path,
+    expected: Mapping[str, Any],
+    run: _Run,
+    secrets: Iterable[str],
+    redactor: Redactor | None,
+) -> HarnessRunResult:
+    """Run and record one attempt instance, committing only verified evidence (T4)."""
+    store = LocalTrajectoryStore(Path(spec.outputs[1].uri))
+    if os.path.lexists(location):
+        return _attested(store, location, expected)
+    if device_of(location.parent) != device_of(store.root):
+        # Checked before the attempt opens: a link could never publish the result.
+        raise UnsafePathError("the result and the trajectory are on different filesystems")
+    writer = TrajectoryWriter.open(
+        store,
+        attribution=_trajectory_attribution(spec),
+        recording=recording,
+        runner=RECORDING_RUNNER,
+        secrets=secrets,
+        redactor=redactor,
+    )
+    try:
+        run.recorder = EventRecorder(writer)
+        result = run.result(expected["request_digest"])
+        writer.stage(_result_bytes(result))
+    except SecretDetectedError as error:
+        writer.abandon("secret-detected", error_code="secret-detected", role=error.role)
+        raise
+    except TrajectoryRecordingError:
+        writer.abandon("recording-failed", error_code="recording-failed")
+        raise
+    except BaseException:
+        writer.abandon("recording-failed")
+        raise
+    try:
+        published = writer.commit(location)
+    except BaseException as error:
+        if not writer.committed:
+            writer.abandon("recording-failed", error_code="recording-failed")
+            raise
+        # The link exists although a step after it failed: past the commit
+        # point, so the attempt is left for reconciliation, never abandoned.
+        writer.close()
+        if not isinstance(error, Exception):
+            raise
+        raise TrajectoryRecordingError(
+            "the result was committed but its trajectory was not sealed; "
+            "reconciliation completes it, and replay waits for that"
+        ) from error
+    if not published:
+        writer.abandon("result-published-by-another-attempt")
+        return _attested(store, location, expected)
+    try:
+        writer.seal_complete(location)
+    except Exception as error:
+        writer.close()
+        raise TrajectoryRecordingError(
+            "the result was committed but its trajectory was not sealed; "
+            "reconciliation completes it, and replay waits for that"
+        ) from error
+    return result
+
+
+def _attested(
+    store: LocalTrajectoryStore, location: Path, expected: Mapping[str, Any]
+) -> HarnessRunResult:
+    """The published result, only if its winning attempt is sealed complete and verified (T4)."""
+    existing = _published(location, expected)
+    winner = next((p for p in store.attempts() if same_file(location, p.result)), None)
+    if winner is None:
+        raise UnattestedResultError(("no attempt instance published this result",))
+    manifest = read_manifest(winner.manifest)
+    if manifest is None:
+        reconcile_attempt(store, winner, location)
+        manifest = read_manifest(winner.manifest)
+    if manifest is None:
+        raise UnattestedResultError(("the winning attempt is still being recorded",))
+    if manifest.completeness != "complete":
+        raise UnattestedResultError(
+            (f"the winning attempt is sealed partial ({manifest.abandonment})",)
+        )
+    problems = verify_trajectory(store, winner, manifest) + verify_publication(
+        winner, manifest, location
+    )
+    if problems:
+        raise UnattestedResultError(problems)
+    return existing
+
+
+def _result_bytes(result: HarnessRunResult) -> bytes:
+    """The exact bytes a result is published as: the same for recorded and unrecorded runs."""
+    return result.model_dump_json(indent=2).encode("utf-8")
 
 
 # ---- one run ------------------------------------------------------------------------------------
@@ -407,6 +629,22 @@ def _message_tokens(message: HarnessMessage) -> int:
 def _first_words(text: str, limit: int) -> str:
     words = text.split()
     return text if len(words) <= limit else " ".join(words[:limit])
+
+
+@dataclass(frozen=True)
+class _Invoked:
+    """What one tool call did: what the model is shown, and what a trajectory records."""
+
+    outcome: Literal["executed", "refused", "failed"]
+    shown: str
+    reason: str | None = None
+    output: str | None = None
+    truncated: bool = False
+    error_class: str | None = None
+
+
+def _elapsed_ms(began: float) -> int:
+    return max(0, int((time.monotonic() - began) * 1000))
 
 
 class _Run:
@@ -463,11 +701,25 @@ class _Run:
         self.context_truncations = 0
         self.prompt_tokens = 0
         self.output_tokens = 0
+        self.recorder: EventRecorder | None = None
 
     def result(self, request_digest: str) -> HarnessRunResult:
-        termination = self._execute()
         spec = self.spec
-        return HarnessRunResult(
+        if self.recorder is not None:
+            harness = self.harness
+            self.recorder.run_started(
+                attribution=_trajectory_attribution(spec),
+                runner=RECORDING_RUNNER,
+                writer=WRITER,
+                effective_tools=spec.effective_tools,
+                configuration={
+                    "context": harness.context.model_dump(mode="json"),
+                    "stopping": harness.stopping.model_dump(mode="json"),
+                    "generation": harness.model.generation.model_dump(mode="json"),
+                },
+            )
+        termination = self._execute()
+        result = HarnessRunResult(
             request_digest=request_digest,
             execution_fingerprint=agent_execution_fingerprint(spec),
             harness_fingerprint=spec.harness_fingerprint,
@@ -491,6 +743,15 @@ class _Run:
             total_tokens=self.prompt_tokens + self.output_tokens,
             token_counter=TOKEN_COUNTER,
         )
+        if self.recorder is not None:
+            self.recorder.run_terminated(
+                termination=termination,
+                completed=result.completed,
+                answer=result.answer,
+                error_class=result.error,
+                result_digest=digest_of(_result_bytes(result)),
+            )
+        return result
 
     def _cancelled(self) -> bool:
         return self.cancel is not None and self.cancel.is_set()
@@ -512,18 +773,47 @@ class _Run:
                 tools=self.views,
                 generation=self.harness.model.generation,
             )
+            recorder = self.recorder
+            start = (
+                recorder.model_call_started(
+                    turn=self.turns,
+                    request=request,
+                    messages=messages,
+                    context_rule=self.harness.context.selection.kind,
+                )
+                if recorder is not None
+                else -1
+            )
+            began = time.monotonic()
             try:
                 reply = self.model.respond(request, turn=self.turns)
                 if not isinstance(reply, HarnessModelReply):
                     reply = HarnessModelReply.model_validate(reply)
             except Exception as error:
                 self.error = type(error).__name__
+                if recorder is not None:
+                    recorder.model_call_failed(
+                        start, error_class=self.error, latency_ms=_elapsed_ms(began)
+                    )
                 return "model-error"
             self.turns += 1
 
             text = self._bounded_output(reply.text)
+            output_tokens = _tokens(text) + sum(_call_tokens(c) for c in reply.tool_calls)
             self.prompt_tokens += prompt
-            self.output_tokens += _tokens(text) + sum(_call_tokens(c) for c in reply.tool_calls)
+            self.output_tokens += output_tokens
+            finished = (
+                recorder.model_call_replied(
+                    start,
+                    reply=reply,
+                    prompt_tokens=prompt,
+                    output_tokens=output_tokens,
+                    output_truncated=text != reply.text,
+                    latency_ms=_elapsed_ms(began),
+                )
+                if recorder is not None
+                else -1
+            )
             if (
                 stopping.max_total_tokens is not None
                 and self.prompt_tokens + self.output_tokens > stopping.max_total_tokens
@@ -545,8 +835,31 @@ class _Run:
                 if budget is not None and self.tool_calls >= budget:
                     return "tool-call-budget"
                 self.tool_calls += 1
-                result = self._invoke(call)
-                turn.append(HarnessMessage(role="tool", content=result, tool_call_id=call.call_id))
+                tool = self.enabled.get(call.tool)
+                started = (
+                    recorder.tool_call_started(
+                        finished,
+                        call=call,
+                        version=tool.version if tool is not None else None,
+                        arguments=thaw(call.arguments),
+                    )
+                    if recorder is not None
+                    else -1
+                )
+                invoked = self._invoke(call)
+                if recorder is not None:
+                    recorder.tool_call_finished(
+                        started,
+                        outcome=invoked.outcome,
+                        reason=invoked.reason,
+                        output=invoked.output,
+                        shown=invoked.shown,
+                        truncated=invoked.truncated,
+                        error_class=invoked.error_class,
+                    )
+                turn.append(
+                    HarnessMessage(role="tool", content=invoked.shown, tool_call_id=call.call_id)
+                )
 
     def _context(self) -> tuple[HarnessMessage, ...] | None:
         """The messages this call is shown: selected, then bounded. ``None`` if they cannot fit."""
@@ -557,15 +870,45 @@ class _Run:
             if isinstance(selection, FullHistory)
             else self.history[-selection.turns :]
         )
+
+        def shown(kept: list[list[HarnessMessage]]) -> tuple[HarnessMessage, ...]:
+            return (self.task, *(message for turn in kept for message in turn))
+
+        if self.recorder is not None and len(turns) < len(self.history):
+            self.recorder.context_changed(
+                rule="recent-turns",
+                dropped=len(self.history) - len(turns),
+                before=messages_digest(shown(self.history)),
+                after=messages_digest(shown(turns)),
+            )
+        selected, dropped = turns, 0
         while True:
-            messages = (self.task, *(message for turn in turns for message in turn))
+            messages = shown(turns)
             size = self.fixed_tokens + sum(_message_tokens(m) for m in messages)
             if size <= policy.max_context_tokens:
+                self._truncated(selected, turns, dropped)
                 return messages
             if policy.overflow == "fail" or not turns:
+                self._truncated(selected, turns, dropped)
                 return None
             turns = turns[1:]
+            dropped += 1
             self.context_truncations += 1
+
+    def _truncated(
+        self,
+        selected: list[list[HarnessMessage]],
+        kept: list[list[HarnessMessage]],
+        dropped: int,
+    ) -> None:
+        if self.recorder is None or not dropped:
+            return
+        self.recorder.context_changed(
+            rule="truncate-oldest",
+            dropped=dropped,
+            before=messages_digest((self.task, *(m for turn in selected for m in turn))),
+            after=messages_digest((self.task, *(m for turn in kept for m in turn))),
+        )
 
     def _bounded_output(self, text: str) -> str:
         """*text* cut at the first stop sequence, then to ``max_output_tokens``."""
@@ -575,29 +918,39 @@ class _Run:
             text = text[: min(cuts)]
         return _first_words(text, generation.max_output_tokens)
 
-    def _invoke(self, call: HarnessToolCall) -> str:
-        """Run one tool call if it may run; otherwise say why not. The model sees the text."""
+    def _invoke(self, call: HarnessToolCall) -> _Invoked:
+        """Run one tool call if it may run; otherwise say why not. The model sees ``shown``."""
         tool = self.enabled.get(call.tool)
         if tool is None:
             self.refused_tool_calls += 1
-            return "error: that tool is not enabled for this harness"
+            return _Invoked(
+                "refused", "error: that tool is not enabled for this harness", "not-enabled"
+            )
         arguments = thaw(call.arguments)
         violations = schema_violations(tool.input_schema, arguments)
         if violations:
             self.refused_tool_calls += 1
-            return "error: invalid arguments: " + "; ".join(violations)
+            return _Invoked(
+                "refused", "error: invalid arguments: " + "; ".join(violations), "invalid-arguments"
+            )
         function = self.toolbox.get(tool.id, tool.version)
         assert function is not None  # refused before a run otherwise
         try:
             output = function(arguments)
         except Exception as error:
             self.failed_tool_calls += 1
-            return f"error: the tool failed ({type(error).__name__})"
+            name = type(error).__name__
+            return _Invoked(
+                "failed", f"error: the tool failed ({name})", "tool-raised", error_class=name
+            )
         if not isinstance(output, str):
             self.failed_tool_calls += 1
-            return "error: the tool returned something other than text"
+            return _Invoked(
+                "failed", "error: the tool returned something other than text", "non-text-result"
+            )
         limit = self.harness.context.max_tool_result_tokens
-        return output if limit is None else _first_words(output, limit)
+        shown = output if limit is None else _first_words(output, limit)
+        return _Invoked("executed", shown, output=output, truncated=shown != output)
 
 
 # ---- publication ---------------------------------------------------------------------------
@@ -670,7 +1023,7 @@ def _publish(
     fd, temporary = tempfile.mkstemp(dir=location.parent, prefix=".agent-run.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as handle:
-            handle.write(result.model_dump_json(indent=2).encode("utf-8"))
+            handle.write(_result_bytes(result))
             handle.flush()
             os.fsync(handle.fileno())
         try:

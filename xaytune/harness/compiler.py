@@ -57,11 +57,13 @@ from xaytune.core.execution import (
 )
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.support import SupportResult
+from xaytune.core.trajectory import TRAJECTORY_SCHEMA, TrajectoryRecordingSpec
 from xaytune.harness.templates import RENDERABLE_SYNTAXES, template_refusals
 
 __all__ = [
     "HARNESS_COMPILER_API",
     "RESULT_FILE",
+    "TRAJECTORY_DIRECTORY",
     "SCRIPTED_MODEL_NAME",
     "SCRIPTED_PROVIDER",
     "SCRIPTED_RUNNER",
@@ -88,6 +90,7 @@ SCRIPTED_RUNNER_ENTRYPOINT: Final = PythonModuleEntrypoint(
 )
 """In-process: no runtime can submit a harness workload yet (ADR-019)."""
 RESULT_FILE: Final = "agent-run.json"
+TRAJECTORY_DIRECTORY: Final = "trajectory"
 
 _TOOL_SCHEMA_DIALECT = "xaytune.agent-schema-subset/v1"
 
@@ -135,6 +138,10 @@ class HarnessCompilationContext(FrozenDomainModel):
     content: ResolvedHarnessContent
     output_uri: str
     """An absolute local directory; the run's result is published inside it."""
+
+    trajectory: TrajectoryRecordingSpec | None = None
+    """Record the run's trajectory (ADR-021). ``None``, the default, compiles exactly
+    the H03 spec, byte for byte: the same fingerprint and the same request digest."""
 
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
@@ -276,16 +283,8 @@ class ReferenceHarnessCompiler:
                 replicate=context.replicate,
                 effective_tools=harness.tools.enabled,
                 entrypoint=SCRIPTED_RUNNER_ENTRYPOINT,
-                config=FrozenDict(
-                    {"compiler_api": HARNESS_COMPILER_API, "token_counter": TOKEN_COUNTER}
-                ),
-                outputs=(
-                    ArtifactOutput(
-                        name="result",
-                        uri=str(output_dir / RESULT_FILE),
-                        kind=AGENT_RUN_RESULT_SCHEMA,
-                    ),
-                ),
+                config=FrozenDict(_config(context.trajectory)),
+                outputs=_outputs(output_dir, context.trajectory),
                 telemetry=TelemetryContract(protocol_version=AGENT_TELEMETRY_V1ALPHA1),
                 required_capabilities=CapabilityRequirements(
                     extensions=FrozenDict({"agent_runner": SCRIPTED_RUNNER})
@@ -295,6 +294,31 @@ class ReferenceHarnessCompiler:
             raise UnsupportedHarnessError(
                 self.descriptor.name, ("the compiled spec is inconsistent",)
             ) from error
+
+
+def _config(recording: TrajectoryRecordingSpec | None) -> dict[str, object]:
+    config: dict[str, object] = {
+        "compiler_api": HARNESS_COMPILER_API,
+        "token_counter": TOKEN_COUNTER,
+    }
+    if recording is not None:
+        config["trajectory"] = recording.model_dump(mode="json")
+    return config
+
+
+def _outputs(
+    output_dir: PurePosixPath, recording: TrajectoryRecordingSpec | None
+) -> tuple[ArtifactOutput, ...]:
+    """The result, then -- only when recording -- the trajectory (ADR-021 T9)."""
+    result = ArtifactOutput(
+        name="result", uri=str(output_dir / RESULT_FILE), kind=AGENT_RUN_RESULT_SCHEMA
+    )
+    if recording is None:
+        return (result,)
+    trajectory = ArtifactOutput(
+        name="trajectory", uri=str(output_dir / TRAJECTORY_DIRECTORY), kind=TRAJECTORY_SCHEMA
+    )
+    return (result, trajectory)
 
 
 def _text_or_none(content: ResolvedHarnessContent, item: InlineContent | ContentRef) -> str | None:

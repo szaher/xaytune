@@ -25,8 +25,8 @@
 > (`Proposed`). It covers the trajectory event schema, attribution and
 > causality, chunk and manifest integrity, completeness and replay levels,
 > and redaction, access and retention. A recorded trajectory is evidence of
-> an execution, not proof that it can be reproduced. Nothing is implemented
-> yet.
+> an execution, not proof that it can be reproduced. Its local, single-host
+> implementation is in review.
 >
 > Apart from what H02, H03 and H04 implement, the names and schemas below are
 > conceptual contracts, not public APIs or persistence schemas. The H track in the

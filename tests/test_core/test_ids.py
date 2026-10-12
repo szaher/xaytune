@@ -10,6 +10,7 @@ from xaytune.core.ids import (
     ActionId,
     AgentInvocationId,
     ArtifactId,
+    AttemptInstanceId,
     CheckpointId,
     ControllerRequestId,
     DecisionId,
@@ -40,6 +41,7 @@ ALL_ID_TYPES = [
     (CheckpointId, "ckpt_"),
     (DecisionId, "decision_"),
     (EventId, "event_"),
+    (AttemptInstanceId, "ainst_"),
 ]
 
 

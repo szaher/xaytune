@@ -45,7 +45,10 @@ ArtifactKind = Literal[
     "provenance_bundle",
     "profile",
     "checkpoint_state",
+    "agent_trajectory",
 ]
+"""``agent_trajectory`` is a sealed harness trajectory manifest (ADR-021 T10): an
+execution record, told apart from a ``provenance_bundle`` without opening it."""
 
 
 class _Frozen(FrozenDomainModel):

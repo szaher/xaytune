@@ -29,6 +29,7 @@ __all__ = [
     "ActionId",
     "AgentInvocationId",
     "ArtifactId",
+    "AttemptInstanceId",
     "CheckpointId",
     "ControllerRequestId",
     "DecisionId",
@@ -335,3 +336,16 @@ class OperationId(TypedId):
 
     __slots__ = ()
     prefix = "op_"
+
+
+class AttemptInstanceId(TypedId):
+    """Identifies one physical execution of a harness run: one trajectory (ADR-021 T3).
+
+    Minted by the trajectory writer and persisted before anything else happens,
+    so it is unique however a request is retried, crashed or raced. It is
+    deliberately not derived from the request digest, the replicate or a durable
+    attempt ordinal: each of those is shared by, or unknown to, some executions.
+    """
+
+    __slots__ = ()
+    prefix = "ainst_"

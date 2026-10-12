@@ -116,7 +116,8 @@ matter of record rather than of review:
 | ADR-018 — agent harness candidates | the H02–H12 harness track; accepted 2026-10-11 with H02's D1–D10 as merged in #74 |
 | ADR-019 — harness compilation and execution | H03; E1–E10 accepted 2026-10-11 (#75). Its M1–M6 migration strategy is proposed only, and is decided by the durable follow-up |
 | ADR-020 — pinned benchmark and task contracts | H04; B1–B9 accepted 2026-10-11 (#76). Trajectories (H05), evaluation wiring and scoring (H06) and persistence stay deferred |
-| ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77). Acceptance is architectural: the implementation (#78) is reviewed on its own. Scoring (H06) and persistence stay deferred |
+| ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77), implemented in #78 (`fd24763`). Scoring (H06) and persistence stay deferred |
+| ADR-022 — harness evaluation, scoring and comparison | H06; V1–V13 accepted 2026-10-12 (#79). Acceptance is architectural: the implementation is reviewed on its own. The durable path, decision-engine integration and H07 stay deferred |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
@@ -153,7 +154,7 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** ADR-018 and ADR-019
-(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 (H05's T1–T11) was accepted on 2026-10-12. ADR-004 was accepted on
+(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 (H05's T1–T11) was accepted on 2026-10-12. ADR-022 (H06's V1–V13) was accepted on 2026-10-12. ADR-004 was accepted on
 2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
@@ -2595,8 +2596,8 @@ Not here:
 
 ### H05 — Trajectory artifacts and provenance
 
-**Architecture accepted (2026-10-12, #77); implementation in review.**
-ADR-021 decides T1–T11. The implementation (core contracts in
+**Complete:** architecture #77 (`c07c4af`), implementation #78
+(`fd24763`). ADR-021 T1–T11 were accepted on 2026-10-12. The implementation (core contracts in
 `xaytune.core.trajectory`, the local writer, store, verification and
 reconciliation in `xaytune.trajectory`, and recording and replay in the
 scripted runner) adds no migration and no table. A recorded trajectory is evidence of an
@@ -2660,3 +2661,62 @@ Not here:
 - scoring (H06);
 - retention enforcement;
 - multi-tenant access control.
+
+### H06 — Harness evaluation, scoring and comparison
+
+**Architecture accepted (2026-10-12, #79); implementation not started.**
+ADR-022 decides V1–V13, accepted after two revisions. The implementation is
+a separate PR. A score is a
+measurement of evidence under a declared rule. Two scores say something
+about two harnesses only when C1–C4 all hold, and even then a v1
+difference is a provisional direction, never a statistical claim.
+
+```text
+verified suite + seed ─assign_tasks→ verified TaskAssignment
+  each task: bind_task ─compile→ AgentExecutionSpec (task-bound) ─run→ result + sealed trajectory
+assemble_evidence ─verify_run_evidence→ HarnessRunEvidence     one per execution replicate
+EvaluationRun(harness-outcome | harness-judge) → EvaluationResult + HarnessEvaluationReport
+summarize (replicate-mean/v1) → per-metric estimate, execution SE, judge SD
+comparability (C1–C4) → compare (paired-difference/v1) → HarnessComparisonReport
+```
+
+- **Integration, not a new engine:** two evaluators on the existing
+  `Evaluator` protocol, measured as `EvaluationRun`/`EvaluationAttempt`
+  through a local in-process driver until the durable harness path exists.
+- **Task binding** through `config["task"]`: H03's unbound specs and their
+  digests are unchanged; tasks with attachments are refused in v1.
+- **The subject** is one execution replicate's verified evidence: every
+  attempt for each assigned task, read from the store. An entry is
+  `attested`, or `no-attested-result` with its outcome absent and its spend
+  kept. A false claim of a complete outcome is refused, never downgraded.
+  One operation, `verify_run_evidence`, rechecks the assignment,
+  attribution, attempt membership (from the store) and integrity, at
+  assembly and in every evaluator.
+- **Independence:** references are resolved only by the evaluator. Raw
+  references, judge requests and replies, and reference-dependent text are
+  restricted. Reference-derived scores are released under a disclosure
+  policy (`aggregate` by default). No provider receives per-task
+  reference-derived scores unless H07 grants it. Sending a reference to a
+  judge needs an explicit `ReferenceEgressGrant`.
+- **Metrics** come from a versioned catalog with units. Absence is
+  recorded with a reason and never written as zero. Cost, cached and
+  reasoning tokens and end-to-end time are absent in v1.
+- **Variance:** execution replicates, retries and judging replicates are
+  kept apart; R = 1 has unknown uncertainty, not zero.
+- **Comparability:** C3 is an equal `EvaluationFingerprint`. C4 is equal
+  declared execution facets, never an inferred fingerprint. Unpaired
+  designs are refused.
+- **Multi-objective:** a declared objective vector with per-metric verdicts
+  and a dominance relation, never scalarized. A verdict is an exploratory
+  decision rule: `favors-a`/`favors-b` needs R ≥ 3 and a difference above
+  `max(min_effect, k·se)`. It is never called significant. `Objective` and the threshold
+  engines are unchanged.
+- **No migration;** `EvaluationSpec`, `MetricResult` and every existing
+  fingerprint are unchanged.
+
+Not here:
+- the durable path and budget-ledger settlement;
+- connecting harness evidence to the decision engine (H07 or later);
+- search and mutation (H07);
+- provider usage, cost, and real latency (H08–H11);
+- unpaired designs, formal inference and multiple-comparison control.

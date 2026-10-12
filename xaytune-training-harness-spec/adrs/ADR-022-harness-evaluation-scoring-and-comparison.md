@@ -2,10 +2,21 @@
 
 ## Status
 
-Proposed — 2026-10-12, with H06.
+Accepted — 2026-10-12. Proposed 2026-10-12 with H06, and revised twice
+after architecture reviews of
+[PR #79](https://github.com/szaher/xaytune/pull/79) at `ff0d2ab` and
+`b46b541`.
 
-Nothing here is implemented. It gates the H06 implementation, which starts
-only after this ADR is reviewed and accepted, and is reviewed on its own.
+The project owner approved decisions **V1–V13** at `1a22f2c`, including
+the seven decisions recorded in §"Decisions on the review's questions".
+This status records architectural acceptance only. The H06 implementation
+is a separate PR, reviewed on its own, and adds nothing to this ADR's
+decisions.
+
+**Implementation safeguard noted at acceptance** (no decision changed): an
+evidence entry for an executed task lists at least one attempt.
+`verify_run_evidence` refuses an empty attempt list, which is never a
+verified execution (V3, G3g).
 
 **Revision 2** (after the architecture review of
 [PR #79](https://github.com/szaher/xaytune/pull/79) at `ff0d2ab`). The
@@ -222,7 +233,9 @@ independent sources, and refuses, listing every reason:
   - the assignment, by `verify_assignment` against the suite, the sampling
     policy and the seed;
   - one entry per assigned task, in assignment order, none missing or
-    repeated.
+    repeated;
+  - at least one attempt per entry. An empty attempt list is refused,
+    never read as a verified execution (G3g).
 - **Complete attempt membership, read from the store, not the record:**
   - it lists every attempt instance in the store whose attribution names
     each task's request digest. The entry's attempt set must **equal** that
@@ -720,6 +733,7 @@ The implementation must handle each scenario as stated:
 | G3d | A partial attempt fails `verify_trajectory` | Assembly refuses. A legitimate failure needs verifiable evidence too |
 | G3e | The only attempt is `post-commit-evidence-lost`, and its recorded prefix passes `validate_manifest` and `verify_trajectory` | `no-attested-result`. Its `unattested_result` is never read or scored |
 | G3e′ | The only attempt is `post-commit-evidence-lost`, and its prefix fails verification | Refused under G3d. Evidence loss is not an authorized integrity exception |
+| G3g | An entry lists no attempts, in either state | `verify_run_evidence` refuses it. An empty attempt list is not an execution |
 | G3f | After assembly, an evidence record is edited to leave out a retry, and its digest recomputed | `verify_run_evidence` refuses it: the store lists an attempt the record omits. The evaluator measures nothing |
 | G4 | A sealed chunk is edited after assembly | `verify_run_evidence`, run by the evaluator, refuses the subject, naming the trajectory |
 | G5 | An evidence record claims another task fingerprint, cohort or seed than its trajectories | Assembly refuses, listing every reason |
@@ -754,7 +768,8 @@ Each criterion needs positive tests, and the **negative tests listed**.
    - positive: an `attested` entry; a valid `no-attested-result` entry
      whose outcome is absent and whose spend is counted (G3); a verified
      `post-commit-evidence-lost` prefix (G3e);
-   - negative: an invalid claim of a complete outcome (G3a); a hidden
+   - negative: an entry with no attempts (G3g); an invalid claim of a
+     complete outcome (G3a); a hidden
      result (G3b); an omitted or open attempt (G3c); an unverifiable
      partial attempt (G3d); an unverifiable `post-commit-evidence-lost`
      prefix (G3e′); G5; a missing, repeated or reordered task; an edited

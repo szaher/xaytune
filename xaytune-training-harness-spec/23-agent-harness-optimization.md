@@ -1,7 +1,7 @@
 # Agent Harness Optimization
 
-> **H02–H05 complete; H06 (evaluation and scoring) proposed; no durable
-> execution.**
+> **H02–H05 complete; H06 (evaluation and scoring) architecture accepted;
+> no durable execution.**
 > H02 (#74) added `AgentHarnessSpec`, `HarnessFingerprint` v1 and the
 > `ExperimentCandidate` envelope. [ADR-018](adrs/ADR-018-agent-harness-candidates.md)
 > was accepted on 2026-10-11 with its D1–D10.
@@ -28,9 +28,9 @@
 > an execution, not proof that it can be reproduced. Its local, single-host
 > implementation merged in #78.
 >
-> H06's architecture is proposed in
+> H06's architecture is decided in
 > [ADR-022](adrs/ADR-022-harness-evaluation-scoring-and-comparison.md)
-> (`Proposed`). It covers task wiring, the evaluation subject, evaluator
+> V1–V13, accepted on 2026-10-12. It covers task wiring, the evaluation subject, evaluator
 > independence, the metric catalog and missing values, replicate
 > aggregation and uncertainty, and comparability C3 and C4. Nothing is
 > implemented yet.

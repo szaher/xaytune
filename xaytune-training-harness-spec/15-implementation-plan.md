@@ -117,13 +117,12 @@ matter of record rather than of review:
 | ADR-019 — harness compilation and execution | H03; E1–E10 accepted 2026-10-11 (#75). Its M1–M6 migration strategy is proposed only, and is decided by the durable follow-up |
 | ADR-020 — pinned benchmark and task contracts | H04; B1–B9 accepted 2026-10-11 (#76). Trajectories (H05), evaluation wiring and scoring (H06) and persistence stay deferred |
 | ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77), implemented in #78 (`fd24763`). Scoring (H06) and persistence stay deferred |
+| ADR-022 — harness evaluation, scoring and comparison | H06; V1–V13 accepted 2026-10-12 (#79). Acceptance is architectural: the implementation is reviewed on its own. The durable path, decision-engine integration and H07 stay deferred |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
 
-| ADR | Blocks |
-|---|---|
-| ADR-022 — harness evaluation, scoring and comparison | H06's task binding, run evidence, harness evaluators, metric catalog, replicate summary and comparison; does not gate Phase 5/6 |
+None. Every ADR is accepted, ratified or superseded.
 
 The durable harness path (ADR-019 §M1–M6) is a proposed strategy, not an ADR
 decision. It gets its own review before that work starts.
@@ -155,7 +154,7 @@ are written, and a repository built against assumptions ADR-005 then contradicts
 has to be rewritten — or, more likely, kept.
 
 **No ADR now blocks work that is ready to start.** ADR-018 and ADR-019
-(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 (H05's T1–T11) was accepted on 2026-10-12. ADR-022 is proposed with H06. ADR-004 was accepted on
+(E1–E10) were accepted on 2026-10-11, and ADR-020 (H04's B1–B9) the same day. ADR-021 (H05's T1–T11) was accepted on 2026-10-12. ADR-022 (H06's V1–V13) was accepted on 2026-10-12. ADR-004 was accepted on
 2026-10-03, before PR-027, which unblocked band H.
 Each must be accepted before its own band, not before PR-004. ADR-008 was
 accepted on 2026-09-22, unblocking band C.
@@ -2665,8 +2664,9 @@ Not here:
 
 ### H06 — Harness evaluation, scoring and comparison
 
-**Architecture proposed, revised after two reviews.** ADR-022 proposes
-V1–V13. Nothing is implemented until it is accepted. A score is a
+**Architecture accepted (2026-10-12, #79); implementation not started.**
+ADR-022 decides V1–V13, accepted after two revisions. The implementation is
+a separate PR. A score is a
 measurement of evidence under a declared rule. Two scores say something
 about two harnesses only when C1–C4 all hold, and even then a v1
 difference is a provisional direction, never a statistical claim.

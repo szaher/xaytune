@@ -2,8 +2,9 @@
 
 !!! warning "H04: contracts and resolution only"
     Tasks and benchmark suites can be pinned, resolved, verified, sampled and
-    keyed into benchmark cohorts. Nothing yet runs a harness on a suite,
-    scores it or stores it. The decisions are in
+    keyed into benchmark cohorts. Running, scoring and comparing a harness
+    on a suite is [Harness Evaluation](harness-evaluation.md) (H06); nothing
+    is stored. The decisions are in
     [ADR-020](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/adrs/ADR-020-benchmark-and-task-contracts.md),
     accepted with H04.
 
@@ -105,8 +106,8 @@ never Python's `random`.
 |---|---|---|
 | C1 | The same benchmark cohort: suite (members, order, environment, reset) and sampling policy | `benchmark_cohort`, here |
 | C2 | Matched assignments: the same replicate seed and the same tasks | `record_assignment`, `verify_assignment` and `assignment_mismatches`, here |
-| C3 | The same scoring rules and units | H06 |
-| C4 | Compatible, declared execution conditions | H06 / H07 |
+| C3 | The same scoring rules and units | `comparability` ([Harness Evaluation](harness-evaluation.md)) |
+| C4 | Compatible, declared execution conditions | `comparability` ([Harness Evaluation](harness-evaluation.md)) |
 
 An equal cohort means only that C1 holds. Candidates run under the same
 replicate seeds get identical assignments, because assignment never depends

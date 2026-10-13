@@ -2,8 +2,8 @@
 
 !!! warning "H05: local, single-host recording"
     A scripted harness run can record a verifiable trajectory beside its
-    result. Nothing is stored in the database, streamed to a controller, or
-    scored. Liveness, publication proof and reconciliation hold on one host
+    result. Nothing is stored in the database or streamed to a controller;
+    [Harness Evaluation](harness-evaluation.md) measures recorded runs. Liveness, publication proof and reconciliation hold on one host
     only. The decisions are in
     [ADR-021](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/adrs/ADR-021-trajectory-artifacts-and-provenance.md),
     accepted on 2026-10-12.

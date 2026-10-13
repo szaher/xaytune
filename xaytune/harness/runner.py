@@ -84,6 +84,7 @@ from xaytune.core.domain.harness import (
 )
 from xaytune.core.execution import DependencySpec, ResourceRequirements
 from xaytune.core.fingerprint import fingerprint
+from xaytune.core.harness_evaluation import HarnessTaskBinding
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel, thaw
 from xaytune.core.support import SupportResult
 from xaytune.core.trajectory import (
@@ -407,12 +408,15 @@ def _spec_refusals(spec: AgentExecutionSpec) -> tuple[str, ...]:
     expected = {"compiler_api": HARNESS_COMPILER_API, "token_counter": TOKEN_COUNTER}
     config = dict(spec.config)
     block = config.pop("trajectory", None)
+    binding = config.pop("task", None)
     if config != expected:
         reasons.append(
             f"config must be exactly {expected}: this runner speaks one compiler API and "
             f"counts tokens one way"
         )
     reasons.extend(_recording_refusals(spec, block))
+    if binding is not None:
+        reasons.extend(_binding_refusals(spec, binding, block))
     if spec.entrypoint != SCRIPTED_RUNNER_ENTRYPOINT:
         reasons.append("the entrypoint is not this runner's")
     if spec.arguments:
@@ -498,19 +502,49 @@ def _recording_refusals(spec: AgentExecutionSpec, block: Any) -> list[str]:
     return reasons
 
 
+def _binding_refusals(spec: AgentExecutionSpec, binding: Any, recording: Any) -> list[str]:
+    """Every way ``config["task"]`` is not a binding of this spec's task (ADR-022 V2).
+
+    The compiler checked it against the resolved suite; the runner has no
+    suite, so it checks what the spec alone can say.
+    """
+    try:
+        bound = HarnessTaskBinding.model_validate(thaw(binding))
+    except ValidationError:
+        return ["config['task'] is not a valid xaytune.harness-task-binding/v1alpha1 binding"]
+    reasons: list[str] = []
+    if bound.task_id != spec.task.task_id:
+        reasons.append("config['task'] binds another task than the spec's task input")
+    if recording is None:
+        reasons.append("a task-bound spec must record its trajectory (ADR-022 V2)")
+    return reasons
+
+
+def _binding_of(spec: AgentExecutionSpec) -> HarnessTaskBinding | None:
+    block = spec.config.get("task")
+    return None if block is None else HarnessTaskBinding.model_validate(thaw(block))
+
+
 def _recording_of(spec: AgentExecutionSpec) -> TrajectoryRecordingSpec | None:
     block = spec.config.get("trajectory")
     return None if block is None else TrajectoryRecordingSpec.model_validate(thaw(block))
 
 
 def _trajectory_attribution(spec: AgentExecutionSpec) -> TrajectoryAttribution:
+    """The attempt's attribution. A bound spec also records its task pin and cohort."""
+    binding = _binding_of(spec)
     return TrajectoryAttribution(
         request_digest=agent_run_request_digest(spec),
         execution_fingerprint=agent_execution_fingerprint(spec),
         harness_fingerprint=spec.harness_fingerprint,
-        task=TrajectoryTask(task_id=spec.task.task_id),
+        task=TrajectoryTask(
+            task_id=spec.task.task_id,
+            revision=binding.revision if binding else None,
+            task_fingerprint=binding.task_fingerprint if binding else None,
+        ),
         seed=spec.seed,
         replicate=spec.replicate,
+        assignment_cohort=binding.cohort if binding else None,
     )
 
 

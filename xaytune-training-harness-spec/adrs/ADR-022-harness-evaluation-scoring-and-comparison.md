@@ -18,6 +18,14 @@ evidence entry for an executed task lists at least one attempt.
 `verify_run_evidence` refuses an empty attempt list, which is never a
 verified execution (V3, G3g).
 
+**Disclosure clarification at implementation review** (2026-10-13, review
+of [PR #81](https://github.com/szaher/xaytune/pull/81); no measurement,
+fingerprint or scoring rule changed): under `aggregate`, V5 also withholds
+every `successful-tasks` slice, at any sample count, because next to the
+released per-task execution measurements a slice's mean can identify which
+tasks succeeded. A provider never receives such a slice, nor a
+reference-derived run value over a single task, under either disclosure.
+
 **Revision 2** (after the architecture review of
 [PR #79](https://github.com/szaher/xaytune/pull/79) at `ff0d2ab`). The
 review approved V1–V13's direction and decided the seven review questions
@@ -358,9 +366,11 @@ the runtime waits for the durable harness path, because the
   - **`aggregate`, the default:** run-level and summary values are
     released. Per-task reference-derived scores stay restricted, and so
     does a run-level value over a single task, since it equals that task's
-    score;
-  - **`per-task`:** per-task scores are also released, to people and
-    reports.
+    score. So does every `successful-tasks` slice, at any sample count:
+    with three tasks of 1, 3 and 9 turns, a slice mean of 2 turns over two
+    tasks says the first two succeeded;
+  - **`per-task`:** per-task scores and `successful-tasks` slices are
+    also released, to people and reports.
 - **No provider receives reference-derived feedback by default.** A
   mutation or search provider never receives restricted content. It
   receives **no** per-task reference-derived score, whatever the

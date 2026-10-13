@@ -7,8 +7,9 @@
     [ADR-019](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/adrs/ADR-019-harness-compilation-and-execution.md)
     names. ADR-019's E1–E10 are accepted; that migration is only proposed.
     Cancellation, restart and idempotency hold in-process only. A run can
-    record its trajectory ([Trajectories](trajectories.md), H05). Real model
-    adapters and scoring come later.
+    record its trajectory ([Trajectories](trajectories.md), H05) and be
+    measured on a pinned benchmark ([Harness Evaluation](harness-evaluation.md),
+    H06). Real model adapters come later.
 
 ```text
 AgentHarnessSpec ─resolve_harness_content(source)─▶ ResolvedHarnessContent   digests verified

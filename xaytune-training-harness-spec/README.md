@@ -110,6 +110,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
 - `21-observability-and-provenance.md` — event model, MLflow/W&B mapping, lineage
 - `22-open-questions.md` — decisions intentionally deferred
 - [23-agent-harness-optimization.md](23-agent-harness-optimization.md) — planned harness candidates, identity, compilation, tasks, trajectories, evaluation and search
+- [24-studio-experience.md](24-studio-experience.md) — Studio V1 user journeys, information architecture and wireframes (accepted, with ADR-023)
 - `adrs/` — architecture decision records required before implementation
   - ADR-011 extends ADR-003 and ADR-006 with `TrainingIntervention` and a layered
     identity model; read it alongside both
@@ -151,14 +152,20 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     run evidence as the subject, two evaluators on the existing protocol, a
     versioned metric catalog with units and explicit absences, replicate
     aggregation with uncertainty, and comparability C3 and C4. `Objective`
-    and the decision engines are unchanged. Its implementation is in review
+    and the decision engines are unchanged. Implemented in #81
+  - [ADR-023](adrs/ADR-023-studio-read-api-and-web-client.md) decides
+    Studio V1 (S1–S13, accepted 2026-10-14, #82): a read-only, versioned API over
+    the durable store through the existing stores, a React client, loopback
+    exposure until authentication exists, the released evaluation tier
+    only, and the backend gaps (metric series, durable harness evaluation)
+    that some views wait on
 
   ADR status is **not** a single block. It is:
 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022 |
+  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
   | Still `Proposed` | none |
 

@@ -16,7 +16,6 @@ from xaytune.config.schema import (
     TrainConfig,
     TrainerConfig,
 )
-from xaytune.studio.code_runner import CODE_TEMPLATES, run_code
 from xaytune.studio.codegen import METHOD_PARAMS_SPEC, generate_code
 from xaytune.studio.data_preview import preview_dataset
 from xaytune.studio.dataset_browser import get_dataset_info, preview_hf_dataset, search_datasets
@@ -206,10 +205,27 @@ def _status_badge(status: str) -> str:
     )
 
 
+REMOTE_CODE_REFUSED = (
+    "Trust Remote Code is disabled on this Studio: it would run a model "
+    "repository's own Python code on this machine. Run Studio on 127.0.0.1 "
+    "to use it."
+)
+
+
 def create_app(
     job_manager: JobManager | None = None,
     theme: gr.Theme | None = None,
+    *,
+    allow_remote_code: bool = False,
 ) -> gr.Blocks:
+    """Build the Studio UI.
+
+    ``allow_remote_code`` lets a job load a model with ``trust_remote_code``,
+    which runs that model repository's Python code in this process. Leave it
+    off whenever the app is reachable from the network; ``xaytune studio``
+    turns it on only for a loopback host. The refusal is enforced when a job
+    is submitted, not only in the form.
+    """
     mgr = job_manager or JobManager()
 
     with gr.Blocks(title="xaytune Studio", theme=theme) as app:
@@ -280,7 +296,12 @@ def create_app(
                     trust_remote_code = gr.Checkbox(
                         value=False,
                         label="Trust Remote Code",
-                        info="Allow custom code from model repo. Required by some models.",
+                        info=(
+                            "Allow custom code from model repo. Required by some models."
+                            if allow_remote_code
+                            else REMOTE_CODE_REFUSED
+                        ),
+                        interactive=allow_remote_code,
                     )
 
                 with gr.Accordion("Model Search (HuggingFace Hub)", open=False):
@@ -939,6 +960,14 @@ def create_app(
                 gamma_v,
                 token_v,
             ):
+                if trust_v and not allow_remote_code:
+                    return (
+                        f'<div style="color:#dc2626; padding:8px; '
+                        f"border:1px solid #dc2626; border-radius:8px; "
+                        f'background:#fef2f2;">\n\n'
+                        f"**Refused:** {REMOTE_CODE_REFUSED}\n\n</div>"
+                    ), ""
+
                 if token_v and token_v.strip():
                     try:
                         from huggingface_hub import login
@@ -1512,77 +1541,6 @@ def create_app(
                     fn=_select_dataset,
                     outputs=[ds_preview_id],
                 )
-
-        # ── Code Tab ─────────────────────────────────────────────
-        with gr.Tab("Code"):
-            gr.Markdown(
-                "Write and run Python code using the xaytune API. "
-                "The `xaytune` module is pre-imported."
-            )
-            with gr.Row():
-                code_template = gr.Dropdown(
-                    choices=list(CODE_TEMPLATES.keys()),
-                    value="Custom",
-                    label="Template",
-                    info="Load a starter template.",
-                )
-                code_run_btn = gr.Button("Run", variant="primary", size="sm")
-                code_clear_btn = gr.Button("Clear Output", size="sm")
-
-            code_editor = gr.Code(
-                value=CODE_TEMPLATES["Custom"],
-                language="python",
-                interactive=True,
-                lines=20,
-                label="Python Editor",
-            )
-            code_output = gr.Code(
-                label="Output",
-                language=None,
-                interactive=False,
-                lines=12,
-            )
-            code_status = gr.Markdown("")
-
-            def _on_template_change(name: str):
-                return gr.update(value=CODE_TEMPLATES.get(name, ""))
-
-            code_template.change(
-                fn=_on_template_change,
-                inputs=[code_template],
-                outputs=[code_editor],
-            )
-
-            def _run_code(code: str):
-                if not code or not code.strip():
-                    return "", "No code to run."
-                result = run_code(code)
-                output_parts = []
-                if result.stdout:
-                    output_parts.append(result.stdout)
-                if result.stderr:
-                    output_parts.append(f"[stderr]\n{result.stderr}")
-                if result.error:
-                    output_parts.append(f"[error]\n{result.error}")
-                output_text = "\n".join(output_parts) if output_parts else "(no output)"
-                if result.error:
-                    status = f'<span style="color:#dc2626;">Failed</span> in {result.duration:.1f}s'
-                else:
-                    status = (
-                        f'<span style="color:#16a34a;">Completed</span> in {result.duration:.1f}s'
-                    )
-                return output_text, status
-
-            code_run_btn.click(
-                fn=_run_code,
-                inputs=[code_editor],
-                outputs=[code_output, code_status],
-            )
-
-            code_clear_btn.click(
-                fn=lambda: ("", ""),
-                outputs=[code_output, code_status],
-            )
 
     return app  # type: ignore[no-any-return]
 

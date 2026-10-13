@@ -139,9 +139,20 @@ def _build_parser() -> argparse.ArgumentParser:
     lr_find_parser.add_argument("--output", default=None, help="Save results to JSON file")
 
     studio_parser = subparsers.add_parser("studio", help="Launch Training Studio web UI")
-    studio_parser.add_argument("--host", default="0.0.0.0", help="Host (default: 0.0.0.0)")
+    studio_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "Host (default: 127.0.0.1). Studio has no authentication: any other "
+            "host makes it reachable from the network, with Trust Remote Code disabled"
+        ),
+    )
     studio_parser.add_argument("--port", type=int, default=7860, help="Port (default: 7860)")
-    studio_parser.add_argument("--share", action="store_true", help="Create public Gradio link")
+    studio_parser.add_argument(
+        "--share",
+        action="store_true",
+        help="Disabled: Studio has no authentication, so public links are refused",
+    )
 
     launch_parser = subparsers.add_parser("launch", help="Launch distributed training via torchrun")
     launch_parser.add_argument(
@@ -582,6 +593,11 @@ def _handle_compare(args: argparse.Namespace) -> int:
 
 
 def _handle_studio(args: argparse.Namespace) -> int:
+    if args.share:
+        from xaytune.studio.server import SHARE_DISABLED
+
+        print(f"Error: {SHARE_DISABLED}", file=sys.stderr)
+        return 2
     try:
         from xaytune.studio.server import launch
     except ImportError:

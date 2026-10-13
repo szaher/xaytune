@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Security
+
+- **Studio no longer runs arbitrary Python or listens on every interface** (UX-00). Studio has no authentication, so anyone who could reach it could use everything it served.
+  - **Breaking:** the Code tab and `xaytune.studio.code_runner` are removed. They ran any submitted Python inside the server process, and Gradio exposes every UI callback as an API endpoint, so hiding the tab would not have been enough. **Generate Code** still writes a training script for you to run yourself.
+  - `xaytune studio` and `xaytune.studio.server.launch()` now listen on `127.0.0.1` by default instead of `0.0.0.0`. `--host` still accepts another address and logs a warning that Studio is then reachable without authentication.
+  - `--share` is refused (exit code 2), and `launch(share=True)` raises `StudioExposureError` before Gradio starts. A public link would let anyone on the internet start jobs on the machine.
+  - **Trust Remote Code** runs a model repository's own Python. `create_app()` takes `allow_remote_code` (default `False`), and `xaytune studio` turns it on only for a loopback host. When it is off, the checkbox is locked and the submit endpoint refuses such a job before logging in to the Hub or submitting anything, so a direct API call cannot bypass it.
+
 ### Added
 
 - **Policy and approval for proposed actions** (PR-023). `ExperimentHandle.propose(spec, reason=..., proposed_by=...)` validates a typed action, has the host's `PolicyEngine` judge it, and records the result. Nothing is carried out.

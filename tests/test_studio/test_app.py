@@ -1,5 +1,5 @@
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -357,6 +357,78 @@ class TestCreateApp:
         assert isinstance(app, gr.Blocks)
 
 
+def _event_fn(app, name):
+    fns = [block_fn.fn for block_fn in app.fns.values() if block_fn.fn is not None]
+    matches = [fn for fn in fns if fn.__name__ == name]
+    assert len(matches) == 1, name
+    return matches[0]
+
+
+def _submit_with_remote_code(app, **overrides):
+    """Call the Train tab's submit endpoint as a direct API call would."""
+    submit = _event_fn(app, "_submit")
+    import inspect
+
+    params = inspect.signature(submit).parameters
+    values = dict.fromkeys(params, None)
+    values.update({"trust_v": True, "token_v": "", **overrides})
+    return submit(**values)
+
+
+class TestNoCodeExecutionEndpoint:
+    def test_no_code_tab_or_runner(self):
+        app = create_app()
+        names = {block_fn.fn.__name__ for block_fn in app.fns.values() if block_fn.fn is not None}
+        assert "_run_code" not in names
+        tabs = [block.label for block in app.blocks.values() if isinstance(block, gr.Tab)]
+        assert "Code" not in tabs
+        assert {"Train", "Monitor", "History", "Compare", "Datasets"} <= set(tabs)
+
+    def test_code_generation_is_preserved(self):
+        app = create_app()
+        assert _event_fn(app, "_gen_code") is not None
+
+    def test_remote_code_is_refused_by_default(self):
+        mgr = MagicMock(spec=JobManager)
+        app = create_app(job_manager=mgr)
+        with patch("huggingface_hub.login") as login:
+            error, status = _submit_with_remote_code(app, token_v="hf_secret")
+        assert "Refused" in error
+        assert status == ""
+        login.assert_not_called()
+        mgr.submit.assert_not_called()
+
+    def test_remote_code_checkbox_is_locked_when_refused(self):
+        app = create_app()
+        boxes = [
+            block
+            for block in app.blocks.values()
+            if isinstance(block, gr.Checkbox) and block.label == "Trust Remote Code"
+        ]
+        assert len(boxes) == 1
+        assert boxes[0].interactive is False
+
+    def test_remote_code_is_allowed_on_loopback(self):
+        mgr = MagicMock(spec=JobManager)
+        app = create_app(job_manager=mgr, allow_remote_code=True)
+        # Past the refusal: the empty form fails ordinary validation instead.
+        error, _ = _submit_with_remote_code(
+            app,
+            recipe_v="finetune",
+            method_v="full",
+            model_v="",
+            data_v="",
+            quant_v="None",
+            lr_v=2e-4,
+            bs_v=4,
+            warmup_v=0,
+            wratio_v=0.0,
+            esplit_v=0.0,
+        )
+        assert "Refused" not in error
+        assert "Validation Errors" in error
+
+
 class TestPollJob:
     def test_no_job_selected(self):
         mgr = JobManager()
@@ -429,16 +501,15 @@ class TestStudioCLI:
         parser = _build_parser()
         args = parser.parse_args(["studio"])
         assert args.command == "studio"
-        assert args.host == "0.0.0.0"
+        assert args.host == "127.0.0.1"
         assert args.port == 7860
         assert args.share is False
 
     def test_parser_custom_args(self):
         parser = _build_parser()
-        args = parser.parse_args(["studio", "--host", "127.0.0.1", "--port", "8080", "--share"])
-        assert args.host == "127.0.0.1"
+        args = parser.parse_args(["studio", "--host", "0.0.0.0", "--port", "8080"])
+        assert args.host == "0.0.0.0"
         assert args.port == 8080
-        assert args.share is True
 
     @patch.dict("sys.modules", {"xaytune.studio.server": None})
     def test_missing_gradio_error(self):

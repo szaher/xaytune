@@ -3,13 +3,21 @@
 xaytune Studio is a web UI for configuring, launching, and monitoring training jobs. Launch it with:
 
 ```bash
-xaytune studio
-xaytune studio --host 127.0.0.1 --port 8080
-xaytune studio --share  # public Gradio link
+xaytune studio                # http://127.0.0.1:7860
+xaytune studio --port 8080
 ```
 
 !!! note "Requires Gradio"
     Install with `pip install xaytune[studio]` or `pip install gradio plotly`.
+
+## Security
+
+Studio has **no authentication**. Anyone who can reach its port can use it: launch training jobs, read dataset files the server can read, and log the server in to the Hugging Face Hub. Every button is also an HTTP API endpoint, so the page's layout is not a boundary.
+
+- Studio listens on `127.0.0.1` by default, so only this machine can reach it. To use it from another machine, prefer an SSH tunnel (`ssh -L 7860:127.0.0.1:7860 host`) over binding another address.
+- `--host 0.0.0.0` (or any non-loopback address) is allowed, logs a warning, and disables **Trust Remote Code**: a job that would run a model repository's own Python is refused by the server, not only greyed out in the form.
+- `--share` is refused. A public Gradio link would expose Studio to the internet.
+- Studio does not run Python you type. The former Code tab is removed; **Generate Code** writes a script for you to run yourself.
 
 ## Train Tab
 
@@ -111,8 +119,10 @@ from xaytune.studio.jobs import JobManager
 # Create with a shared job manager
 mgr = JobManager()
 app = create_app(job_manager=mgr)
-app.launch(server_port=7860)
+app.launch(server_name="127.0.0.1", server_port=7860)
 ```
+
+`create_app()` refuses jobs with Trust Remote Code unless you pass `allow_remote_code=True`. Pass it only when the app listens on a loopback address.
 
 ### Programmatic Job Submission
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Final, Literal, Protocol, runtime_checkable
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from xaytune._version import __version__
 from xaytune.agent.schema import UnsupportedResponseSchemaError, check_response_schema
@@ -41,6 +41,7 @@ from xaytune.core.capabilities import (
     PluginDescriptor,
     require_supported_plugin,
 )
+from xaytune.core.domain.benchmark import ResolvedBenchmarkSuite
 from xaytune.core.domain.harness import (
     AGENT_HARNESS_SCHEMA,
     AgentHarnessSpec,
@@ -55,6 +56,7 @@ from xaytune.core.execution import (
     PythonModuleEntrypoint,
     TelemetryContract,
 )
+from xaytune.core.harness_evaluation import HarnessTaskBinding, task_binding_refusals
 from xaytune.core.immutable import FrozenDict, FrozenDomainModel
 from xaytune.core.support import SupportResult
 from xaytune.core.trajectory import TRAJECTORY_SCHEMA, TrajectoryRecordingSpec
@@ -143,7 +145,20 @@ class HarnessCompilationContext(FrozenDomainModel):
     """Record the run's trajectory (ADR-021). ``None``, the default, compiles exactly
     the H03 spec, byte for byte: the same fingerprint and the same request digest."""
 
+    task_binding: HarnessTaskBinding | None = None
+    """The pinned benchmark task this run performs (ADR-022 V2), carried into the
+    spec's ``config["task"]``. ``None``, the default, compiles exactly the H03 spec."""
+    suite: ResolvedBenchmarkSuite | None = None
+    """The resolved suite a binding is checked against. Given exactly with a binding;
+    never carried into the spec, which names the task by fingerprint only."""
+
     metadata: FrozenDict = Field(default_factory=FrozenDict)
+
+    @model_validator(mode="after")
+    def _binding_has_its_suite(self) -> HarnessCompilationContext:
+        if (self.task_binding is None) != (self.suite is None):
+            raise ValueError("a task binding and the suite it is checked against come together")
+        return self
 
 
 @runtime_checkable
@@ -261,6 +276,13 @@ class ReferenceHarnessCompiler:
         output_dir = PurePosixPath(context.output_uri)
         if not output_dir.is_absolute() or ".." in output_dir.parts:
             reasons.append("output_uri must be an absolute local directory without '..'")
+        if context.task_binding is not None and context.suite is not None:
+            reasons.extend(task_binding_refusals(context.task_binding, context.task, context.suite))
+            if context.trajectory is None:
+                reasons.append(
+                    "a task-bound run is executed for evaluation, and evaluation needs its "
+                    "trajectory: a bound spec must record one (ADR-022 V2)"
+                )
         if reasons:
             raise UnsupportedHarnessError(self.descriptor.name, tuple(dict.fromkeys(reasons)))
 
@@ -283,7 +305,7 @@ class ReferenceHarnessCompiler:
                 replicate=context.replicate,
                 effective_tools=harness.tools.enabled,
                 entrypoint=SCRIPTED_RUNNER_ENTRYPOINT,
-                config=FrozenDict(_config(context.trajectory)),
+                config=FrozenDict(_config(context.trajectory, context.task_binding)),
                 outputs=_outputs(output_dir, context.trajectory),
                 telemetry=TelemetryContract(protocol_version=AGENT_TELEMETRY_V1ALPHA1),
                 required_capabilities=CapabilityRequirements(
@@ -296,13 +318,18 @@ class ReferenceHarnessCompiler:
             ) from error
 
 
-def _config(recording: TrajectoryRecordingSpec | None) -> dict[str, object]:
+def _config(
+    recording: TrajectoryRecordingSpec | None, binding: HarnessTaskBinding | None
+) -> dict[str, object]:
+    """H03's config, plus the recording spec and the task binding only when given."""
     config: dict[str, object] = {
         "compiler_api": HARNESS_COMPILER_API,
         "token_counter": TOKEN_COUNTER,
     }
     if recording is not None:
         config["trajectory"] = recording.model_dump(mode="json")
+    if binding is not None:
+        config["task"] = binding.model_dump(mode="json")
     return config
 
 

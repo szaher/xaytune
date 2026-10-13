@@ -151,7 +151,7 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     run evidence as the subject, two evaluators on the existing protocol, a
     versioned metric catalog with units and explicit absences, replicate
     aggregation with uncertainty, and comparability C3 and C4. `Objective`
-    and the decision engines are unchanged
+    and the decision engines are unchanged. Its implementation is in review
 
   ADR status is **not** a single block. It is:
 

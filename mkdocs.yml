@@ -53,6 +53,7 @@ nav:
       - Agent Harness: api/harness.md
       - Benchmarks: api/benchmarks.md
       - Trajectories: api/trajectories.md
+      - Harness Evaluation: api/harness-evaluation.md
       - Recipes: api/recipes.md
       - Data Pipeline: api/data.md
       - Trainer: api/trainer.md

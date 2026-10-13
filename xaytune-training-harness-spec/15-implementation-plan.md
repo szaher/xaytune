@@ -117,7 +117,7 @@ matter of record rather than of review:
 | ADR-019 — harness compilation and execution | H03; E1–E10 accepted 2026-10-11 (#75). Its M1–M6 migration strategy is proposed only, and is decided by the durable follow-up |
 | ADR-020 — pinned benchmark and task contracts | H04; B1–B9 accepted 2026-10-11 (#76). Trajectories (H05), evaluation wiring and scoring (H06) and persistence stay deferred |
 | ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77), implemented in #78 (`fd24763`). Scoring (H06) and persistence stay deferred |
-| ADR-022 — harness evaluation, scoring and comparison | H06; V1–V13 accepted 2026-10-12 (#79). Acceptance is architectural: the implementation is reviewed on its own. The durable path, decision-engine integration and H07 stay deferred |
+| ADR-022 — harness evaluation, scoring and comparison | H06; V1–V13 accepted 2026-10-12 (#79). Acceptance is architectural: the implementation (in review) is reviewed on its own. The durable path, decision-engine integration and H07 stay deferred |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
@@ -2664,9 +2664,14 @@ Not here:
 
 ### H06 — Harness evaluation, scoring and comparison
 
-**Architecture accepted (2026-10-12, #79); implementation not started.**
-ADR-022 decides V1–V13, accepted after two revisions. The implementation is
-a separate PR. A score is a
+**Architecture accepted (2026-10-12, #79); implementation in review.**
+ADR-022 decides V1–V13, accepted after two revisions. The implementation
+(the task binding in the compiler and runner; pure contracts in
+`xaytune.core.harness_evaluation` and `xaytune.core.harness_comparison`;
+evidence assembly and `verify_run_evidence` in `xaytune.harness.evidence`;
+the two evaluators and the local driver in `xaytune.evaluation.harness`)
+adds no migration and leaves `Objective` and the decision engines unchanged.
+A score is a
 measurement of evidence under a declared rule. Two scores say something
 about two harnesses only when C1–C4 all hold, and even then a v1
 difference is a provisional direction, never a statistical claim.

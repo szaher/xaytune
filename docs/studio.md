@@ -7,6 +7,9 @@ xaytune studio                # http://127.0.0.1:7860
 xaytune studio --port 8080
 ```
 
+!!! tip "The new Studio"
+    A read-only Studio built on the control-plane record is in progress. Its API, `xaytune studio-web`, is available now: see [Studio API](api/studio-api.md). This Gradio Studio stays available as a legacy entry point.
+
 !!! note "Requires Gradio"
     Install with `pip install xaytune[studio]` or `pip install gradio plotly`.
 

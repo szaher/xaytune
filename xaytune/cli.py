@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Any
 
@@ -153,6 +154,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disabled: Studio has no authentication, so public links are refused",
     )
+
+    web_parser = subparsers.add_parser(
+        "studio-web", help="Serve the read-only Studio API over a control-plane state database"
+    )
+    web_parser.add_argument(
+        "--state",
+        default=os.environ.get("XAYTUNE_STATE"),
+        help="The state database to read (default: $XAYTUNE_STATE). Opened read-only",
+    )
+    web_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Loopback address to listen on (default: 127.0.0.1). Any other host is refused",
+    )
+    web_parser.add_argument("--port", type=int, default=8765, help="Port (default: 8765)")
 
     launch_parser = subparsers.add_parser("launch", help="Launch distributed training via torchrun")
     launch_parser.add_argument(
@@ -308,6 +324,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "studio":
         return _handle_studio(args)
+
+    if args.command == "studio-web":
+        return _handle_studio_web(args)
 
     if args.command == "launch":
         return _handle_launch(args)
@@ -607,6 +626,27 @@ def _handle_studio(args: argparse.Namespace) -> int:
         )
         return 1
     launch(host=args.host, port=args.port, share=args.share)
+    return 0
+
+
+def _handle_studio_web(args: argparse.Namespace) -> int:
+    if not args.state:
+        print("Error: name the state database with --state or $XAYTUNE_STATE", file=sys.stderr)
+        return 2
+    try:
+        from xaytune.api.server import ApiExposureError, serve
+        from xaytune.api.store import StoreUnavailableError
+    except ImportError:
+        print(
+            "Error: Install the Studio API dependencies: pip install xaytune[studio-web]",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        serve(args.state, host=args.host, port=args.port)
+    except (ApiExposureError, StoreUnavailableError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
     return 0
 
 

@@ -54,6 +54,7 @@ nav:
       - Benchmarks: api/benchmarks.md
       - Trajectories: api/trajectories.md
       - Harness Evaluation: api/harness-evaluation.md
+      - Studio API: api/studio-api.md
       - Recipes: api/recipes.md
       - Data Pipeline: api/data.md
       - Trainer: api/trainer.md

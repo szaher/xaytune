@@ -12,6 +12,16 @@
 
 ### Added
 
+- **Studio API: a read-only HTTP view of the control-plane record** (UX-01, ADR-023). `xaytune studio-web --state state.db` serves `/api/v1` from the `studio-web` extra (`fastapi`, `uvicorn`).
+  - Experiments, the candidate graph, candidates, runs, attempts, evaluation runs and results, decisions, actions with policy decisions, budget, incidents with recovery episodes, planner invocations, the event journal, and a two-candidate comparison, all read through the existing stores.
+  - Read-only by construction: `mode=ro` plus `query_only`, never migrated, `GET`/`HEAD` only. Stateless, so restarts lose nothing. One snapshot per response. The schema version is checked per request (`503` with the reason).
+  - Loopback only, with a `Host` allow-list against DNS rebinding, no CORS, a CSP and `no-store`. Errors are `problem+json` and never echo ids, values, paths or exception text. Actor metadata is never returned.
+  - `ETag`/`304` and `X-Xaytune-Event-Sequence` for polling; keyset pagination with oversized limits refused.
+  - `/compare` keeps lineage (`lineage.distinct_candidates`) apart from measurement comparability. Each metric pair shows both sides' evaluation fingerprint and unit, and gives a `difference` only when they match; otherwise it is `comparable: false` with `reasons`. Harness comparisons (ADR-022 C1–C4) stay H06's.
+  - The OpenAPI document is committed (`xaytune/api/v1/openapi.json`). A test fails on any drift in paths, parameters, request and response schemas, types, formats, nullability or references; only presentational text is ignored.
+  - New store reads: `AggregateStore.list_experiments()`, `EventJournal.latest_sequence()`, `recorded_versions()` (reads the migration ledger without creating it) and `xaytune.core.sqlite.connect_read_only()`.
+  - The legacy Gradio Studio's tests now run in CI (a `studio` job). Its six stale `TestPollJob` tests are updated to `_poll(mgr, job_id)`.
+
 - **Harness evaluation, scoring and comparison** (H06, ADR-022). Local and in-process; no migration, and `Objective`, the decision engines and every existing fingerprint are unchanged.
   - **Task binding:** `bind_task()` and `HarnessCompilationContext.task_binding` carry a pinned benchmark task into a spec's `config["task"]`. The compiler checks it against the resolved suite and refuses other variables, a wrong fingerprint or position, attachments, and a bound spec that does not record. The trajectory attribution records the task's revision, fingerprint and cohort. Unbound specs are byte-identical to H03's.
   - **Evidence:** `assemble_evidence()` builds `HarnessRunEvidence` (artifact kind `agent_run_evidence`) for one execution replicate from the store: every attempt of every task, each entry `attested` or `no-attested-result`. `verify_run_evidence()` rebuilds every fact from the suite and the store and refuses, with every reason, omitted, added, open or quarantined attempts, empty entries, mismatched attribution, unverifiable trajectories, hidden or downgraded results and a wrong digest.

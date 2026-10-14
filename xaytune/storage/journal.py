@@ -121,6 +121,13 @@ class EventJournal:
         ).fetchall()
         return tuple(_event_from_row(row) for row in rows)
 
+    def latest_sequence(self) -> int:
+        """The sequence of the journal's latest event, across experiments; 0 if empty."""
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) AS latest FROM events"
+        ).fetchone()
+        return int(row["latest"])
+
     def latest_sequence_for_experiment(self, experiment_id: str) -> int:
         """The sequence of the experiment's latest event; 0 if it has none."""
         row = self._connection.execute(

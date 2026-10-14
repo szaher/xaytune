@@ -54,6 +54,19 @@ jobs:
           XAYTUNE_REQUIRE_TRL: "1"
       - run: uv run --locked python -m pytest tests/ -q --collect-only -m trl
 
+  # The legacy Gradio Studio (ADR-023 S13), with the `studio` extra resolved
+  # from uv.lock. Its tests only ever ran locally before UX-01; here a
+  # missing Gradio fails the job rather than skipping the module.
+  studio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --locked --extra dev --extra studio
+      - run: uv run --locked python -m pytest -q --tb=short tests/test_studio tests/test_api
+        env:
+          XAYTUNE_REQUIRE_GRADIO: "1"
+
   # The optional lm-eval integration (PR-014b), with the `eval` extra resolved
   # from uv.lock. A job of its own: installing lm-eval exposes an isolation
   # defect in the legacy benchmark tests (#38), which must not block the

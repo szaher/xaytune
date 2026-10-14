@@ -256,6 +256,39 @@ class AggregateStore:
             ),
         )
 
+    def list_experiments(
+        self,
+        *,
+        status: str | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> tuple[Experiment, ...]:
+        """Return a page of experiments, newest first.
+
+        Keyset-paged on ``(created_at, id)``: *before* is the last experiment
+        of the previous page, and the page holds those strictly older. An
+        offset would skip or repeat rows while a controller is creating
+        experiments; a key does neither. *status*, if given, keeps only
+        experiments in that status.
+        """
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status)
+        if before is not None:
+            clauses.append("(created_at, id) < (?, ?)")
+            parameters.extend((_stamp(before[0]), before[1]))
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        rows = self._connection.execute(
+            f"SELECT id, payload_json FROM experiments {where}"  # noqa: S608 - clauses are literals
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (*parameters, limit),
+        ).fetchall()
+        return tuple(decode_payload(row["payload_json"], Experiment, row["id"]) for row in rows)
+
     def nodes_for_experiment(self, experiment_id: str) -> tuple[ExperimentNode, ...]:
         """Return the experiment's nodes in creation order."""
         rows = self._connection.execute(

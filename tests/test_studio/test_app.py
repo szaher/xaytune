@@ -1,9 +1,17 @@
+import importlib
+import os
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-gr = pytest.importorskip("gradio")
+# The CI `studio` job sets XAYTUNE_REQUIRE_GRADIO=1: there a missing Gradio is
+# an import error, never a module quietly skipped.
+gr = (
+    importlib.import_module("gradio")
+    if os.environ.get("XAYTUNE_REQUIRE_GRADIO") == "1"
+    else pytest.importorskip("gradio")
+)
 
 from xaytune.cli import _build_parser  # noqa: E402
 from xaytune.studio.app import _poll, build_config, create_app, validate_form  # noqa: E402
@@ -430,19 +438,25 @@ class TestNoCodeExecutionEndpoint:
 
 
 class TestPollJob:
+    """``_poll(mgr, job_id)`` reads the job's own ``metrics_history`` (since bf913d5).
+
+    It returns (status, loss figure, GPU figure, throughput, metrics, cancel
+    update, logs).
+    """
+
     def test_no_job_selected(self):
         mgr = JobManager()
-        status, fig, metrics, history, *_ = _poll(mgr, None, [])
+        status, *_ = _poll(mgr, None)
         assert "Select" in status
 
     def test_unknown_job(self):
         mgr = JobManager()
-        status, fig, metrics, history, *_ = _poll(mgr, "nonexistent", [])
+        status, *_ = _poll(mgr, "nonexistent")
         assert "Unknown job" in status
 
-    def test_accumulates_metrics(self):
+    def test_shows_the_current_step_metrics(self):
         mgr = JobManager()
-        job = JobInfo(
+        mgr._jobs["j1"] = JobInfo(
             job_id="j1",
             status=JobStatus.RUNNING,
             recipe="finetune",
@@ -450,25 +464,29 @@ class TestPollJob:
             started_at=time.time(),
             state={"global_step": 5, "metrics": {"loss": 0.5}},
         )
-        mgr._jobs["j1"] = job
-        status, fig, metrics, history, *_ = _poll(mgr, "j1", [])
-        assert len(history) == 1
-        assert history[0]["step"] == 5
+        status, _, _, _, metrics, _, _ = _poll(mgr, "j1")
+        assert "**Step:** 5" in metrics
+        assert "**loss:** 0.5000" in metrics
+        assert "Elapsed" in status
 
-    def test_deduplicates_by_step(self):
+    def test_reads_the_recorded_history(self):
         mgr = JobManager()
-        job = JobInfo(
+        mgr._jobs["j1"] = JobInfo(
             job_id="j1",
             status=JobStatus.RUNNING,
             recipe="finetune",
             created_at=0.0,
             started_at=time.time(),
-            state={"global_step": 5, "metrics": {"loss": 0.5}},
+            state={"global_step": 2, "max_steps": 4},
+            metrics_history=[
+                {"step": 1, "loss": 0.9, "timestamp": 10.0, "samples_per_sec": 3.0},
+                {"step": 2, "loss": 0.8, "timestamp": 12.0, "samples_per_sec": 4.0},
+            ],
         )
-        mgr._jobs["j1"] = job
-        existing = [{"step": 5, "loss": 0.5}]
-        status, fig, metrics, history, *_ = _poll(mgr, "j1", existing)
-        assert len(history) == 1
+        status, _, _, throughput, _, _, _ = _poll(mgr, "j1")
+        assert "**Samples/sec:** 4.0" in throughput
+        assert "Step 2 / 4" in status
+        assert "ETA" in status
 
     def test_shows_error(self):
         mgr = JobManager()
@@ -480,7 +498,7 @@ class TestPollJob:
             error="boom",
         )
         mgr._jobs["j1"] = job
-        status, fig, metrics, history, *_ = _poll(mgr, "j1", [])
+        status, *_ = _poll(mgr, "j1")
         assert "boom" in status
 
     def test_shows_status_badge(self):
@@ -492,7 +510,7 @@ class TestPollJob:
             created_at=0.0,
         )
         mgr._jobs["j1"] = job
-        status, fig, metrics, history, *_ = _poll(mgr, "j1", [])
+        status, *_ = _poll(mgr, "j1")
         assert "COMPLETED" in status
 
 

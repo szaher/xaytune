@@ -21,7 +21,7 @@ from pathlib import Path
 
 from xaytune.storage.errors import MigrationError
 
-__all__ = ["Migration", "available_migrations", "applied_versions", "migrate"]
+__all__ = ["Migration", "applied_versions", "available_migrations", "migrate", "recorded_versions"]
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -75,6 +75,22 @@ def applied_versions(connection: sqlite3.Connection) -> tuple[int, ...]:
     _ensure_ledger(connection)
     rows = connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
     return tuple(int(row["version"]) for row in rows)
+
+
+def recorded_versions(connection: sqlite3.Connection) -> tuple[int, ...] | None:
+    """Return the versions the ledger records, or ``None`` if there is no ledger.
+
+    Unlike :func:`applied_versions`, never creates the ledger: a read-only
+    reader (ADR-023 §S3) must be able to ask what a database is without
+    writing to it, and a file with no ledger is not a Xaytune state database.
+    """
+    exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+    ).fetchone()
+    if exists is None:
+        return None
+    rows = connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    return tuple(int(row[0]) for row in rows)
 
 
 def migrate(connection: sqlite3.Connection, directory: Path | None = None) -> tuple[int, ...]:

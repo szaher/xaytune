@@ -1,0 +1,3532 @@
+{
+  "components": {
+    "schemas": {
+      "ActionList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActionOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ActionList",
+        "type": "object"
+      },
+      "ActionOut": {
+        "additionalProperties": false,
+        "properties": {
+          "child_action_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Child Action Ids",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "parent_action_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Action Id"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "policy_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PolicyDecisionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposed_by": {
+            "$ref": "#/components/schemas/ActorOut"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "additionalProperties": true,
+            "title": "Target",
+            "type": "object"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "status",
+          "outcome",
+          "target",
+          "proposed_by",
+          "reason",
+          "payload",
+          "policy_decision",
+          "parent_action_id",
+          "child_action_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ActionOut",
+        "type": "object"
+      },
+      "ActorOut": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "ActorOut",
+        "type": "object"
+      },
+      "AgentInvocationList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentInvocationOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AgentInvocationList",
+        "type": "object"
+      },
+      "AgentInvocationOut": {
+        "additionalProperties": false,
+        "description": "A planner's model call, summarised: no prompt, request or response body (\u00a7S6).",
+        "properties": {
+          "agent_model": {
+            "additionalProperties": true,
+            "title": "Agent Model",
+            "type": "object"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "context_fingerprint": {
+            "title": "Context Fingerprint",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "failure_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Kind"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "planner_kind": {
+            "title": "Planner Kind",
+            "type": "string"
+          },
+          "planner_version": {
+            "title": "Planner Version",
+            "type": "string"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "proposal_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Fingerprint"
+          },
+          "request_fingerprint": {
+            "title": "Request Fingerprint",
+            "type": "string"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "attempt",
+          "status",
+          "planner_kind",
+          "planner_version",
+          "prompt_version",
+          "agent_model",
+          "context_fingerprint",
+          "request_fingerprint",
+          "proposal_fingerprint",
+          "failure_kind",
+          "created_at",
+          "settled_at"
+        ],
+        "title": "AgentInvocationOut",
+        "type": "object"
+      },
+      "AttemptDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "$ref": "#/components/schemas/AttemptOut"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/CheckpointOut"
+            },
+            "title": "Checkpoints",
+            "type": "array"
+          },
+          "directives": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Directives",
+            "type": "array"
+          },
+          "incidents": {
+            "items": {
+              "$ref": "#/components/schemas/IncidentOut"
+            },
+            "title": "Incidents",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "incidents",
+          "checkpoints",
+          "directives"
+        ],
+        "title": "AttemptDetail",
+        "type": "object"
+      },
+      "AttemptOut": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_refs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Artifact Refs",
+            "type": "array"
+          },
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "checkpoint_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Ref"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "execution_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Fingerprint"
+          },
+          "execution_overrides": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Execution Overrides",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "incident_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Incident Ids",
+            "type": "array"
+          },
+          "resource_usage": {
+            "additionalProperties": true,
+            "title": "Resource Usage",
+            "type": "object"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "runtime_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Ref"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "attempt_number",
+          "status",
+          "runtime_ref",
+          "execution_fingerprint",
+          "execution_overrides",
+          "checkpoint_ref",
+          "artifact_refs",
+          "incident_ids",
+          "resource_usage",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "AttemptOut",
+        "type": "object"
+      },
+      "BudgetOut": {
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limits"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DimensionOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "limits",
+          "status",
+          "entries"
+        ],
+        "title": "BudgetOut",
+        "type": "object"
+      },
+      "CandidateLineage": {
+        "additionalProperties": false,
+        "description": "How two candidates relate in the graph. Structural only: it says nothing about\nwhether their measurements can be compared (that is :class:`MetricPair`'s).",
+        "properties": {
+          "common_ancestor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Common Ancestor Ids",
+            "type": "array"
+          },
+          "distinct_candidates": {
+            "title": "Distinct Candidates",
+            "type": "boolean"
+          },
+          "nearest_common_ancestor_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Nearest Common Ancestor Ids",
+            "type": "array"
+          },
+          "same_candidate": {
+            "title": "Same Candidate",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "distinct_candidates",
+          "same_candidate",
+          "common_ancestor_ids",
+          "nearest_common_ancestor_ids"
+        ],
+        "title": "CandidateLineage",
+        "type": "object"
+      },
+      "CheckpointOut": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_fingerprint": {
+            "title": "Candidate Fingerprint",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "execution_fingerprint": {
+            "title": "Execution Fingerprint",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          }
+        },
+        "required": [
+          "context",
+          "candidate_fingerprint",
+          "execution_fingerprint",
+          "payload",
+          "evidence",
+          "created_at"
+        ],
+        "title": "CheckpointOut",
+        "type": "object"
+      },
+      "CompareOut": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_differences": {
+            "items": {
+              "$ref": "#/components/schemas/SpecDifference"
+            },
+            "title": "Candidate Differences",
+            "type": "array"
+          },
+          "left": {
+            "$ref": "#/components/schemas/NodeOut"
+          },
+          "lineage": {
+            "$ref": "#/components/schemas/CandidateLineage"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricPair"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "right": {
+            "$ref": "#/components/schemas/NodeOut"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "left",
+          "right",
+          "lineage",
+          "candidate_differences",
+          "metrics"
+        ],
+        "title": "CompareOut",
+        "type": "object"
+      },
+      "ControllerHostOut": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "ControllerHostOut",
+        "type": "object"
+      },
+      "DecisionList": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "DecisionList",
+        "type": "object"
+      },
+      "DecisionOut": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorOut"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "engine_name": {
+            "title": "Engine Name",
+            "type": "string"
+          },
+          "engine_version": {
+            "title": "Engine Version",
+            "type": "string"
+          },
+          "evaluation_cycle": {
+            "title": "Evaluation Cycle",
+            "type": "integer"
+          },
+          "evaluation_result_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evaluation Result Ids",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "experiment_id": {
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_fingerprint": {
+            "title": "Input Fingerprint",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "experiment_id",
+          "node_id",
+          "evaluation_cycle",
+          "outcome",
+          "reason",
+          "evidence",
+          "engine_name",
+          "engine_version",
+          "evaluation_result_ids",
+          "input_fingerprint",
+          "actor",
+          "created_at"
+        ],
+        "title": "DecisionOut",
+        "type": "object"
+      },
+      "DecisionRef": {
+        "additionalProperties": false,
+        "properties": {
+          "evaluation_cycle": {
+            "title": "Evaluation Cycle",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "evaluation_cycle"
+        ],
+        "title": "DecisionRef",
+        "type": "object"
+      },
+      "DimensionOut": {
+        "additionalProperties": false,
+        "description": "One limited dimension's balance.\n\nAmounts are exact decimal strings, as the ledger keeps them.",
+        "properties": {
+          "committed": {
+            "title": "Committed",
+            "type": "string"
+          },
+          "consumed": {
+            "title": "Consumed",
+            "type": "string"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "string"
+          },
+          "outstanding": {
+            "title": "Outstanding",
+            "type": "string"
+          },
+          "released": {
+            "title": "Released",
+            "type": "string"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "string"
+          },
+          "reserved": {
+            "title": "Reserved",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dimension",
+          "kind",
+          "limit",
+          "reserved",
+          "committed",
+          "consumed",
+          "released",
+          "outstanding",
+          "remaining"
+        ],
+        "title": "DimensionOut",
+        "type": "object"
+      },
+      "EdgeOut": {
+        "additionalProperties": false,
+        "properties": {
+          "child_id": {
+            "title": "Child Id",
+            "type": "string"
+          },
+          "parent_id": {
+            "title": "Parent Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "parent_id",
+          "child_id"
+        ],
+        "title": "EdgeOut",
+        "type": "object"
+      },
+      "EvaluationAttemptOut": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "evaluation_run_id": {
+            "title": "Evaluation Run Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "runtime_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Ref"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "evaluation_run_id",
+          "attempt_number",
+          "status",
+          "runtime_ref",
+          "started_at",
+          "ended_at"
+        ],
+        "title": "EvaluationAttemptOut",
+        "type": "object"
+      },
+      "EvaluationResultOut": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evaluation_fingerprint": {
+            "title": "Evaluation Fingerprint",
+            "type": "string"
+          },
+          "evaluation_run_id": {
+            "title": "Evaluation Run Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricOut"
+            },
+            "title": "Metrics",
+            "type": "array"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "subject": {
+            "additionalProperties": true,
+            "title": "Subject",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "evaluation_run_id",
+          "node_id",
+          "subject",
+          "evaluation_fingerprint",
+          "metrics",
+          "artifacts",
+          "created_at"
+        ],
+        "title": "EvaluationResultOut",
+        "type": "object"
+      },
+      "EvaluationRunDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/EvaluationAttemptOut"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "evaluation_run": {
+            "$ref": "#/components/schemas/EvaluationRunOut"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evaluation_run",
+          "attempts"
+        ],
+        "title": "EvaluationRunDetail",
+        "type": "object"
+      },
+      "EvaluationRunOut": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evaluation_cycle": {
+            "title": "Evaluation Cycle",
+            "type": "integer"
+          },
+          "evaluation_fingerprint": {
+            "title": "Evaluation Fingerprint",
+            "type": "string"
+          },
+          "experiment_id": {
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "replicate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replicate"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvaluationResultOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "spec": {
+            "additionalProperties": true,
+            "title": "Spec",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "additionalProperties": true,
+            "title": "Subject",
+            "type": "object"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "experiment_id",
+          "node_id",
+          "evaluation_cycle",
+          "spec",
+          "subject",
+          "evaluation_fingerprint",
+          "seed",
+          "replicate",
+          "status",
+          "result",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EvaluationRunOut",
+        "type": "object"
+      },
+      "EventOut": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorOut"
+          },
+          "aggregate_id": {
+            "title": "Aggregate Id",
+            "type": "string"
+          },
+          "aggregate_revision": {
+            "title": "Aggregate Revision",
+            "type": "integer"
+          },
+          "aggregate_type": {
+            "title": "Aggregate Type",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "id",
+          "aggregate_type",
+          "aggregate_id",
+          "aggregate_revision",
+          "event_type",
+          "schema_version",
+          "occurred_at",
+          "actor",
+          "payload"
+        ],
+        "title": "EventOut",
+        "type": "object"
+      },
+      "EventPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_after": {
+            "title": "Next After",
+            "type": "integer"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_after"
+        ],
+        "title": "EventPage",
+        "type": "object"
+      },
+      "ExperimentOut": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Root"
+          },
+          "best_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Node Id"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          },
+          "budget_status": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DimensionOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Status"
+          },
+          "compiler": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compiler"
+          },
+          "controller_host": {
+            "$ref": "#/components/schemas/ControllerHostOut"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "evaluation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Stage"
+          },
+          "node_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Node Counts",
+            "type": "object"
+          },
+          "numerical_recovery": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Numerical Recovery"
+          },
+          "objective": {
+            "additionalProperties": true,
+            "title": "Objective",
+            "type": "object"
+          },
+          "planner": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planner"
+          },
+          "policy_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Ref"
+          },
+          "quiescent": {
+            "title": "Quiescent",
+            "type": "boolean"
+          },
+          "resilience": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resilience"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "objective",
+          "best_node_id",
+          "node_counts",
+          "policy_ref",
+          "budget",
+          "budget_status",
+          "numerical_recovery",
+          "controller_host",
+          "compiler",
+          "runtime",
+          "artifact_root",
+          "planner",
+          "resilience",
+          "evaluation",
+          "metadata",
+          "quiescent",
+          "next_stage",
+          "created_at",
+          "updated_at",
+          "revision"
+        ],
+        "title": "ExperimentOut",
+        "type": "object"
+      },
+      "ExperimentPage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExperimentSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_before"
+        ],
+        "title": "ExperimentPage",
+        "type": "object"
+      },
+      "ExperimentSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "best_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Node Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "node_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Node Counts",
+            "type": "object"
+          },
+          "objective": {
+            "additionalProperties": true,
+            "title": "Objective",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "objective",
+          "best_node_id",
+          "node_counts",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ExperimentSummary",
+        "type": "object"
+      },
+      "GraphOut": {
+        "additionalProperties": false,
+        "properties": {
+          "best_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Node Id"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeOut"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "experiment_id": {
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeOut"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id",
+          "best_node_id",
+          "nodes",
+          "edges"
+        ],
+        "title": "GraphOut",
+        "type": "object"
+      },
+      "IncidentList": {
+        "additionalProperties": false,
+        "properties": {
+          "incidents": {
+            "items": {
+              "$ref": "#/components/schemas/IncidentOut"
+            },
+            "title": "Incidents",
+            "type": "array"
+          },
+          "recovery_episodes": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryEpisodeOut"
+            },
+            "title": "Recovery Episodes",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incidents",
+          "recovery_episodes"
+        ],
+        "title": "IncidentList",
+        "type": "object"
+      },
+      "IncidentOut": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "classifier": {
+            "additionalProperties": true,
+            "title": "Classifier",
+            "type": "object"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detectors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Detectors",
+            "type": "array"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "stream_generation": {
+            "title": "Stream Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "stream_generation",
+          "sequence",
+          "context",
+          "evidence",
+          "candidates",
+          "detectors",
+          "classifier",
+          "created_at"
+        ],
+        "title": "IncidentOut",
+        "type": "object"
+      },
+      "LeaseOut": {
+        "additionalProperties": false,
+        "properties": {
+          "controller_id": {
+            "title": "Controller Id",
+            "type": "string"
+          },
+          "epoch": {
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "heartbeat_at": {
+            "format": "date-time",
+            "title": "Heartbeat At",
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "format": "date-time",
+            "title": "Lease Expires At",
+            "type": "string"
+          },
+          "live": {
+            "title": "Live",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "controller_id",
+          "epoch",
+          "heartbeat_at",
+          "lease_expires_at",
+          "live"
+        ],
+        "title": "LeaseOut",
+        "type": "object"
+      },
+      "LedgerEntryOut": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "subject_kind": {
+            "title": "Subject Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dimension",
+          "kind",
+          "amount",
+          "subject_kind",
+          "subject_id",
+          "created_at"
+        ],
+        "title": "LedgerEntryOut",
+        "type": "object"
+      },
+      "MetaOut": {
+        "additionalProperties": false,
+        "properties": {
+          "api_version": {
+            "const": "v1",
+            "default": "v1",
+            "title": "Api Version",
+            "type": "string"
+          },
+          "controller_lease": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LeaseOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latest_event_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Event Sequence"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "store": {
+            "$ref": "#/components/schemas/StoreOut"
+          },
+          "xaytune_version": {
+            "title": "Xaytune Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "xaytune_version",
+          "store",
+          "latest_event_sequence",
+          "controller_lease"
+        ],
+        "title": "MetaOut",
+        "type": "object"
+      },
+      "MetricOut": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence_interval": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Interval"
+          },
+          "dataset_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Ref"
+          },
+          "evaluator_name": {
+            "title": "Evaluator Name",
+            "type": "string"
+          },
+          "evaluator_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator Version"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sample_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Count"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "slice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slice"
+          },
+          "standard_error": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Error"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "sample_count",
+          "dataset_ref",
+          "slice",
+          "evaluator_name",
+          "evaluator_version",
+          "seed",
+          "confidence_interval",
+          "standard_error",
+          "metadata"
+        ],
+        "title": "MetricOut",
+        "type": "object"
+      },
+      "MetricPair": {
+        "additionalProperties": false,
+        "description": "One metric on both candidates, and whether the two values can be compared.\n\n``comparable`` is true only when both sides were measured under the same\nevaluation fingerprint and, where a unit is recorded, the same unit. Only\nthen is ``difference`` given; otherwise it is ``None`` and ``reasons`` says\nwhy. This is a recorded-identity check, not a statistical comparison:\nharness comparisons (ADR-022 C1-C4) are H06's, not this API's.",
+        "properties": {
+          "comparable": {
+            "title": "Comparable",
+            "type": "boolean"
+          },
+          "difference": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Difference"
+          },
+          "evaluator_name": {
+            "title": "Evaluator Name",
+            "type": "string"
+          },
+          "left": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetricSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "right": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetricSide"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slice"
+          }
+        },
+        "required": [
+          "evaluator_name",
+          "name",
+          "slice",
+          "left",
+          "right",
+          "comparable",
+          "reasons",
+          "difference"
+        ],
+        "title": "MetricPair",
+        "type": "object"
+      },
+      "MetricSide": {
+        "additionalProperties": false,
+        "description": "One candidate's measurement, with what it was measured under.",
+        "properties": {
+          "evaluation_fingerprint": {
+            "title": "Evaluation Fingerprint",
+            "type": "string"
+          },
+          "metric": {
+            "$ref": "#/components/schemas/MetricOut"
+          },
+          "result_id": {
+            "title": "Result Id",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "metric",
+          "result_id",
+          "evaluation_fingerprint",
+          "unit"
+        ],
+        "title": "MetricSide",
+        "type": "object"
+      },
+      "NodeDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate": {
+            "additionalProperties": true,
+            "title": "Candidate",
+            "type": "object"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionOut"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "evaluation_runs": {
+            "items": {
+              "$ref": "#/components/schemas/EvaluationRunOut"
+            },
+            "title": "Evaluation Runs",
+            "type": "array"
+          },
+          "lineage_paths": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Lineage Paths",
+            "type": "array"
+          },
+          "node": {
+            "$ref": "#/components/schemas/NodeOut"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/RunOut"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "candidate",
+          "lineage_paths",
+          "runs",
+          "evaluation_runs",
+          "decisions"
+        ],
+        "title": "NodeDetail",
+        "type": "object"
+      },
+      "NodeOut": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_origin": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Origin"
+          },
+          "candidate_fingerprint": {
+            "title": "Candidate Fingerprint",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/ActorOut"
+          },
+          "evaluation_cycle": {
+            "title": "Evaluation Cycle",
+            "type": "integer"
+          },
+          "experiment_id": {
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "hypothesis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hypothesis"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_best": {
+            "title": "Is Best",
+            "type": "boolean"
+          },
+          "latest_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parent Ids",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "experiment_id",
+          "parent_ids",
+          "status",
+          "hypothesis",
+          "reason",
+          "candidate_fingerprint",
+          "evaluation_cycle",
+          "created_by",
+          "branch_origin",
+          "latest_decision",
+          "is_best",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "NodeOut",
+        "type": "object"
+      },
+      "PolicyDecisionOut": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/ActorOut"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "engine_name": {
+            "title": "Engine Name",
+            "type": "string"
+          },
+          "engine_version": {
+            "title": "Engine Version",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input_fingerprint": {
+            "title": "Input Fingerprint",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "rule_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rule Ids",
+            "type": "array"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "reasons",
+          "rule_ids",
+          "engine_name",
+          "engine_version",
+          "input_fingerprint",
+          "actor",
+          "created_at"
+        ],
+        "title": "PolicyDecisionOut",
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "description": "``application/problem+json`` (\u00a7S8): fixed text, never a value read or sent.",
+        "properties": {
+          "correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correlation Id"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail"
+        ],
+        "title": "Problem",
+        "type": "object"
+      },
+      "RecoveryEpisodeOut": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_number": {
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "candidate_fingerprint": {
+            "title": "Candidate Fingerprint",
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "title": "Context",
+            "type": "object"
+          },
+          "coordinator_name": {
+            "title": "Coordinator Name",
+            "type": "string"
+          },
+          "coordinator_version": {
+            "title": "Coordinator Version",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/ActorOut"
+          },
+          "effective_plan": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Plan"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "request": {
+            "additionalProperties": true,
+            "title": "Request",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "attempt_number",
+          "candidate_fingerprint",
+          "context",
+          "request",
+          "coordinator_name",
+          "coordinator_version",
+          "created_by",
+          "effective_plan",
+          "created_at"
+        ],
+        "title": "RecoveryEpisodeOut",
+        "type": "object"
+      },
+      "RunDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/CheckpointOut"
+            },
+            "title": "Checkpoints",
+            "type": "array"
+          },
+          "intervention_applications": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Intervention Applications",
+            "type": "array"
+          },
+          "interventions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Interventions",
+            "type": "array"
+          },
+          "run": {
+            "$ref": "#/components/schemas/RunOut"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "checkpoints",
+          "interventions",
+          "intervention_applications"
+        ],
+        "title": "RunDetail",
+        "type": "object"
+      },
+      "RunOut": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptOut"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "candidate_fingerprint": {
+            "title": "Candidate Fingerprint",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "execution_plan_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Plan Ref"
+          },
+          "experiment_id": {
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "replicate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replicate"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "seed_origin": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Origin"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "experiment_id",
+          "seed",
+          "seed_origin",
+          "replicate",
+          "candidate_fingerprint",
+          "execution_plan_ref",
+          "status",
+          "attempts",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunOut",
+        "type": "object"
+      },
+      "SpecDifference": {
+        "additionalProperties": false,
+        "properties": {
+          "left": {
+            "title": "Left"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "right": {
+            "title": "Right"
+          }
+        },
+        "required": [
+          "path",
+          "left",
+          "right"
+        ],
+        "title": "SpecDifference",
+        "type": "object"
+      },
+      "StoreOut": {
+        "additionalProperties": false,
+        "properties": {
+          "migration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migration"
+          },
+          "readable": {
+            "title": "Readable",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "supported_migration": {
+            "title": "Supported Migration",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "readable",
+          "reason",
+          "migration",
+          "supported_migration"
+        ],
+        "title": "StoreOut",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "summary": "A read-only view of the Xaytune control-plane store (ADR-023).",
+    "title": "Xaytune Studio API",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/attempts/{attempt_id}": {
+      "get": {
+        "operationId": "get_attempt_api_v1_attempts__attempt_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Attempt"
+      }
+    },
+    "/api/v1/compare": {
+      "get": {
+        "description": "Two candidates side by side: lineage, spec difference and metrics (\u00a7S6).\n\nLineage is structural. Whether two measurements can be compared is\ndecided per metric, from their recorded evaluation identity.",
+        "operationId": "compare_api_v1_compare_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "left",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Left",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "right",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Right",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompareOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Compare"
+      }
+    },
+    "/api/v1/evaluation-runs/{evaluation_run_id}": {
+      "get": {
+        "operationId": "get_evaluation_run_api_v1_evaluation_runs__evaluation_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evaluation_run_id",
+            "required": true,
+            "schema": {
+              "title": "Evaluation Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationRunDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Evaluation Run"
+      }
+    },
+    "/api/v1/experiments": {
+      "get": {
+        "description": "Experiments, newest first, keyset-paged (\u00a7S6).",
+        "operationId": "list_experiments_api_v1_experiments_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "List Experiments"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}": {
+      "get": {
+        "operationId": "get_experiment_api_v1_experiments__experiment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Experiment"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/actions": {
+      "get": {
+        "operationId": "get_actions_api_v1_experiments__experiment_id__actions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Actions"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/agent-invocations": {
+      "get": {
+        "operationId": "get_agent_invocations_api_v1_experiments__experiment_id__agent_invocations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentInvocationList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Agent Invocations"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/budget": {
+      "get": {
+        "operationId": "get_budget_api_v1_experiments__experiment_id__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Budget"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/decisions": {
+      "get": {
+        "operationId": "get_decisions_api_v1_experiments__experiment_id__decisions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Decisions"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/events": {
+      "get": {
+        "description": "The experiment's event journal after *after*, by sequence (\u00a7S6, \u00a7S7).",
+        "operationId": "get_events_api_v1_experiments__experiment_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Events"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/graph": {
+      "get": {
+        "operationId": "get_graph_api_v1_experiments__experiment_id__graph_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Graph"
+      }
+    },
+    "/api/v1/experiments/{experiment_id}/incidents": {
+      "get": {
+        "operationId": "get_incidents_api_v1_experiments__experiment_id__incidents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Incidents"
+      }
+    },
+    "/api/v1/meta": {
+      "get": {
+        "description": "What this API reads, and whether it can: answered even when the store cannot be read.",
+        "operationId": "meta_api_v1_meta_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Meta"
+      }
+    },
+    "/api/v1/nodes/{node_id}": {
+      "get": {
+        "operationId": "get_node_api_v1_nodes__node_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Node"
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "operationId": "get_run_api_v1_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Run"
+      }
+    }
+  }
+}

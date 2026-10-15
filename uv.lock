@@ -6738,6 +6738,7 @@ dependencies = [
 all = [
     { name = "datasketch" },
     { name = "deepspeed" },
+    { name = "fastapi" },
     { name = "gradio" },
     { name = "langdetect" },
     { name = "lm-eval", extra = ["hf"] },
@@ -6745,6 +6746,7 @@ all = [
     { name = "openai" },
     { name = "plotly" },
     { name = "tensorboard" },
+    { name = "uvicorn" },
     { name = "wandb" },
 ]
 data-all = [
@@ -6760,12 +6762,15 @@ deepspeed = [
     { name = "deepspeed" },
 ]
 dev = [
+    { name = "fastapi" },
+    { name = "httpx" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "uvicorn" },
 ]
 docs = [
     { name = "mkdocs-material" },
@@ -6791,6 +6796,10 @@ studio = [
     { name = "gradio" },
     { name = "plotly" },
 ]
+studio-web = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
 synth = [
     { name = "openai" },
 ]
@@ -6814,7 +6823,10 @@ requires-dist = [
     { name = "datasets", specifier = ">=2.18" },
     { name = "datasketch", marker = "extra == 'data-prep'", specifier = ">=1.6" },
     { name = "deepspeed", marker = "extra == 'deepspeed'", specifier = ">=0.14" },
+    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115" },
+    { name = "fastapi", marker = "extra == 'studio-web'", specifier = ">=0.115" },
     { name = "gradio", marker = "extra == 'studio'", specifier = ">=5.0" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "kubernetes", marker = "extra == 'kuberay'", specifier = ">=31" },
     { name = "langdetect", marker = "extra == 'data-prep'", specifier = ">=1.0" },
     { name = "lm-eval", extras = ["hf"], marker = "extra == 'eval'", specifier = "==0.4.13" },
@@ -6841,6 +6853,8 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.40" },
     { name = "transformers", marker = "extra == 'trl'", specifier = ">=5.17,<5.18" },
     { name = "trl", marker = "extra == 'trl'", specifier = ">=1.13,<1.14" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.30" },
+    { name = "uvicorn", marker = "extra == 'studio-web'", specifier = ">=0.30" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.16" },
     { name = "xaytune", extras = ["data-prep"], marker = "extra == 'all'" },
     { name = "xaytune", extras = ["data-prep"], marker = "extra == 'data-all'" },
@@ -6849,12 +6863,13 @@ requires-dist = [
     { name = "xaytune", extras = ["eval"], marker = "extra == 'all'" },
     { name = "xaytune", extras = ["mlflow"], marker = "extra == 'all'" },
     { name = "xaytune", extras = ["studio"], marker = "extra == 'all'" },
+    { name = "xaytune", extras = ["studio-web"], marker = "extra == 'all'" },
     { name = "xaytune", extras = ["synth"], marker = "extra == 'all'" },
     { name = "xaytune", extras = ["synth"], marker = "extra == 'data-all'" },
     { name = "xaytune", extras = ["tensorboard"], marker = "extra == 'all'" },
     { name = "xaytune", extras = ["wandb"], marker = "extra == 'all'" },
 ]
-provides-extras = ["deepspeed", "trl", "eval", "ray", "ray-tune", "torchft", "kuberay", "wandb", "mlflow", "tensorboard", "studio", "data-prep", "synth", "data-all", "all", "docs", "dev"]
+provides-extras = ["deepspeed", "trl", "eval", "ray", "ray-tune", "torchft", "kuberay", "wandb", "mlflow", "tensorboard", "studio", "studio-web", "data-prep", "synth", "data-all", "all", "docs", "dev"]
 
 [[package]]
 name = "xxhash"

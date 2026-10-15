@@ -236,6 +236,24 @@ a missing `--state`.
 
 ---
 
+## studio-web
+
+Serve the read-only [Studio API](api/studio-api.md) over a control-plane state database.
+
+```bash
+xaytune studio-web [--state <path>] [--host 127.0.0.1] [--port 8765]
+```
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--state` | Yes, or `$XAYTUNE_STATE` | The state database. Opened read-only and never migrated |
+| `--host` | No | A loopback address (default `127.0.0.1`). Any other host is refused: the API has no authentication |
+| `--port` | No | Port (default `8765`) |
+
+Exits with code 2 for a missing state database, a file that is not one, or a non-loopback host. Requires `pip install xaytune[studio-web]`.
+
+---
+
 ## Example Config Files
 
 xaytune ships example configs in `configs/examples/`:

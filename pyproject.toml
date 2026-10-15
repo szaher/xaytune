@@ -96,6 +96,8 @@ wandb = ["wandb>=0.16"]
 mlflow = ["mlflow>=2.10"]
 tensorboard = ["tensorboard>=2.14"]
 studio = ["gradio>=5.0", "plotly>=5.0"]
+# The read-only Studio API over the control-plane store (UX-01, ADR-023).
+studio-web = ["fastapi>=0.115", "uvicorn>=0.30"]
 data-prep = ["datasketch>=1.6", "langdetect>=1.0"]
 synth = ["openai>=1.0"]
 data-all = ["xaytune[data-prep]", "xaytune[synth]"]
@@ -106,6 +108,7 @@ all = [
     "xaytune[mlflow]",
     "xaytune[tensorboard]",
     "xaytune[studio]",
+    "xaytune[studio-web]",
     "xaytune[data-prep]",
     "xaytune[synth]",
 ]
@@ -118,6 +121,10 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    # The Studio API's tests run in every test job (ADR-023 Q4).
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "uvicorn>=0.30",
     "xaytune[docs]",
 ]
 

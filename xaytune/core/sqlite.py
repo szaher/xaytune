@@ -34,7 +34,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-__all__ = ["connect", "read_snapshot", "write_transaction"]
+__all__ = ["connect", "connect_read_only", "read_snapshot", "write_transaction"]
 
 # Long enough to ride out a contended writer, short enough that a genuine
 # deadlock surfaces as an error rather than a hang.
@@ -75,6 +75,32 @@ def connect(path: Path | str) -> sqlite3.Connection:
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = FULL")
     connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    return connection
+
+
+def connect_read_only(path: Path | str) -> sqlite3.Connection:
+    """Open an existing database at *path* so that nothing can write through it.
+
+    For readers that must never change the record (ADR-023 §S3): the file is
+    opened ``mode=ro``, which refuses a missing file rather than creating
+    one, and ``query_only`` refuses every write statement as well. No
+    journal-mode pragma is issued -- switching to WAL is itself a write --
+    so a reader of a WAL database sees it as the writer left it.
+
+    ``check_same_thread`` is off because a web framework may open the
+    connection on one worker thread and read on another; the connection is
+    still used by one request at a time.
+
+    Raises:
+        sqlite3.OperationalError: If *path* does not exist or cannot be opened.
+    """
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(
+        uri, uri=True, isolation_level=None, detect_types=0, check_same_thread=False
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only = ON")
     connection.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
     return connection
 

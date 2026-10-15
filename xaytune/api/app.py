@@ -33,8 +33,9 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from xaytune.api.store import StoreUnavailableError, StudioStore
 from xaytune.api.v1.models import Problem
 from xaytune.api.v1.routes import InvalidParameterError, NotFoundError, router
+from xaytune.api.web import BUNDLE, install_web_client
 
-__all__ = ["LOOPBACK_HOSTS", "application", "create_app"]
+__all__ = ["LOOPBACK_HOSTS", "application", "create_app", "problem"]
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,11 @@ _SECURITY_HEADERS = (
 )
 
 
-def create_app(store: StudioStore | Path | str) -> FastAPI:
+def create_app(store: StudioStore | Path | str, *, web_client: Path | None = BUNDLE) -> FastAPI:
     """The Studio API over *store*, a state database path or an opened :class:`StudioStore`.
+
+    *web_client* is the built client bundle served at ``/`` (UX-02); ``None``
+    serves the API only.
 
     Raises:
         StoreUnavailableError: If the path is missing or is not a Xaytune
@@ -60,6 +64,7 @@ def create_app(store: StudioStore | Path | str) -> FastAPI:
     studio_store = store if isinstance(store, StudioStore) else StudioStore(store)
     app = application()
     app.state.store = studio_store
+    install_web_client(app, web_client)
     return app
 
 
@@ -85,7 +90,7 @@ def application() -> FastAPI:
 # ---- errors ------------------------------------------------------------------------------------
 
 
-def _problem(
+def problem(
     status: int, kind: str, title: str, detail: str, correlation_id: str | None = None
 ) -> JSONResponse:
     body = Problem(
@@ -103,11 +108,11 @@ def _problem(
 def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(NotFoundError)
     async def not_found(request: Request, error: NotFoundError) -> JSONResponse:
-        return _problem(404, "not-found", "Not found", f"no such {error.kind}")
+        return problem(404, "not-found", "Not found", f"no such {error.kind}")
 
     @app.exception_handler(InvalidParameterError)
     async def invalid(request: Request, error: InvalidParameterError) -> JSONResponse:
-        return _problem(
+        return problem(
             422, "invalid-parameter", "Invalid parameter", f"{error.parameter}: {error.reason}"
         )
 
@@ -117,7 +122,7 @@ def _install_error_handlers(app: FastAPI) -> None:
         names = sorted(
             {".".join(str(part) for part in item.get("loc", ())[1:]) for item in error.errors()}
         )
-        return _problem(
+        return problem(
             422,
             "invalid-parameter",
             "Invalid parameter",
@@ -127,15 +132,15 @@ def _install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(StoreUnavailableError)
     async def unavailable(request: Request, error: StoreUnavailableError) -> JSONResponse:
         # StoreUnavailableError messages are fixed text by construction.
-        return _problem(503, "store-unavailable", "State database unavailable", str(error))
+        return problem(503, "store-unavailable", "State database unavailable", str(error))
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, error: StarletteHTTPException) -> JSONResponse:
         if error.status_code == 404:
-            return _problem(404, "not-found", "Not found", "no such resource")
+            return problem(404, "not-found", "Not found", "no such resource")
         if error.status_code == 405:
-            return _problem(405, "method-not-allowed", "Method not allowed", "read-only API")
-        return _problem(error.status_code, "http-error", "Request refused", "request refused")
+            return problem(405, "method-not-allowed", "Method not allowed", "read-only API")
+        return problem(error.status_code, "http-error", "Request refused", "request refused")
 
 
 # ---- the front door ----------------------------------------------------------------------------
@@ -164,13 +169,13 @@ class _FrontDoor:
             return
         guarded = _secured(send)
         if _host_name(scope) not in LOOPBACK_HOSTS:
-            response = _problem(
+            response = problem(
                 421, "host-refused", "Host refused", "the Studio API answers loopback hosts only"
             )
             await response(scope, receive, guarded)
             return
         if scope["method"] not in _READ_METHODS:
-            response = _problem(405, "method-not-allowed", "Method not allowed", "read-only API")
+            response = problem(405, "method-not-allowed", "Method not allowed", "read-only API")
             response.headers["allow"] = "GET, HEAD"
             await response(scope, receive, guarded)
             return
@@ -197,7 +202,7 @@ class _FrontDoor:
             logger.exception("studio API error %s", correlation_id)
             if started:
                 raise
-            response = _problem(
+            response = problem(
                 500, "internal-error", "Internal error", "see the server log", correlation_id
             )
             await response(scope, receive, guarded)

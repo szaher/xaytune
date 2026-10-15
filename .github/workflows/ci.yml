@@ -67,6 +67,40 @@ jobs:
         env:
           XAYTUNE_REQUIRE_GRADIO: "1"
 
+  # The Studio web client (UX-02): its types against the committed OpenAPI
+  # document, typecheck, lint, unit tests and build; then the browser tests,
+  # which record a real experiment and drive `xaytune studio-web` over it.
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run api:check
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - uses: astral-sh/setup-uv@v4
+      - run: uv sync --locked --extra dev
+        working-directory: .
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+        env:
+          XAYTUNE_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/playwright-report
+
   # The optional lm-eval integration (PR-014b), with the `eval` extra resolved
   # from uv.lock. A job of its own: installing lm-eval exposes an isolation
   # defect in the legacy benchmark tests (#38), which must not block the
@@ -178,8 +212,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
+      # The Studio web client ships inside the wheel (ADR-023 S11): built
+      # here, so `pip install xaytune[studio-web]` serves it without Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm run --prefix web build
       - run: uv build
       - run: python3 scripts/check_sdist.py dist/*.tar.gz
+      - run: unzip -l dist/*.whl | grep -q "xaytune/api/static/index.html"
       # The README is PyPI's long description; metadata or markup PyPI would
       # reject or render wrongly fails here, before any upload is possible.
       - run: uvx twine check --strict dist/*

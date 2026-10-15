@@ -12,6 +12,13 @@
 
 ### Added
 
+- **Xaytune Studio web client** (UX-02, ADR-023). `xaytune studio-web --state state.db` now serves a React + TypeScript client at `http://127.0.0.1:8765/`, beside `/api/v1`, from the same origin and behind the same front door.
+  - Views: Overview, Experiment Explorer, Experiment (candidate graph with lineage and decisions, runs, decisions, actions, activity with incidents and recovery, budget, configuration), Candidate, Run, Evaluation run and Compare. Monitoring, Trajectories and Optimization say what they wait for.
+  - The URL is the state; absent values are never shown as zero; recorded text is never rendered as markup; the comparison subtracts only values the API marks comparable.
+  - Its types are generated from the committed OpenAPI document, and CI fails if they drift.
+  - Browser tests (Playwright) record a real experiment through a real controller host and drive `xaytune studio-web` over it, including a restart mid-test.
+  - The wheel carries the built client, so no Node is needed to run it. A source checkout serves the API only until `npm run build` is run in `web/`.
+
 - **Studio API: a read-only HTTP view of the control-plane record** (UX-01, ADR-023). `xaytune studio-web --state state.db` serves `/api/v1` from the `studio-web` extra (`fastapi`, `uvicorn`).
   - Experiments, the candidate graph, candidates, runs, attempts, evaluation runs and results, decisions, actions with policy decisions, budget, incidents with recovery episodes, planner invocations, the event journal, and a two-candidate comparison, all read through the existing stores.
   - Read-only by construction: `mode=ro` plus `query_only`, never migrated, `GET`/`HEAD` only. Stateless, so restarts lose nothing. One snapshot per response. The schema version is checked per request (`503` with the reason).

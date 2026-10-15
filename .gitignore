@@ -36,3 +36,11 @@ docs/superpowers/
 .codegraph/
 .serena/
 .saad-agent/
+
+# The Studio web client's build output (npm run build in web/). Built in CI
+# and carried by the wheel; never committed.
+xaytune/api/static/
+web/node_modules/
+web/test-results/
+web/playwright-report/
+web/*.tsbuildinfo

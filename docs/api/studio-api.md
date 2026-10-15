@@ -7,7 +7,7 @@ pip install "xaytune[studio-web]"
 xaytune studio-web --state state.db          # http://127.0.0.1:8765/api/v1/meta
 ```
 
-`--state` defaults to `$XAYTUNE_STATE`. The API can run with or without a daemon: it reads history whether or not anything is running.
+`--state` defaults to `$XAYTUNE_STATE`. The same process serves the Studio web client at `/` (see [Training Studio](../studio.md#studio-web)); everything below is the API it reads. The API can run with or without a daemon: it reads history whether or not anything is running.
 
 ## What it guarantees
 

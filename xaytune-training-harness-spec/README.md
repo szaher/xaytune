@@ -159,13 +159,20 @@ Each solves part of the problem. Xaytune owns the missing cross-cutting control 
     exposure until authentication exists, the released evaluation tier
     only, and the backend gaps (metric series, durable harness evaluation)
     that some views wait on
+  - [ADR-024](adrs/ADR-024-harness-search-and-mutation.md) decides H07's
+    harness search and mutation (P1–P13, accepted 2026-10-15, #85): search and
+    mutation providers behind the planner contract, a typed `HarnessPatch`,
+    a distinct `HarnessCandidateProposal`, the provider view of evaluation
+    only, and governance by the branching contract plus four harness checks.
+    Its first implementation runs locally until harness candidates are
+    durable
 
   ADR status is **not** a single block. It is:
 
   | Status | ADRs |
   |---|---|
   | Ratified by merged implementation | ADR-002, ADR-010 |
-  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023 |
+  | Accepted by decision | ADR-001, ADR-004 – ADR-009, ADR-011 – ADR-017, ADR-018, ADR-019, ADR-020, ADR-021, ADR-022, ADR-023, ADR-024 |
   | Superseded | ADR-003 → ADR-011 (retained for its history) |
   | Still `Proposed` | none |
 

@@ -13,6 +13,14 @@ as implemented in [PR #75](https://github.com/szaher/xaytune/pull/75) at head
 this ADR's decisions. It is the starting point the durable follow-up reviews
 and decides on its own, so no part of this ADR is half-accepted.
 
+**Durable path progress (Track B).** Step 1 of M6's order, the downgrade
+guard, is implemented: `migrate()` refuses a database whose ledger records a
+migration the build does not ship (`SchemaTooNewError`), from every entry
+point that migrates, before anything is written. The first release that
+contains it is the **minimum compatible version** of any database a later
+rebuild-mode migration (M2–M3) changes. Steps 2–5 remain proposed, each for
+its own review.
+
 Builds on [ADR-018](ADR-018-agent-harness-candidates.md), accepted on
 2026-10-11 as a separate decision.
 

@@ -50,6 +50,14 @@ Two more records make external effects safe:
 - **`Action`**: a request such as "cancel this experiment" is recorded as an
   Action, carried out through operations, and closed with its outcome.
 
+**Upgrades go forward only.** Every process that writes the record (the
+daemon, an embedded controller host, a daemon client) migrates it to the
+schema of its own build first. A database that a *newer* Xaytune has already
+migrated is refused with `SchemaTooNewError`, and nothing is read or written:
+this build cannot represent rows of a shape it does not know. Upgrade every
+process that opens the database, or restore a backup taken before the newer
+version migrated it.
+
 ## Candidates and identity
 
 A `CandidateSpec` is one hypothesis: model, data, and how to train. It must

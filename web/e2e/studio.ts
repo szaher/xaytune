@@ -17,7 +17,7 @@ export const REPOSITORY = path.resolve(path.dirname(fileURLToPath(import.meta.ur
 export const PYTHON = process.env.XAYTUNE_PYTHON ?? "python";
 export const RECORD_FILE = path.join(tmpdir(), "xaytune-studio-e2e.json");
 
-export type Recorded = { state: string };
+export type Recorded = { state: string; training: string };
 
 export function recorded(): Recorded {
   return JSON.parse(readFileSync(RECORD_FILE, "utf8")) as Recorded;

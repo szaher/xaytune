@@ -38,6 +38,7 @@ All under `/api/v1`; every body has `"schema": "xaytune.studio-api/v1"`.
 | `GET /compare?left=&right=` | Two candidates: their lineage (structural only), spec differences, and each metric side by side with the evaluation fingerprint and unit it was measured under. A pair is `comparable`, with a `difference`, only when both sides share an evaluation fingerprint and unit; otherwise `reasons` says why and there is no difference |
 | `GET /runs/{id}` | A run with its attempts, checkpoints and interventions |
 | `GET /attempts/{id}` | An attempt with its incidents, checkpoints and directives |
+| `GET /attempts/{id}/metrics?name=&max_points=` | A training attempt's recorded metric series (`training.loss`, `training.learning_rate`, `resource.*`, `custom.*`, ...), one per name, unit, worker and rank, in stream order (a name reported in two units is two series). Each point has its optimizer step (`null` when the event had none, never 0) and stream position. `name` (repeatable) keeps only those series. `max_points` (4–5000, default 1000) downsamples at read time, keeping each bucket's lowest and highest value and the first and last point; `downsampled` says when it did |
 | `GET /evaluation-runs/{id}` | An evaluation run with its attempts and result |
 
 `limit` defaults to 100; above 500 is refused, not clamped.
@@ -56,7 +57,9 @@ python -m xaytune.api.v1.openapi
 
 ## What it cannot show yet
 
-Training-metric series (loss curves), harness evaluations (H06), harness candidates and trajectories are not in the control-plane store yet; ADR-023 §S12 names the backend work each needs.
+Harness evaluations (H06), harness candidates and trajectories are not in the control-plane store yet; ADR-023 §S12 names the backend work each needs.
+
+Training-metric series are recorded since migration 020: the controller writes every scalar a training attempt's telemetry reports into the metric-point store as it ingests the stream, idempotently on the event's stream position, so a replayed stream never duplicates a point. Points recorded before 020, and metrics from evaluation attempts, are not in it.
 
 ::: xaytune.api.create_app
 ::: xaytune.api.StudioStore

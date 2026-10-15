@@ -253,6 +253,47 @@ class AttemptDetail(_Body):
     directives: list[Document]
 
 
+class MetricPointOut(_Model):
+    """One recorded point. ``optimizer_step`` is ``null`` when the event had none -- never 0."""
+
+    optimizer_step: int | None
+    value: float
+    stream_generation: int
+    sequence: int
+    event_id: str
+    """The telemetry event that reported it: the point's provenance."""
+    emitted_at: str | None
+
+
+class MetricSeriesOut(_Model):
+    """One series of one attempt: a name and unit, and the worker and rank that reported it.
+
+    One name reported in two units is two series: a value in ms is never
+    drawn on a line of seconds.
+
+    ``count`` is every point recorded; ``points`` may be fewer when
+    ``downsampled`` is true. Downsampling happens at read time and keeps
+    each bucket's lowest and highest value and the series' first and last
+    point, so a spike is never averaged away.
+    """
+
+    name: str
+    unit: str | None
+    worker: str | None
+    rank: int | None
+    count: int
+    downsampled: bool
+    points: list[MetricPointOut]
+
+
+class AttemptMetrics(_Body):
+    """A training attempt's recorded metric series (Track B, migration 020)."""
+
+    attempt_id: str
+    run_id: str
+    series: list[MetricSeriesOut]
+
+
 # ---- evaluation and decisions ------------------------------------------------------------------
 
 

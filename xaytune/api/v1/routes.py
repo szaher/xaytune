@@ -503,6 +503,44 @@ def get_attempt(attempt_id: str, repository: Repository) -> m.AttemptDetail:
     )
 
 
+MAX_METRIC_POINTS = 5000
+DEFAULT_METRIC_POINTS = 1000
+
+
+@router.get("/attempts/{attempt_id}/metrics", response_model=m.AttemptMetrics)
+def get_attempt_metrics(
+    attempt_id: str,
+    repository: Repository,
+    name: Annotated[list[str] | None, Query(max_length=50)] = None,
+    max_points: Annotated[int, Query(ge=4, le=MAX_METRIC_POINTS)] = DEFAULT_METRIC_POINTS,
+) -> m.AttemptMetrics:
+    """The attempt's recorded metric series, each downsampled to *max_points* at most.
+
+    *name* (repeatable) keeps only those series. A name nothing recorded is
+    simply absent: an attempt with no points has no series, never a zero.
+    """
+    attempt = repository.aggregates.get_attempt(attempt_id)
+    if attempt is None:
+        raise NotFoundError("attempt")
+    wanted = None if name is None else set(name)
+    series = [
+        mapping.metric_series_out(
+            summary,
+            repository.metric_points.points(
+                attempt_id,
+                summary.name,
+                unit=summary.unit,
+                worker=summary.worker,
+                rank=summary.rank,
+            ),
+            max_points,
+        )
+        for summary in repository.metric_points.series(attempt_id)
+        if wanted is None or summary.name in wanted
+    ]
+    return m.AttemptMetrics(attempt_id=attempt_id, run_id=str(attempt.run_id), series=series)
+
+
 @router.get("/evaluation-runs/{evaluation_run_id}", response_model=m.EvaluationRunDetail)
 def get_evaluation_run(evaluation_run_id: str, repository: Repository) -> m.EvaluationRunDetail:
     run = repository.aggregates.get_evaluation_run(evaluation_run_id)

@@ -118,6 +118,7 @@ matter of record rather than of review:
 | ADR-020 — pinned benchmark and task contracts | H04; B1–B9 accepted 2026-10-11 (#76). Trajectories (H05), evaluation wiring and scoring (H06) and persistence stay deferred |
 | ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77), implemented in #78 (`fd24763`). Scoring (H06) and persistence stay deferred |
 | ADR-022 — harness evaluation, scoring and comparison | H06; V1–V13 accepted 2026-10-12 (#79). Acceptance is architectural: the implementation (in review) is reviewed on its own. The durable path, decision-engine integration and H07 stay deferred |
+| ADR-023 — Studio read API and web client | UX-01–UX-03; S1–S13 accepted 2026-10-14 (#82) with Q1–Q4 decided and lineage kept apart from measurement comparability. No domain contract, migration or controller change |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
@@ -2425,7 +2426,7 @@ After core stabilizes:
 - TRL/OpenEnv Agent Training compiler (weight updates through agent environments)
 - verl compiler (model-weight optimization)
 - torchtune compiler
-- Studio migration
+- Studio migration (superseded by the Studio track below, ADR-023)
 
 Agent Training changes model weights. Agent Harness Optimization changes how a
 model is operated and can run without training any model. The track below is
@@ -2725,3 +2726,40 @@ Not here:
 - search and mutation (H07);
 - provider usage, cost, and real latency (H08–H11);
 - unpaired designs, formal inference and multiple-comparison control.
+
+---
+
+## Studio track (UX), accepted 2026-10-14
+
+[ADR-023](adrs/ADR-023-studio-read-api-and-web-client.md) and
+[chapter 24](24-studio-experience.md) decide Studio V1: a read-only view of
+the durable control-plane store, built on real data and never on mocked
+experiments. It replaces Phase 11's "Studio migration" item, which assumed
+the Gradio Studio would be migrated. Instead, the Gradio Studio stays as an
+optional legacy entry point and the new client is built on the record.
+
+The track runs in parallel with H07 (Track B). UX-00 (#80, `b6df566`) is
+merged.
+
+| ID | Deliverable | Prerequisites / gate |
+|---|---|---|
+| UX-01 | Read-only FastAPI `/api/v1` over the existing stores, committed OpenAPI document with a type-aware drift test, three store reads, an end-to-end real-data test, Gradio tests in CI (#83) | ADR-023 accepted |
+| UX-02 | React + TypeScript client (`web/`): Overview, Experiment Explorer, Candidate Graph, Candidate, Run, Compare; packaging without Node; `web` CI job | UX-01's OpenAPI document |
+| UX-03 | Evaluation views: ADR-022 comparisons, disclosure rendering, trajectory inspector | UX-02; the durable harness evaluation record (ADR-023 §S12) |
+| UX-04 | Controls through the daemon mailbox; optimization history | H07 governance |
+| UX-05 | Authentication, multi-user, remote bind, Kubernetes views | Its own ADR |
+
+Three tracks run in parallel (ADR-023 §S12, decided at acceptance):
+
+- **Track A, Studio:** UX-01 → UX-02 → UX-03. UX-02 starts now with
+  training-experiment views on the UX-01 contract.
+- **Track B, durable platform:** the metric-point store (migration 020,
+  independent) for loss and telemetry charts; durable harness candidates and
+  execution (ADR-019 M1–M6); then durable H06 evaluations and trajectory
+  references, planned with their harness-execution prerequisites. No
+  directory-indexed stop-gap.
+- **Track C, H07:** mutation/search architecture and provider contracts, in
+  parallel. Execution integration follows the approved governance and the
+  durable harness work.
+
+UX-03 waits for Track B's durable evaluation and trajectory work.

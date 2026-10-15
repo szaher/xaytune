@@ -7,8 +7,13 @@ xaytune studio                # http://127.0.0.1:7860
 xaytune studio --port 8080
 ```
 
-!!! tip "The new Studio"
-    A read-only Studio built on the control-plane record is in progress. Its API, `xaytune studio-web`, is available now: see [Studio API](api/studio-api.md). This Gradio Studio stays available as a legacy entry point.
+!!! tip "Xaytune Studio on the control-plane record"
+    `xaytune studio-web --state state.db` opens a read-only Studio at
+    `http://127.0.0.1:8765/` built on the control-plane record: experiments,
+    the candidate graph, runs with their recovery, evaluations, decisions and
+    comparisons, for anything the daemon or a controller host has recorded.
+    See [Studio web](#studio-web) below. The Gradio Studio described on the
+    rest of this page stays available as a legacy entry point.
 
 !!! note "Requires Gradio"
     Install with `pip install xaytune[studio]` or `pip install gradio plotly`.
@@ -147,3 +152,31 @@ job_id = mgr.submit(config)
 status = mgr.get_status(job_id)
 print(status.status)  # "running" or "completed"
 ```
+
+## Studio web
+
+```bash
+pip install "xaytune[studio-web]"
+xaytune studio-web --state state.db        # http://127.0.0.1:8765/
+```
+
+A read-only view of the control-plane record (ADR-023). It reads the same
+state database as `xaytune status`, opened read-only, so it can run with or
+without a daemon, and restarting it loses nothing.
+
+| Section | Shows |
+|---|---|
+| Overview | Active experiments, actions waiting for approval (with the CLI command that answers them), recent failures |
+| Experiments | Every experiment, filterable by status, newest first |
+| Experiment | Tabs: overview, the **candidate graph** with lineage and decisions, runs, decisions, actions with their policy decisions, the event journal with incidents and recovery, budget, and the recorded configuration |
+| Candidate | Its spec, lineage, runs, evaluations and decisions |
+| Run | Each attempt with its incidents, overrides and the checkpoint it restored from |
+| Compare | Two candidates: their lineage, spec differences and metrics side by side. A difference is shown only when both were measured under the same evaluation and unit |
+
+Every view's address includes its selection, so a link reproduces what you
+saw. Changes (approvals, cancellation) are still made with the CLI.
+Monitoring charts, harness evaluations and trajectories arrive with the
+backend work ADR-023 §S12 names.
+
+A release wheel carries the built client. From a source checkout, build it
+once with `npm ci && npm run build` in `web/`.

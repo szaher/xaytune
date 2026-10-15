@@ -137,6 +137,12 @@ xaytune = "xaytune.cli:main"
 # PyPI. uv builds the wheel *from* this sdist, and CI checks both
 # (scripts/check_sdist.py, scripts/wheel_smoke.py), which is what proves the
 # list is complete.
+# The built Studio web client is gitignored, so hatch would leave it out;
+# listing it as an artifact ships it whenever it has been built (the wheel
+# job builds it first and checks it is there).
+[tool.hatch.build]
+artifacts = ["xaytune/api/static/**"]
+
 [tool.hatch.build.targets.sdist]
 include = [
     "/xaytune",

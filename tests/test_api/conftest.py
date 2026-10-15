@@ -66,8 +66,10 @@ def state_copy(recorded: Recorded, tmp_path: Path) -> Path:
     return copy
 
 
-def client(state: Path | str, **options: Any) -> TestClient:
-    return TestClient(create_app(state), base_url=BASE_URL, **options)
+def client(state: Path | str, *, web_client: Path | None = None, **options: Any) -> TestClient:
+    """The API over *state*; without the web client unless one is named, so a
+    locally built bundle never changes what these tests see."""
+    return TestClient(create_app(state, web_client=web_client), base_url=BASE_URL, **options)
 
 
 @pytest.fixture

@@ -119,6 +119,7 @@ matter of record rather than of review:
 | ADR-021 — trajectory artifacts and provenance | H05; T1–T11 accepted 2026-10-12 (#77), implemented in #78 (`fd24763`). Scoring (H06) and persistence stay deferred |
 | ADR-022 — harness evaluation, scoring and comparison | H06; V1–V13 accepted 2026-10-12 (#79). Acceptance is architectural: the implementation (in review) is reviewed on its own. The durable path, decision-engine integration and H07 stay deferred |
 | ADR-023 — Studio read API and web client | UX-01–UX-03; S1–S13 accepted 2026-10-14 (#82) with Q1–Q4 decided and lineage kept apart from measurement comparability. No domain contract, migration or controller change |
+| ADR-024 — harness search and mutation | The H07 implementation PR (P12); P1–P13 accepted 2026-10-15 (#85) with Q1–Q4 decided: strict enabled-tool narrowing, one provider-safe policy for the whole search context, a local spending envelope (P12a), autonomous search only when the experiment authorizes it. Acceptance is architectural: the implementation must still demonstrate the negative tests. No existing contract, fingerprint, migration or controller path changes; branching harness proposals waits for ADR-019 M1–M6 |
 | ADR-004 — durable controller hosting | band H; accepted 2026-10-03 with the SQLite request mailbox, atomic admission, flock singleton and the PR-027/PR-028 boundary; §8 (lease, fencing, sweep) settled 2026-10-04; §3 mutation kinds and §9 caller-side host settled 2026-10-04 (PR-029) |
 
 ### Still Proposed, and what each actually blocks
@@ -2455,7 +2456,7 @@ now so later planner contracts avoid unnecessary training-only assumptions.
 | H04 | Benchmark/task/environment protocol and input resolution | H02; repeatability/pinning review; required before comparable execution |
 | H05 | Trajectory artifact model | H03–H04; provenance/security/retention review |
 | H06 | Harness evaluator + multi-objective metrics | H04–H05; replicate and objective contract review |
-| H07 | Mutation/search provider protocols | H02, H06; PR-025 candidate-proposal governance settled before mutation execution; distinct CandidateProposal/ActionProposal paths |
+| H07 | Mutation/search provider protocols ([ADR-024](adrs/ADR-024-harness-search-and-mutation.md), accepted) | H02, H06; candidate-proposal governance settled in ADR-024 §P7; distinct CandidateProposal/HarnessCandidateProposal/ActionProposal paths; durable branching after ADR-019 M1–M6 |
 | H08 | Pi adapter | H03–H05; declared supported subset and capability checks |
 | H09 | Codex adapter | H03–H05; declared supported subset and capability checks |
 | H10 | Claude Code adapter | H03–H05; declared supported subset and capability checks |

@@ -98,6 +98,7 @@ from xaytune.core.domain.evaluation import (
 )
 from xaytune.core.domain.event import DomainEvent, OutboxRecord
 from xaytune.core.domain.experiment import CandidateSpecSnapshot, Experiment, ExperimentNode
+from xaytune.core.domain.harness_search import HarnessCandidateProposal
 from xaytune.core.domain.incident import AttemptContext, Incident
 from xaytune.core.domain.intervention import (
     IncidentTrigger,
@@ -2731,12 +2732,16 @@ class ControlPlaneRepository:
     def materialize_candidate_proposal(
         self,
         experiment_id: ExperimentId | str,
-        proposal: CandidateProposal,
+        proposal: CandidateProposal | HarnessCandidateProposal,
         *,
         actor: Actor,
         destinations: tuple[str, ...] = (),
     ) -> ExperimentNode:
         """Turn a candidate proposal into a ``PLANNED`` child node, in one commit (PR-025).
+
+        A harness proposal (ADR-024) is refused before anything is read or
+        written: harness candidates are not durable until ADR-019 M1–M6, and
+        writing one as a training node would half-support it (H7-F11).
 
         Everything is checked inside the write transaction that creates the
         node, so no other writer can change the experiment in between:
@@ -2775,6 +2780,11 @@ class ControlPlaneRepository:
             BranchRefusedError: See above.
             LineageError: See above.
         """
+        if isinstance(proposal, HarnessCandidateProposal):
+            raise BranchRefusedError(
+                "harness candidates are not durable yet (ADR-019 M1-M6): a harness proposal "
+                "cannot be branched into an experiment"
+            )
         with self._write():
             aggregates = self.aggregates
             experiment = aggregates.load_experiment(str(experiment_id))

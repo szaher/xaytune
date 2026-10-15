@@ -2456,7 +2456,7 @@ now so later planner contracts avoid unnecessary training-only assumptions.
 | H04 | Benchmark/task/environment protocol and input resolution | H02; repeatability/pinning review; required before comparable execution |
 | H05 | Trajectory artifact model | H03–H04; provenance/security/retention review |
 | H06 | Harness evaluator + multi-objective metrics | H04–H05; replicate and objective contract review |
-| H07 | Mutation/search provider protocols ([ADR-024](adrs/ADR-024-harness-search-and-mutation.md), accepted) | H02, H06; candidate-proposal governance settled in ADR-024 §P7; distinct CandidateProposal/HarnessCandidateProposal/ActionProposal paths; durable branching after ADR-019 M1–M6 |
+| H07 | Mutation/search provider protocols ([ADR-024](adrs/ADR-024-harness-search-and-mutation.md), accepted; §P12 implemented: contracts, providers, local loop) | H02, H06; candidate-proposal governance settled in ADR-024 §P7; distinct CandidateProposal/HarnessCandidateProposal/ActionProposal paths; durable branching after ADR-019 M1–M6 |
 | H08 | Pi adapter | H03–H05; declared supported subset and capability checks |
 | H09 | Codex adapter | H03–H05; declared supported subset and capability checks |
 | H10 | Claude Code adapter | H03–H05; declared supported subset and capability checks |

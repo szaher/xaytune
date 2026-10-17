@@ -3,6 +3,11 @@
 ``PINNED_H03_REQUEST`` was computed on ``main`` at ``c07c4af``, before H05,
 from the H03 fixture spec at ``/runs/r1``. With recording off, H05 must
 compile that spec byte for byte.
+
+The request digest covers the whole spec, the compiler's descriptor included,
+and the descriptor names the Xaytune release (``xaytune_version``). So the
+digest moves with every release by design; :func:`pinned_release` compiles
+under the release it was pinned at, so the pin keeps guarding everything else.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from typing import Any
 
 import pytest
 
+import xaytune
 from tests.test_harness.fixtures import compile_spec, context, harness
 from tests.test_harness.test_compiler import PINNED_EXECUTION_V1
 from tests.test_trajectory.fixtures import recorded_spec, recording, run
@@ -35,9 +41,24 @@ from xaytune.harness import (
 )
 
 PINNED_H03_REQUEST = "sha256:ed3cf478080c2a486341001d82b20a7cd37f3716e31e4c6ccebaef73a0d94118"
+PINNED_RELEASE = "1.0.0a1"
+"""The Xaytune release ``PINNED_H03_REQUEST`` was computed under."""
 
 
-def test_recording_off_compiles_the_h03_spec_byte_for_byte() -> None:
+def pinned_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compile as the release the H03 digest was pinned at: only the version string differs."""
+    descriptor = ReferenceHarnessCompiler.descriptor
+    monkeypatch.setattr(
+        ReferenceHarnessCompiler,
+        "descriptor",
+        descriptor.model_copy(update={"xaytune_version": PINNED_RELEASE}),
+    )
+
+
+def test_recording_off_compiles_the_h03_spec_byte_for_byte(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pinned_release(monkeypatch)
     spec = compile_spec("/runs/r1")
     assert agent_execution_fingerprint(spec) == PINNED_EXECUTION_V1
     assert agent_run_request_digest(spec) == PINNED_H03_REQUEST
@@ -47,6 +68,37 @@ def test_recording_off_compiles_the_h03_spec_byte_for_byte() -> None:
     assert explicit == spec
     assert [output.kind for output in spec.outputs] == ["xaytune.agent-run-result/v1alpha1"]
     assert set(spec.config) == {"compiler_api", "token_counter"}
+
+
+def _differences(a: Any, b: Any, path: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
+    if isinstance(a, dict) and isinstance(b, dict):
+        return [
+            p for key in sorted(a | b) for p in _differences(a.get(key), b.get(key), (*path, key))
+        ]
+    if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        return [p for i, (x, y) in enumerate(zip(a, b)) for p in _differences(x, y, (*path, i))]
+    return [] if a == b else [path]
+
+
+def test_the_current_release_is_a_different_request_for_the_same_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under this release the same spec names this release, so its request digest moves.
+
+    The execution it describes does not: the fingerprint stays the H03 pin,
+    and the release string is the only byte of the spec that differs.
+    """
+    current = compile_spec("/runs/r1")
+    pinned_release(monkeypatch)
+    historical = compile_spec("/runs/r1")
+
+    assert current.compiler.descriptor is not None
+    assert current.compiler.descriptor.xaytune_version == xaytune.__version__ != PINNED_RELEASE
+    assert agent_execution_fingerprint(current) == PINNED_EXECUTION_V1
+    assert agent_run_request_digest(current) != PINNED_H03_REQUEST
+    assert _differences(current.model_dump(mode="json"), historical.model_dump(mode="json")) == [
+        ("compiler", "descriptor", "xaytune_version")
+    ]
 
 
 def test_recording_on_is_a_different_request_and_never_a_different_harness(

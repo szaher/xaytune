@@ -5,7 +5,7 @@ pre-release; the `0.6.0` package has no control plane). Install it, or install
 from a clone to match CI exactly:
 
 ```bash
-pip install "xaytune[trl]==1.0.0a1"   # --compiler trl needs the trl extra
+pip install "xaytune[trl]==1.0.0a2"   # --compiler trl needs the trl extra
 uv sync --locked                 # or: pip install -e .
 uv sync --locked --extra trl     # for --compiler trl; or: pip install -e ".[trl]"
 ```

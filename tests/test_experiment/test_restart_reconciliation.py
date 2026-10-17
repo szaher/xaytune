@@ -491,12 +491,32 @@ class _RenumberedCompiler:
         return getattr(self._compiler, name)
 
 
+def _other_release_compiler() -> Any:
+    """The native compiler as another Xaytune release ships it.
+
+    The same compiler at the same ``plugin_version``, so the recorded compiler
+    check passes; only the descriptor's ``xaytune_version`` differs, as it does
+    between the build that recorded a submission and a host upgraded since
+    (1.0.0a1 and 1.0.0a2). A subclass, not a wrapper, so the plan it compiles
+    carries that descriptor.
+    """
+    from xaytune.compilation.native import NativeCompiler
+
+    class OtherReleaseCompiler(NativeCompiler):
+        descriptor = NativeCompiler.descriptor.model_copy(update={"xaytune_version": "1.0.0a1"})
+
+    return OtherReleaseCompiler()
+
+
 _NO_COMPILERS: dict[str, Any] = {}
 _RENUMBERED = {"native": _RenumberedCompiler}
+_OTHER_RELEASE = {"native": _other_release_compiler}
 
 
 @pytest.mark.parametrize(
-    "compilers", [_NO_COMPILERS, _RENUMBERED], ids=["compiler-unavailable", "compiler-renumbered"]
+    "compilers",
+    [_NO_COMPILERS, _RENUMBERED, _OTHER_RELEASE],
+    ids=["compiler-unavailable", "compiler-renumbered", "other-release"],
 )
 def test_a_running_workload_is_adopted_without_its_compiler(
     tmp_path: Path, compilers: dict
@@ -516,7 +536,9 @@ def test_a_running_workload_is_adopted_without_its_compiler(
 
 
 @pytest.mark.parametrize(
-    "compilers", [_NO_COMPILERS, _RENUMBERED], ids=["compiler-unavailable", "compiler-renumbered"]
+    "compilers",
+    [_NO_COMPILERS, _RENUMBERED, _OTHER_RELEASE],
+    ids=["compiler-unavailable", "compiler-renumbered", "other-release"],
 )
 def test_a_workload_found_by_lookup_is_adopted_without_its_compiler(
     tmp_path: Path, compilers: dict
@@ -537,18 +559,28 @@ def test_a_workload_found_by_lookup_is_adopted_without_its_compiler(
 
 
 @pytest.mark.parametrize(
-    ("compilers", "error"),
-    [(_NO_COMPILERS, "UnknownImplementationError"), (_RENUMBERED, "ImplementationMismatchError")],
-    ids=["compiler-unavailable", "compiler-renumbered"],
+    ("compilers", "error", "match"),
+    [
+        (_NO_COMPILERS, "UnknownImplementationError", None),
+        (_RENUMBERED, "ImplementationMismatchError", "9.9.9"),
+        (_OTHER_RELEASE, "ImplementationMismatchError", "would send a different request"),
+    ],
+    ids=["compiler-unavailable", "compiler-renumbered", "other-release"],
 )
 def test_re_issuing_without_the_original_compiler_fails_closed(
-    tmp_path: Path, compilers: dict, error: str
+    tmp_path: Path, compilers: dict, error: str, match: str | None
 ) -> None:
     """Rebuilding the request is where the compiler matters, so that is where it is required.
 
     Nothing was started, so the submission would have to be issued -- which
     means rebuilding it, which needs the compiler that built the original. An
     unavailable one or a different version refuses, and nothing is submitted.
+
+    So does the same compiler shipped in another Xaytune release: its
+    descriptor names the release, the plan carries the descriptor, and the
+    request digest covers the plan. A host upgraded across a release does not
+    re-issue a training submission an older release recorded but never sent;
+    it leaves it as recorded, as for any other change to how it is built.
     """
     import xaytune.experiment as experiment_module
     from xaytune.experiment import EmbeddedControllerHost
@@ -564,7 +596,7 @@ def test_re_issuing_without_the_original_compiler_fails_closed(
             runtimes={"local": lambda c: _CountingSubmissions(_local_runtime(c))},
         )
         try:
-            with pytest.raises(getattr(experiment_module, error)):
+            with pytest.raises(getattr(experiment_module, error), match=match):
                 await host.attach(experiment_id)
             return host.repository.operations.unresolved()
         finally:

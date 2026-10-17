@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+## 1.0.0a2
+
+The second pre-release of the experiment control plane. `pip install xaytune`
+still installs `0.6.0`; install this one with `pip install "xaytune==1.0.0a2"`
+(or `pip install --upgrade --pre xaytune`). Expect the control-plane API to
+change before `1.0.0`. The legacy trainer API from `0.6.0` is still included.
+
+`1.0.0a1` decided one candidate. This release closes the **adaptive loop**: a
+missed target branches, a planner proposes the next candidate, branching
+records it, and the controller trains it, all from one submission and all on a
+record a restarted controller resumes from. Around it are the pieces that make
+that loop safe to run: budgets on a durable ledger, typed actions under a
+policy engine with human approval, incident detection, checkpoints and governed
+recovery (CUDA OOM and numerical instability), a local daemon with a CLI and
+durable controller leases, and Ray, KubeRay, Ray Tune and TorchFT integrations
+behind the existing runtime, search and resilience boundaries. Studio gains a
+read-only HTTP API and a React web client, with loss charts from a durable
+metric store.
+
+The **agent harness track** (H02–H07) ships as local, in-process building
+blocks: harness candidates and their identity, a compiler and deterministic
+runner, pinned benchmarks, trajectory artifacts, harness evaluation and a
+local harness search. **None of it is durable yet.** A harness cannot be
+submitted to a controller; that is the next milestone.
+
+**Upgrading from 1.0.0a1.** Opening a `1.0.0a1` state database applies
+migrations 008–020 automatically, in order, each in its own transaction.
+
+- **This is the minimum compatible version for later releases.** It is the
+  first release with the downgrade guard: a build refuses a database that a
+  newer Xaytune migrated (`SchemaTooNewError`; the daemon exits with status
+  6), before reading or writing anything. Later releases add migrations that
+  older builds cannot read. Upgrade every process that opens a database to
+  this release first, then to a later one; `1.0.0a1` has no guard and would
+  open a newer database regardless.
+- **Upgrade with no unconfirmed submissions in flight.** A submission's
+  request digest covers its plan, and the plan names the Xaytune release
+  that built it. So a submission that `1.0.0a1` recorded but never delivered
+  (the controller stopped before the runtime received it) is not re-issued by
+  this release: reconciliation refuses it as a different request
+  (`ImplementationMismatchError`) and leaves it as recorded. A workload the
+  runtime has, running or found by lookup, is adopted as usual. Stop a
+  controller only once its submissions are confirmed.
+- **Breaking:** the Gradio Studio's Code tab is removed, and `xaytune studio`
+  listens on `127.0.0.1` by default (see *Security*).
+- `ExperimentNode.run_ids` and `evaluation_run_ids`, `Experiment.active_node_ids`
+  and `Run.attempt_ids` / `final_attempt_id` are removed; the repository's
+  relationships are the only source of topology (see *Changed*). Stored
+  records still read.
+
+**Known limitations of this alpha.**
+
+- Agent harness candidates run locally and in-process only (above).
+- Budgets enforce runs, failures, parallelism and wall time. GPU-hours,
+  tokens and cost are refused at submission rather than pretended.
+- The LLM planner proposes typed actions; the controller records and
+  escalates them, and carries none out.
+- TorchFT is a resilience *request* on a training plan. No built-in runtime
+  hosts it yet, so every built-in runtime refuses one.
+- Decisions compare recorded values with thresholds; nothing is claimed
+  statistically. Harness comparisons are exploratory.
+- Workers can occasionally hang while loading a model
+  ([#35](https://github.com/szaher/xaytune/issues/35)).
+
 ### Security
 
 - **Studio no longer runs arbitrary Python or listens on every interface** (UX-00). Studio has no authentication, so anyone who could reach it could use everything it served.
@@ -62,8 +126,42 @@
 - **`ResolvableEvaluator.resolve(spec)`**, an optional evaluator step and the only one allowed to use the network. The host calls it once, at submission, between two `supports()` checks: `supports(declared) → resolve() → supports(resolved)`. The resolved spec is what is recorded and fingerprinted. After a restart the request is rebuilt from the record, and `resolve()` is never called again. The `Evaluator` contract itself is unchanged: an evaluator without `resolve()` has nothing to pin, its spec is recorded as declared, and custom evaluators keep working as they are.
 - **`examples/control_plane/06_train_and_benchmark.py`**: train, run an lm-eval task, and decide on `acc`.
 
+- **The adaptive loop** (PR-015b, PR-024, PR-025, PR-026). One submission runs to completion with no further calls: train, evaluate, decide, plan, branch, train the next candidate.
+  - `DecisionOutcome.BRANCH` and `AdaptiveThresholdDecisionEngine` (`adaptive-threshold` 1.0.0): a missed target with constraints held finishes the candidate (`COMPLETED`) and leaves the experiment `ACTIVE` with `next_stage == "planning"`. `ThresholdDecisionEngine` 1.0.0 is unchanged and stays the default.
+  - `RuleBasedPlanner` (`rule-based` 1.0.0): a pure planner over the repository's read-only `planning_context()`, with a LoRA-rank mutation rule. It proposes a `CandidateProposal` with full provenance and never writes.
+  - Branching: `materialize_candidate_proposal()` turns a verified proposal into a `PLANNED` child node with a repository-minted `branch_origin`, in one transaction. A replayed proposal returns the same node, and a different one for the same candidate is a conflict.
+  - Realization: the controller trains a branched node automatically, inheriting the parent run's seed (`RunSeedOrigin`), and resumes from the record after a restart at either new resting point.
+- **Incidents, checkpoints and governed recovery** (PR-017 to PR-021b).
+  - Incidents (migration 010): deterministic detectors classify structured failure observations (process failure, CUDA OOM, checkpoint failure, NaN/Inf) into immutable, replay-safe incidents with their evidence and detector provenance.
+  - Checkpoints (migration 011): `SerializedStateCodec`, `LocalCheckpointStore` and `CheckpointManager` package, publish atomically and verify checkpoint bundles; committed checkpoints are recorded from telemetry.
+  - `RecoveryEpisode` and `RecoveryPlan` (migration 012): one decision-only coordinator per failed attempt, with append-only evidence and plan revisions.
+  - CUDA OOM recovery (migration 013, execution receipts): a governed `ResizeMicrobatch` action halves the micro-batch and doubles gradient accumulation (the effective batch is kept), and a successor attempt resumes from a FULL + EXACT optimizer-boundary checkpoint. `LocalRuntime` restores the single-worker Native trainer exactly.
+  - Numerical recovery (migrations 014 and 015): a governed `ChangeLearningRate` action becomes a `TrainingIntervention` on the same run, applied by a successor attempt restored from a checkpoint before the unsafe step, and replayed after rollback. There is no default reduction factor; a policy must declare one.
+- **A local daemon and its CLI** (PR-027 to PR-029). `python -m xaytune.daemon --state … --config module:factory` runs one controller over a state database, singleton by `flock`, with a SQLite request mailbox (migrations 016 and 018), atomic admission and controlled shutdown.
+  - A durable controller lease (migration 017) fences every repository write, and a restarted daemon reconciles every experiment it owns.
+  - `LocalDaemonControllerHost` is the caller's side: the same `ExperimentHandle` over the daemon. The CLI: `xaytune submit`, `attach`, `status`, `watch`, `events`, `results`, `actions`, `cancel`, `approve` and `reject`.
+- **Agent models and the LLM planner** (PR-030 to PR-032). `xaytune.agent` defines `AgentModel`, canonical `AgentModelRequest` identity and `ScriptedAgentModel`. Provider exceptions never cross the boundary: only their type name does.
+  - `LLMPlanner` proposes zero or one typed, explicitly allowed action, with the model's identity in its spec. It has no default registration; a host binds it explicitly.
+  - Every agent call is a durable `AgentInvocation` (migration 019), recorded as intended before the model is asked, then answered, then completed or refused.
+- **Ray, KubeRay, Ray Tune and TorchFT** (PR-033a to PR-035), each behind an existing boundary.
+  - `RayJobsRuntime` (`ray-jobs`) runs each plan as one supervised worker on an existing Ray cluster. `RayTrainRuntime` (`ray-train`) runs training as a Ray Train worker group at every size.
+  - `KubeRayJobsBackend` submits either runtime's jobs as KubeRay `RayJob` resources, with deterministic names, through the Kubernetes API.
+  - A generic search contract (`SearchSpace`, `SearchProvider`, `SearchContext`) and `RayTuneSearchProvider`. Ray Tune proposes parameters; Xaytune owns the candidates, lineage and execution.
+  - A generic resilience contract (`ResilienceSpec`, `ResiliencePolicy`) and `TorchFTResilienceProvider`, which adds one checked request to a training plan. No built-in runtime hosts it yet.
+- **Agent harness building blocks** (H02 to H07), local and in-process; nothing is persisted or submitted.
+  - H02: `AgentHarnessSpec` and its versioned fingerprint, and the `ExperimentCandidate` envelope, which carries training candidates byte for byte.
+  - H03: `ReferenceHarnessCompiler`, `HarnessExecutionSpec` and a deterministic in-process runner (ADR-019 E1–E10).
+  - H04: pinned benchmark suites and tasks, resolution and seeded assignment (ADR-020).
+  - H05: trajectory artifacts: a crash-safe writer, a local store, verification, reconciliation, retention and replay (ADR-021).
+  - H07: harness search (ADR-024 §P12). Typed `HarnessPatch` operations that only narrow tools, `HarnessSearchPolicy` with explicit `autonomous_search: authorized`, provider-safe feedback and comparisons, two deterministic providers, verification of every proposal, and a local search loop under a spending envelope that reserves each unit of work before it starts. Branching a harness proposal into an experiment is refused.
+- **The metric-point store** (migration 020). Training telemetry's scalars are recorded while the controller ingests each attempt's stream: idempotent on the stream position, provenance kept, the telemetry cursor untouched. `GET /api/v1/attempts/{id}/metrics` serves them (one series per name, unit, worker and rank, downsampled at read time), and Studio's run page charts them, polling until the run settles.
+- **The downgrade guard** (ADR-019 M6, step 1). `migrate()` refuses a database whose ledger records a migration this build does not ship, raising `SchemaTooNewError` (a `MigrationError`) before anything is written, from every entry point that migrates. `python -m xaytune.daemon` exits with status 6 and the refusal as its message.
+
 ### Changed
 
+- **Topology has one source of truth** (OQ-15). `Experiment.active_node_ids`, `ExperimentNode.run_ids` and `evaluation_run_ids`, and `Run.attempt_ids` and `final_attempt_id` are removed; nothing ever wrote them. Topology comes from the repository's relationships. A stored record holding a retired field at its never-written default still reads; one holding a value fails closed.
+- **ADR-017, reuse policy v1:** training artifact reuse is disabled. A matching fingerprint is evidence, never authority to skip a run.
+- `PolicyContext` normalizes every subclass to exactly the v1 view, so what a policy engine can read is what the policy input fingerprint covers.
 - The `eval` extra pins `lm-eval[hf]==0.4.13` (it was `lm-eval>=0.4`). An lm-eval release defines the tasks it ships, so the evaluator binds and runs tasks under that release only. The legacy `benchmark_evaluate()` uses the same extra.
 
 ## 1.0.0a1

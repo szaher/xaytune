@@ -6,7 +6,7 @@
         --task arc_easy --limit 20 \\
         --target 0.3            # the accuracy that counts as good enough
 
-Needs the ``eval`` extra (``pip install "xaytune[eval]==1.0.0a1"``, or from a
+Needs the ``eval`` extra (``pip install "xaytune[eval]==1.0.0a2"``, or from a
 clone ``uv sync --locked --extra eval``) and access to the Hugging Face Hub:
 the task's dataset is downloaded when the evaluation runs.
 

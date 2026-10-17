@@ -26,7 +26,12 @@ from typing import Any
 
 import pytest
 
-from tests.evaluation_fixtures import EVALUATORS, RenumberedEvaluator, evaluation
+from tests.evaluation_fixtures import (
+    EVALUATORS,
+    RenumberedEvaluator,
+    ScriptedEvaluator,
+    evaluation,
+)
 from tests.test_experiment.test_restart_reconciliation import (
     _CountingSubmissions,
     _crash,
@@ -341,10 +346,26 @@ def test_a_cancellation_recorded_mid_evaluation_is_carried_out_after_the_crash(
 # ---- the evaluator is a dependency of re-issue only ------------------------------------
 
 
+class OtherReleaseEvaluator(ScriptedEvaluator):
+    """The scripted evaluator as another Xaytune release ships it.
+
+    The same evaluator at the same ``plugin_version``, so the recorded
+    evaluator check passes; only the descriptor's ``xaytune_version`` differs,
+    as it does between the build that recorded a submission and a host
+    upgraded since. The spec it prepares carries that descriptor, so the
+    rebuilt request is a different request.
+    """
+
+    descriptor = ScriptedEvaluator.descriptor.model_copy(update={"xaytune_version": "1.0.0a1"})
+
+
+_OTHER_RELEASE = {"scripted": OtherReleaseEvaluator}
+
+
 @pytest.mark.parametrize(
     "evaluators",
-    [{}, {"scripted": RenumberedEvaluator}],
-    ids=["evaluator-unavailable", "evaluator-renumbered"],
+    [{}, {"scripted": RenumberedEvaluator}, _OTHER_RELEASE],
+    ids=["evaluator-unavailable", "evaluator-renumbered", "other-release"],
 )
 def test_a_live_evaluation_is_adopted_without_its_evaluator(
     tmp_path: Path, evaluators: dict
@@ -356,20 +377,51 @@ def test_a_live_evaluation_is_adopted_without_its_evaluator(
 
     _decided_once(result, run, attempts)
     assert _CountingSubmissions.issued == []
+    assert len(_evaluator_workloads(tmp_path)) == 1
 
 
 @pytest.mark.parametrize(
-    ("evaluators", "error"),
+    "evaluators",
+    [{}, {"scripted": RenumberedEvaluator}, _OTHER_RELEASE],
+    ids=["evaluator-unavailable", "evaluator-renumbered", "other-release"],
+)
+def test_an_evaluation_found_by_lookup_is_adopted_without_its_evaluator(
+    tmp_path: Path, evaluators: dict
+) -> None:
+    """The submission was never confirmed, and lookup finding it is what makes the evaluator
+    irrelevant: nothing is rebuilt, so a host of another release adopts it as recorded."""
+    experiment_id = _crash(tmp_path, "eval-lost-response", _evaluated(tmp_path, hold=False))
+
+    result, run, attempts, operations = _adopt(
+        tmp_path, experiment_id, release=False, evaluators=evaluators
+    )
+
+    _decided_once(result, run, attempts)
+    (submit,) = operations
+    assert submit.state == "confirmed"
+    assert _CountingSubmissions.issued == []
+    assert len(_evaluator_workloads(tmp_path)) == 1
+
+
+@pytest.mark.parametrize(
+    ("evaluators", "error", "match"),
     [
-        ({}, "UnknownImplementationError"),
-        ({"scripted": RenumberedEvaluator}, "ImplementationMismatchError"),
+        ({}, "UnknownImplementationError", None),
+        ({"scripted": RenumberedEvaluator}, "ImplementationMismatchError", "9.9.9"),
+        (_OTHER_RELEASE, "ImplementationMismatchError", "would send a different request"),
     ],
-    ids=["evaluator-unavailable", "evaluator-renumbered"],
+    ids=["evaluator-unavailable", "evaluator-renumbered", "other-release"],
 )
 def test_re_issuing_without_the_original_evaluator_fails_closed(
-    tmp_path: Path, evaluators: dict, error: str
+    tmp_path: Path, evaluators: dict, error: str, match: str | None
 ) -> None:
-    """Rebuilding the request is where the evaluator matters, so that is where it is required."""
+    """Rebuilding the request is where the evaluator matters, so that is where it is required.
+
+    The same evaluator shipped in another Xaytune release refuses too: the
+    prepared spec carries its descriptor, which names the release, and the
+    request digest covers it. A submission an older release recorded but
+    never delivered is left as recorded, not re-issued under a new digest.
+    """
     import xaytune.experiment as experiment_module
     from xaytune.experiment import EmbeddedControllerHost
 
@@ -380,7 +432,7 @@ def test_re_issuing_without_the_original_evaluator_fails_closed(
             tmp_path / "state.db", runtimes=_counting_runtimes(), evaluators=evaluators
         )
         try:
-            with pytest.raises(getattr(experiment_module, error)):
+            with pytest.raises(getattr(experiment_module, error), match=match):
                 await host.attach(experiment_id)
             return host.repository.operations.unresolved()
         finally:

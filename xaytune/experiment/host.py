@@ -1324,7 +1324,7 @@ class EmbeddedControllerHost:
         if attempt.run_id != run.id:
             raise ValueError("attempt belongs to a different logical run")
         spec = compiler.compile(
-            node.candidate.candidate,
+            node.training_candidate(),
             CompilationContext(
                 run_id=str(run.id),
                 seed=run.seed,
@@ -2765,7 +2765,7 @@ class EmbeddedControllerHost:
             )
         compiler = self._compiler(experiment.compiler.name)
         _require_version("compiler", experiment.compiler, compiler.descriptor.plugin_version)
-        support = compiler.supports(node.candidate.candidate)
+        support = compiler.supports(node.training_candidate())
         if not support:
             raise _AdaptiveStopError(
                 f"compiler {compiler.descriptor.name!r} cannot run branched node {node.id}: "

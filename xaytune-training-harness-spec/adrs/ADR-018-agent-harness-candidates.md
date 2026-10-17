@@ -15,6 +15,23 @@ telemetry or persistence contracts. Those are proposed separately in
 [ADR-019](ADR-019-harness-compilation-and-execution.md) and are reviewed on
 their own.
 
+**D10 progress (Track B; ADR-019 M6, step 2).** The first item D10 deferred,
+"a versioned snapshot … read through `read_candidate`", is implemented:
+
+- A node's `CandidateSpecSnapshot` at `spec_version` `"2"` holds an
+  `ExperimentCandidate` envelope, so a node can hold a harness.
+- Training nodes are still written at `"1"`, byte for byte, and a stored
+  `"1"` is never rewritten.
+- Migration 021 adds `experiment_nodes.candidate_kind`, with triggers that
+  tie it to the payload and keep it permanent.
+- Training-only work (compiling, planning context, learning-rate provenance,
+  runs) refuses a harness node with `NotATrainingCandidateError` before
+  anything is written.
+
+`ExperimentSpec`, `NodeSummary`, `PlanningContext`, `CandidateProposal`,
+branching and submission still carry `CandidateSpec` only. Kind-dispatched
+compile and harness submission are later steps of M6.
+
 Gates the H02–H12 harness track. It does not gate or reorder PR-019–021
 recovery or PR-024–026 planner/branching/adaptive MVP work.
 

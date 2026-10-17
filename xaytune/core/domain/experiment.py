@@ -9,12 +9,25 @@ restores never create nodes (ADR-003); they create run attempts.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from xaytune.core.clock import utc_now
 from xaytune.core.domain.candidate import CandidateSpec, TrainingKind
+from xaytune.core.domain.candidate_envelope import (
+    CandidateEnvelopeError,
+    CandidateKind,
+    ExperimentCandidate,
+    NotATrainingCandidateError,
+    TrainingCandidate,
+)
 from xaytune.core.domain.evaluation import EvaluationSpec
 from xaytune.core.domain.numerical_recovery import NumericalRecoveryPolicyV1
 from xaytune.core.domain.objective import BudgetSpec, Objective
@@ -38,10 +51,16 @@ from xaytune.core.state.machines import EXPERIMENT_MACHINE, NODE_MACHINE
 from xaytune.core.state.status import ExperimentNodeStatus, ExperimentStatus
 
 __all__ = [
+    "SNAPSHOT_VERSIONS",
     "CandidateSpecSnapshot",
     "Experiment",
     "ExperimentNode",
 ]
+
+
+SNAPSHOT_VERSIONS: Final = ("1", "2")
+"""``"1"``: a ``CandidateSpec`` (every node before ADR-018 D10, and every training
+node since). ``"2"``: an ``ExperimentCandidate`` envelope of any kind."""
 
 
 class CandidateSpecSnapshot(FrozenDomainModel):
@@ -50,20 +69,94 @@ class CandidateSpecSnapshot(FrozenDomainModel):
     Frozen on purpose: a scientific change creates a child node rather than
     editing an existing snapshot (Rule 5).
 
-    Wraps a :class:`~xaytune.core.domain.candidate.CandidateSpec` rather than
-    being one, so a node keeps the exact bytes it was created with even if the
-    spec's own schema later gains fields. ``spec_version`` records which shape
-    those bytes are.
+    Wraps the candidate rather than being one, so a node keeps the exact
+    bytes it was created with even if the candidate's own schema later gains
+    fields. ``spec_version`` records which shape those bytes are:
+
+    - ``"1"``: ``candidate``, a :class:`~xaytune.core.domain.candidate.CandidateSpec`.
+      Training nodes are still written this way, so their payloads are
+      byte-identical to every earlier build's.
+    - ``"2"``: ``envelope``, an :class:`~xaytune.core.domain.candidate_envelope.ExperimentCandidate`
+      of any kind (ADR-018 D10). How a node holds a harness.
+
+    A stored ``"1"`` is never rewritten as ``"2"``. Read the candidate through
+    :meth:`experiment_candidate`, or :meth:`training_spec` where only training
+    makes sense.
     """
 
-    candidate: CandidateSpec
+    candidate: CandidateSpec | None = None
+    envelope: ExperimentCandidate | None = None
     spec_version: str = "1"
     metadata: FrozenDict = Field(default_factory=FrozenDict)
 
+    @model_validator(mode="after")
+    def _one_shape(self) -> CandidateSpecSnapshot:
+        if self.spec_version not in SNAPSHOT_VERSIONS:
+            raise CandidateEnvelopeError(
+                f"candidate snapshot version {self.spec_version!r} is not one this build reads; "
+                f"it reads {list(SNAPSHOT_VERSIONS)}"
+            )
+        if self.spec_version == "1" and (self.candidate is None or self.envelope is not None):
+            raise ValueError("a version 1 snapshot holds a CandidateSpec, and nothing else")
+        if self.spec_version == "2" and (self.envelope is None or self.candidate is not None):
+            raise ValueError("a version 2 snapshot holds a candidate envelope, and nothing else")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _only_its_shape(self, handler: SerializerFunctionWrapHandler) -> Any:
+        # A version 1 snapshot serializes exactly as it always has: no
+        # ``envelope: null`` appears in a training node's payload.
+        data = handler(self)
+        if isinstance(data, dict):
+            data.pop("envelope" if self.spec_version == "1" else "candidate", None)
+        return data
+
+    @classmethod
+    def of(
+        cls, candidate: ExperimentCandidate, *, metadata: FrozenDict | None = None
+    ) -> CandidateSpecSnapshot:
+        """The snapshot a node stores for *candidate*: ``"1"`` for training, ``"2"`` otherwise."""
+        recorded = FrozenDict() if metadata is None else metadata
+        if isinstance(candidate.payload, TrainingCandidate):
+            return cls(candidate=candidate.payload.spec, metadata=recorded)
+        return cls(envelope=candidate, spec_version="2", metadata=recorded)
+
+    def experiment_candidate(self) -> ExperimentCandidate:
+        """The candidate, of whichever kind, as an envelope."""
+        if self.envelope is not None:
+            return self.envelope
+        assert self.candidate is not None
+        return ExperimentCandidate.training(self.candidate)
+
+    @property
+    def candidate_kind(self) -> CandidateKind:
+        return self.experiment_candidate().kind
+
+    def training_spec(self) -> CandidateSpec:
+        """The ``CandidateSpec``, for work only a training candidate can do.
+
+        Raises:
+            NotATrainingCandidateError: If the snapshot holds another kind.
+        """
+        candidate = self.experiment_candidate()
+        if not isinstance(candidate.payload, TrainingCandidate):
+            raise NotATrainingCandidateError(
+                f"this is a {candidate.kind.value} candidate: training-only work cannot run on it"
+            )
+        return candidate.payload.spec
+
+    def scientific_fingerprint(self) -> str:
+        """The candidate's own identity: training v2, or harness v1."""
+        return self.experiment_candidate().scientific_fingerprint()
+
     @property
     def kind(self) -> TrainingKind:
-        """The training program this candidate runs."""
-        return self.candidate.training.kind
+        """The training program this candidate runs.
+
+        Raises:
+            NotATrainingCandidateError: If the snapshot holds another kind.
+        """
+        return self.training_spec().training.kind
 
 
 class Experiment(AggregateModel):
@@ -256,6 +349,18 @@ class ExperimentNode(AggregateModel):
             raise InvalidTransitionError("ExperimentNode", self.status, new_status)
         moved = self.with_status(new_status)
         return moved._validated_copy({"decision_ids": (*self.decision_ids, decision_id)})
+
+    def training_candidate(self) -> CandidateSpec:
+        """The node's ``CandidateSpec``, for compiling, planning and other training-only work.
+
+        Raises:
+            NotATrainingCandidateError: If the node holds another kind of candidate.
+        """
+        return self.candidate.training_spec()
+
+    @property
+    def candidate_kind(self) -> CandidateKind:
+        return self.candidate.candidate_kind
 
     @property
     def is_root(self) -> bool:

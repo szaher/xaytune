@@ -523,12 +523,30 @@ def test_a_legacy_node_payload_reports_the_format_change(
     )
     legacy["training_spec"] = {"kind": "sft", "payload": {}}
     del legacy["candidate"]
+    write = (
+        "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
+        (json.dumps(legacy), str(node.id)),
+    )
 
+    # Migration 021 refuses to write a snapshot it does not know, so a band B
+    # row can no longer be written; it can only predate the migration, which
+    # leaves existing rows as they are. So it is written as one would have
+    # been: without 021's payload triggers, which are then put back.
+    with pytest.raises(sqlite3.IntegrityError, match="not a version this schema knows"):
+        with write_transaction(connection):
+            connection.execute(*write)
+    assert repo.aggregates.get_node(str(node.id)) == node
+    triggers = connection.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
+        "AND tbl_name = 'experiment_nodes' AND sql LIKE '%UPDATE OF payload_json%'"
+    ).fetchall()
+    assert len(triggers) == 2
     with write_transaction(connection):
-        connection.execute(
-            "UPDATE experiment_nodes SET payload_json = ? WHERE id = ?",
-            (json.dumps(legacy), str(node.id)),
-        )
+        for name, _ in triggers:
+            connection.execute(f"DROP TRIGGER {name}")
+        connection.execute(*write)
+        for _, sql in triggers:
+            connection.execute(sql)
 
     # Every path that reads a node, not just the one that happens to be
     # centralised. Before this, get_node() reported the format change while

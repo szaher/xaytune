@@ -18,8 +18,36 @@ guard, is implemented: `migrate()` refuses a database whose ledger records a
 migration the build does not ship (`SchemaTooNewError`), from every entry
 point that migrates, before anything is written. The first release that
 contains it is the **minimum compatible version** of any database a later
-rebuild-mode migration (M2–M3) changes. Steps 2–5 remain proposed, each for
-its own review.
+rebuild-mode migration (M2–M3) changes.
+
+Step 2, the versioned candidate snapshot (ADR-018 D10), is implemented. A
+node's snapshot at version `"2"` holds an `ExperimentCandidate`, and
+migration 021 adds `experiment_nodes.candidate_kind`. The column is added,
+not rebuilt, so 021 needs no rebuild mode.
+
+- **Integrity, in two layers.** Neither does the other's job.
+  - *SQL* (021's triggers, on every write path): a snapshot's `spec_version`
+    must be exactly `"1"` or `"2"`, in that version's shape. A missing, unknown,
+    non-text or mixed one is refused, not read as training. On insert, the
+    `candidate_kind` and `candidate_fingerprint` columns must equal what the
+    payload declares, and an update may change neither, nor the payload's
+    declaration. This is consistency between stored columns and declared
+    fields. SQL cannot compute a fingerprint, so it does not establish that the
+    declaration is true.
+  - *The repository* (`decode_node_row()`, on every repository and graph read):
+    parses the snapshot, recomputes the candidate's identities, and refuses
+    (`NodeRecordMismatchError`) a row whose columns are not the candidate's
+    actual kind and scientific identity. That includes a row written around
+    the triggers.
+- **Fails closed.** A harness node can be recorded and read, but a run for one
+  is refused, so harness work fails closed (M1).
+- **Release order.** 021 ships only in a release **after** the guard-bearing
+  one (1.0.0a2). Builds with the guard and without 021 refuse a migrated
+  database. Builds older than the guard cannot read a version 2 harness
+  snapshot, so they must not meet one: the guard-bearing release comes first,
+  and it is the minimum compatible version for 021 as for the rebuilds.
+
+Steps 3–5 remain proposed, each for its own review.
 
 Builds on [ADR-018](ADR-018-agent-harness-candidates.md), accepted on
 2026-10-11 as a separate decision.

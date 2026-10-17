@@ -15,6 +15,32 @@ telemetry or persistence contracts. Those are proposed separately in
 [ADR-019](ADR-019-harness-compilation-and-execution.md) and are reviewed on
 their own.
 
+**D10 progress (Track B; ADR-019 M6, step 2).** The first item D10 deferred,
+"a versioned snapshot … read through `read_candidate`", is implemented:
+
+- A node's `CandidateSpecSnapshot` at `spec_version` `"2"` holds an
+  `ExperimentCandidate` envelope, so a node can hold a harness.
+- Training nodes are still written at `"1"`, byte for byte, and a stored
+  `"1"` is never rewritten.
+- Migration 021 adds `experiment_nodes.candidate_kind`. Integrity is
+  layered (ADR-019 M6, step 2):
+  - **SQL triggers** refuse a snapshot whose `spec_version` is not exactly
+    `"1"` or `"2"` in that version's shape, on insert and update. They keep
+    the kind and fingerprint columns equal to what the payload *declares*, and
+    keep both permanent. They cannot compute a fingerprint.
+  - **`decode_node_row()`**, on every repository and graph read, parses the
+    snapshot and recomputes the candidate's identities. It refuses a row whose
+    columns are not the candidate's *actual* kind and scientific identity.
+- 021 ships only in a release after the guard-bearing one (1.0.0a2), the
+  minimum compatible version of a database it migrated.
+- Training-only work (compiling, planning context, learning-rate provenance,
+  runs) refuses a harness node with `NotATrainingCandidateError` before
+  anything is written.
+
+`ExperimentSpec`, `NodeSummary`, `PlanningContext`, `CandidateProposal`,
+branching and submission still carry `CandidateSpec` only. Kind-dispatched
+compile and harness submission are later steps of M6.
+
 Gates the H02–H12 harness track. It does not gate or reorder PR-019–021
 recovery or PR-024–026 planner/branching/adaptive MVP work.
 

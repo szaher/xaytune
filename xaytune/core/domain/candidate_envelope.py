@@ -24,24 +24,28 @@ refused: an unknown envelope version or kind, a harness without its envelope,
 a snapshot of a shape this build does not know. Nothing is coerced from one
 kind to the other.
 
-**Not yet durable, on purpose.** Nodes, snapshots, specs, proposals and
-planning contexts still hold ``CandidateSpec`` (ADR-018 D10). The envelope is
-the contract H03 persists through, behind its own migration review.
+**Durable through the node's snapshot (ADR-018 D10).** A node's
+``CandidateSpecSnapshot`` at ``spec_version`` ``"2"`` holds an envelope, so a
+node can hold a harness. Training nodes keep writing ``"1"``, byte for byte
+as before. Specs, proposals and planning contexts still hold ``CandidateSpec``:
+nothing outside the repository can create a harness node yet.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import Annotated, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 from pydantic import ConfigDict, Field, ValidationError
 
 from xaytune.core.domain.candidate import CandidateSpec
-from xaytune.core.domain.experiment import CandidateSpecSnapshot
 from xaytune.core.domain.harness import AGENT_HARNESS_SCHEMA, AgentHarnessSpec
 from xaytune.core.errors import XaytuneError
 from xaytune.core.immutable import FrozenDomainModel
+
+if TYPE_CHECKING:
+    from xaytune.core.domain.experiment import CandidateSpecSnapshot
 
 __all__ = [
     "CANDIDATE_ENVELOPE_VERSION",
@@ -49,6 +53,7 @@ __all__ = [
     "CandidateEnvelopeError",
     "CandidateKind",
     "ExperimentCandidate",
+    "NotATrainingCandidateError",
     "TrainingCandidate",
     "candidate_of_snapshot",
     "read_candidate",
@@ -59,6 +64,15 @@ CANDIDATE_ENVELOPE_VERSION: Final = "xaytune.candidate/v1alpha1"
 
 class CandidateEnvelopeError(XaytuneError):
     """A record is not a candidate this build can read: unknown version or kind, or ambiguous."""
+
+
+class NotATrainingCandidateError(XaytuneError):
+    """Training-only work was asked of a candidate of another kind.
+
+    Compiling, branching, planning and learning-rate provenance read a
+    ``CandidateSpec``. A harness node has none, and is refused rather than
+    routed into training logic (ADR-019 M1: harness work fails closed).
+    """
 
 
 class CandidateKind(str, Enum):
@@ -187,14 +201,12 @@ def read_candidate(record: Mapping[str, Any]) -> ExperimentCandidate:
 
 
 def candidate_of_snapshot(snapshot: CandidateSpecSnapshot) -> ExperimentCandidate:
-    """A node's stored snapshot as a candidate: training, at the one shape it has had.
+    """A node's stored snapshot as a candidate, of whichever kind it holds.
+
+    ``"1"`` is a ``CandidateSpec``, read as training; ``"2"`` is an envelope.
 
     Raises:
         CandidateEnvelopeError: If the snapshot records a ``spec_version``
             this build does not know.
     """
-    if snapshot.spec_version != "1":
-        raise CandidateEnvelopeError(
-            f"candidate snapshot version {snapshot.spec_version!r} is not one this build reads"
-        )
-    return ExperimentCandidate.training(snapshot.candidate)
+    return snapshot.experiment_candidate()

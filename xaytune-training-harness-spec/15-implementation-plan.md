@@ -2756,8 +2756,8 @@ Three tracks run in parallel (ADR-023 §S12, decided at acceptance):
   training-experiment views on the UX-01 contract.
 - **Track B, durable platform:** the metric-point store (migration 020,
   independent) for loss and telemetry charts, shown on Studio's run page; durable harness candidates and
-  execution (ADR-019 M1–M6, in M6's order: the downgrade guard first, which
-  is done; then the versioned candidate snapshot, the runner's rebuild mode
+  execution (ADR-019 M1–M6, in M6's order: the downgrade guard and the
+  versioned candidate snapshot (migration 021), both done; then the runner's rebuild mode
   with `agent_attempts` and the `actions`/`budget_ledger` rebuilds, the
   target kind, and controller submission); then durable H06 evaluations and trajectory
   references, planned with their harness-execution prerequisites. No

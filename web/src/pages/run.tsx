@@ -1,8 +1,16 @@
 import { Link, useParams } from "@tanstack/react-router";
+import { useState } from "react";
 import type { Schemas } from "../api/client";
-import { useAttempt, useRun } from "../api/queries";
+import { useAttempt, useAttemptMetrics, useRun } from "../api/queries";
+import { MetricChart } from "../components/chart";
 import { DocumentTree } from "../components/document";
 import { Card, Facts, Loading, Page, Section } from "../components/layout";
+import {
+  chartLines,
+  type RecordedSeries,
+  type SeriesChoice,
+  seriesChoices,
+} from "../components/metric-series";
 import { Status } from "../components/status";
 import { Absent, Num, ShortId, Time } from "../components/values";
 
@@ -63,6 +71,9 @@ export function RunPage() {
                 ))}
               </ol>
             </Section>
+            <Section title="Metrics">
+              <RunMetrics attempts={detail.attempts} />
+            </Section>
             <Section title="Checkpoints">
               {data.checkpoints.length ? (
                 <div className="grid gap-4 lg:grid-cols-2">
@@ -100,13 +111,14 @@ export function RunPage() {
 }
 
 function AttemptCard({ attempt }: { attempt: Schemas["AttemptOut"] }) {
-  const detail = useAttempt(attempt.id);
+  const detail = useAttempt(attempt.id, attempt.ended_at !== null);
   return (
     <Card>
       <div
         role="group"
         className="space-y-3 text-sm"
         aria-label={`attempt ${attempt.attempt_number}`}
+        data-attempt={attempt.id}
       >
         <div className="flex flex-wrap items-center gap-3">
           <span className="font-semibold">Attempt #{attempt.attempt_number}</span>
@@ -163,5 +175,72 @@ function AttemptCard({ attempt }: { attempt: Schemas["AttemptOut"] }) {
         </Loading>
       </div>
     </Card>
+  );
+}
+
+const PREFERRED = JSON.stringify(["training.loss", null]);
+
+/**
+ * The run's recorded metric series, one line per attempt, so a recovered
+ * attempt is seen continuing (or restarting) where the failed one stopped.
+ * The attempts come from the polled run, so one started while the page is
+ * open is drawn as soon as it reports.
+ */
+function RunMetrics({ attempts }: { attempts: Schemas["AttemptOut"][] }) {
+  const queries = useAttemptMetrics(
+    attempts.map((attempt) => ({ id: attempt.id, ended: attempt.ended_at !== null })),
+  );
+  const [chosen, setChosen] = useState<string | undefined>(undefined);
+  if (queries.every((query) => query.isPending)) {
+    return <p className="text-sm text-gray-500">Loading metrics…</p>;
+  }
+  const failed = queries.find((query) => query.isError);
+  if (failed) {
+    return (
+      <p className="text-sm text-red-700">Metrics could not be read: {String(failed.error)}</p>
+    );
+  }
+  // An attempt whose series are still on their way has none yet; it is drawn when they arrive.
+  const byAttempt: RecordedSeries[][] = queries.map(
+    (query) => (query.data as Schemas["AttemptMetrics"] | undefined)?.series ?? [],
+  );
+  const choices = seriesChoices(byAttempt);
+  if (choices.length === 0) {
+    return <Absent reason="no metrics recorded for this run" />;
+  }
+  const choice = (choices.find((one) => one.key === chosen) ??
+    choices.find((one) => one.key === PREFERRED) ??
+    choices[0]) as SeriesChoice;
+  const lines = chartLines(
+    byAttempt,
+    attempts.map((attempt) => attempt.attempt_number),
+    choice,
+  );
+  const downsampled = byAttempt
+    .flat()
+    .some((one) => one.name === choice.name && one.unit === choice.unit && one.downsampled);
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2 text-sm">
+        <span className="text-gray-600">Series</span>
+        <select
+          className="rounded border border-gray-300 px-2 py-1"
+          value={choice.key}
+          onChange={(event) => setChosen(event.target.value)}
+        >
+          {choices.map((option) => (
+            <option key={option.key} value={option.key}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <MetricChart title={choice.name} unit={choice.unit} lines={lines} />
+      {downsampled ? (
+        <p className="text-xs text-gray-500">
+          Downsampled for display: every bucket keeps its lowest and highest value.
+        </p>
+      ) : null}
+    </div>
   );
 }

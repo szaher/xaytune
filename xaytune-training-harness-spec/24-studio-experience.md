@@ -248,8 +248,8 @@ amber. An unknown status (a newer server) renders as itself in neutral.
 │  Overrides   micro_batch_size 8 → 4 (recovery plan p-12…, action act-3c…)        │
 │  Checkpoints step 400 (restored) · step 800 (committed, resume: exact)           │
 │  Incidents   —                                                                   │
-│  Metrics     Not recorded yet. Training metric series need the metric store      │
-│              (ADR-023 §S12). Status, checkpoints and incidents are complete.     │
+│  Metrics     training.loss ▾   one line per attempt, by optimizer step           │
+│              (metric-point store, migration 020; table view beside the chart)    │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 

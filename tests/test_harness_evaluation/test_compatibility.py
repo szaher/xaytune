@@ -6,6 +6,7 @@ H06, from the spec below.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,15 @@ def test_g16_r_results_of_one_cycle_stay_undecidable() -> None:
 
 
 def test_no_migration_is_added() -> None:
+    """H06 evaluates locally and records no table: the durable path is ADR-019 M1-M6's.
+
+    Checked by what the migrations create, not by which one is last, so a
+    later migration for something else (020's metric points) does not break it.
+    """
     migrations = Path(__file__).parents[2] / "xaytune" / "storage" / "migrations"
-    names = sorted(path.name for path in migrations.glob("*.sql"))
-    assert names[-1] == "019_agent_invocations.sql"
+    tables = {
+        name.lower()
+        for path in migrations.glob("*.sql")
+        for name in re.findall(r"CREATE TABLE\s+(\w+)", path.read_text(), re.IGNORECASE)
+    }
+    assert not {table for table in tables if "harness" in table}

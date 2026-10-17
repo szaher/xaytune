@@ -138,6 +138,7 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
+from xaytune.core.metric_points import metric_points
 from xaytune.core.refs import Actor, ArtifactRef, ControllerHostRef, RuntimeRef
 from xaytune.core.sqlite import connect
 from xaytune.core.state.machines import (
@@ -212,6 +213,7 @@ from xaytune.storage.control_plane import (
 )
 from xaytune.storage.journal import IdempotencyConflictError
 from xaytune.storage.leases import ControllerLeaseFence, NoLiveLeaseFence
+from xaytune.storage.metrics import TelemetryPosition
 from xaytune.storage.migrations import migrate
 
 __all__ = [
@@ -861,9 +863,9 @@ class EmbeddedControllerHost:
                     actor=_ACTOR,
                 )
             else:
-                self._record_incident(
-                    RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id)), envelope
-                )
+                target = RuntimeOperationTarget(kind="training-attempt", id=str(attempt_id))
+                self._record_metric_points(attempt_id, target, envelope)
+                self._record_incident(target, envelope)
 
         status = await runtime.get_status(reference)
         if status.state in _LIVE_STATES:
@@ -2442,6 +2444,34 @@ class EmbeddedControllerHost:
             actor=_ACTOR,
             telemetry_position=position,
         )
+
+    def _record_metric_points(
+        self,
+        attempt_id: RunAttemptId,
+        target: RuntimeOperationTarget,
+        envelope: RuntimeEventEnvelope,
+    ) -> None:
+        """Keep the scalars a training event reported (Track B, migration 020).
+
+        Before the incident classifier sees the same event, and without
+        moving the cursor: a crash in between replays the event, whose points
+        are then already recorded and whose incident is not lost.
+        """
+        if envelope.target != target:
+            raise ProvenanceError("metric envelope belongs to another attempt")
+        points = metric_points(envelope.payload.data)
+        if points:
+            self.repository.record_metric_points(
+                attempt_id,
+                TelemetryPosition(
+                    stream_generation=envelope.stream_generation,
+                    sequence=envelope.sequence,
+                    event_id=envelope.event_id,
+                    protocol_version=envelope.protocol_version,
+                    emitted_at=envelope.emitted_at,
+                ),
+                points,
+            )
 
     def _record_incident(
         self, target: RuntimeOperationTarget, envelope: RuntimeEventEnvelope

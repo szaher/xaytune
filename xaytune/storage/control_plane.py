@@ -195,6 +195,7 @@ from xaytune.core.ids import (
     RunId,
 )
 from xaytune.core.immutable import FrozenDict
+from xaytune.core.metric_points import MetricPoint
 from xaytune.core.refs import Actor, ArtifactRef, CheckpointRef, RuntimeRef
 from xaytune.core.state.machines import EXPERIMENT_MACHINE
 from xaytune.core.state.status import (
@@ -230,6 +231,7 @@ from xaytune.storage.journal import (
     OperationJournal,
 )
 from xaytune.storage.leases import WriteFence
+from xaytune.storage.metrics import MetricPointStore, TelemetryPosition
 from xaytune.storage.policy import PolicyDecisionStore
 from xaytune.storage.recovery import RecoveryEpisodeStore, RecoveryPlanStore
 from xaytune.storage.recovery_actions import RecoveryActionBindingStore
@@ -748,6 +750,7 @@ class ControlPlaneRepository:
         self.policy = PolicyDecisionStore(connection)
         self.incidents = IncidentStore(connection)
         self.checkpoints = CheckpointRecordStore(connection)
+        self.metric_points = MetricPointStore(connection)
         self.recovery_episodes = RecoveryEpisodeStore(connection)
         self.recovery_plans = RecoveryPlanStore(connection)
         self.recovery_action_bindings = RecoveryActionBindingStore(connection)
@@ -1746,6 +1749,39 @@ class ControlPlaneRepository:
                 extra=extra,
             )
         return plan
+
+    def record_metric_points(
+        self,
+        attempt_id: RunAttemptId | str,
+        position: TelemetryPosition,
+        points: Sequence[MetricPoint],
+    ) -> int:
+        """Record one telemetry event's metric points; how many were new (Track B, 020).
+
+        Idempotent on the event's stream position, as every telemetry handler
+        must be (ADR-014 §4): a replay of the same event records nothing and
+        returns 0. Points are evidence, not transitions: no domain event is
+        emitted, the attempt does not move, and the telemetry cursor is left
+        where it is, so an incident the same event carries is never skipped
+        on replay.
+
+        Raises:
+            AggregateNotFoundError: If no such training attempt exists.
+            IdempotencyConflictError: If the position already holds a
+                different event's points, or different points.
+        """
+        if not points:
+            return 0
+        with self._write():
+            attempt = self.aggregates.load_attempt(str(attempt_id))
+            run = self.aggregates.load_run(str(attempt.run_id))
+            return self.metric_points._record(
+                attempt_id=str(attempt.id),
+                run_id=str(run.id),
+                experiment_id=str(run.experiment_id),
+                position=position,
+                points=points,
+            )
 
     def record_incident(
         self, incident: Incident, *, actor: Actor, destinations: tuple[str, ...] = ()

@@ -208,6 +208,7 @@ def _every_path(api: TestClient, recorded: Recorded) -> list[str]:
         f"{PREFIX}/compare?left={child['id']}&right={parent['id']}",
         f"{PREFIX}/runs/{run['id']}",
         f"{PREFIX}/attempts/{run['attempts'][0]['id']}",
+        f"{PREFIX}/attempts/{run['attempts'][0]['id']}/metrics",
         f"{PREFIX}/evaluation-runs/{node['evaluation_runs'][0]['id']}",
     ]
 

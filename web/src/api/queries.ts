@@ -2,7 +2,7 @@
  * One TanStack Query hook per read. The record is the only state (ADR-023 §S2):
  * nothing is cached past a query, and a view that is live polls (§S7).
  */
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
 import { api, read } from "./client";
 
 /** How often a live view polls while its experiment is not at rest (§S7). */
@@ -95,17 +95,35 @@ export const useNode = (node_id: string, isLive?: boolean) =>
     refetchInterval: live(isLive),
   });
 
+/** A run's statuses past which it gains no attempt and none of its attempts changes. */
+const SETTLED_RUN = new Set(["succeeded", "failed", "cancelled"]);
+
+/**
+ * Whether a run is settled: a final status, and every attempt ended. Until
+ * then the run page polls, so a recovery attempt started while it is open
+ * appears without a reload (§S7).
+ */
+export const runSettled = (run: { status: string; attempts: { ended_at: string | null }[] }) =>
+  SETTLED_RUN.has(run.status) && run.attempts.every((attempt) => attempt.ended_at !== null);
+
 export const useRun = (run_id: string) =>
   useQuery({
     queryKey: ["run", run_id],
     queryFn: () => read(api.GET("/api/v1/runs/{run_id}", { params: { path: { run_id } } })),
+    refetchInterval: (query) => live(query.state.data ? !runSettled(query.state.data.run) : false),
   });
 
-export const useAttempt = (attempt_id: string) =>
+/**
+ * An attempt's record. *ended* is part of the key: when the polled run says
+ * the attempt ended, its record is read once more, then never polled again.
+ */
+export const useAttempt = (attempt_id: string, ended = true) =>
   useQuery({
-    queryKey: ["attempt", attempt_id],
+    queryKey: ["attempt", attempt_id, { ended }],
     queryFn: () =>
       read(api.GET("/api/v1/attempts/{attempt_id}", { params: { path: { attempt_id } } })),
+    refetchInterval: live(!ended),
+    placeholderData: keepPreviousData,
   });
 
 export const useEvaluationRun = (evaluation_run_id: string) =>
@@ -129,4 +147,24 @@ export const useCompare = (left: string | undefined, right: string | undefined) 
           params: { query: { left: left ?? "", right: right ?? "" } },
         }),
       ),
+  });
+
+/**
+ * Each attempt's recorded metric series (Track B). An attempt that has not
+ * ended is polled; when it ends, *ended* changes the key, so its series is
+ * read once more -- the points it reported last -- and polling stops.
+ */
+export const useAttemptMetrics = (attempts: { id: string; ended: boolean }[]) =>
+  useQueries({
+    queries: attempts.map(({ id, ended }) => ({
+      queryKey: ["attempt", id, "metrics", { ended }],
+      queryFn: () =>
+        read(
+          api.GET("/api/v1/attempts/{attempt_id}/metrics", {
+            params: { path: { attempt_id: id } },
+          }),
+        ),
+      refetchInterval: live(!ended),
+      placeholderData: keepPreviousData,
+    })),
   });

@@ -57,6 +57,7 @@ test("a recorded experiment survives a Studio restart, lineage, evaluation and r
     await expect(page.getByRole("group", { name: "attempt 2" })).toContainText("succeeded");
     await expect(page.getByRole("group", { name: "Overrides" })).toBeVisible();
     const runUrl = page.url();
+    await metricsSettled(page);
     const runText = await page.getByRole("main").innerText();
 
     // Restart Studio: a new process over the same file.
@@ -65,6 +66,7 @@ test("a recorded experiment survives a Studio restart, lineage, evaluation and r
 
     await page.goto(runUrl);
     await expect(page.getByRole("group", { name: "attempt 1" })).toContainText("CUDA_OOM");
+    await metricsSettled(page);
     expect(await page.getByRole("main").innerText()).toBe(runText);
 
     await page.goto(compareUrl);
@@ -83,4 +85,11 @@ test("a recorded experiment survives a Studio restart, lineage, evaluation and r
 /** What the candidates table shows: identity, status, decision, lineage. */
 async function lineageAndResults(page: import("@playwright/test").Page): Promise<string[]> {
   return page.getByRole("table", { name: "Candidates" }).getByRole("row").allInnerTexts();
+}
+
+/** The run page's metrics have loaded: this scenario's runtime reports none. */
+async function metricsSettled(page: import("@playwright/test").Page): Promise<void> {
+  await expect(page.getByRole("region", { name: "Metrics" })).toContainText(
+    "no metrics recorded for this run",
+  );
 }

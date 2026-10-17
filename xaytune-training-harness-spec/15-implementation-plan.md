@@ -2755,7 +2755,7 @@ Three tracks run in parallel (ADR-023 §S12, decided at acceptance):
 - **Track A, Studio:** UX-01 → UX-02 → UX-03. UX-02 starts now with
   training-experiment views on the UX-01 contract.
 - **Track B, durable platform:** the metric-point store (migration 020,
-  independent) for loss and telemetry charts; durable harness candidates and
+  independent) for loss and telemetry charts, shown on Studio's run page; durable harness candidates and
   execution (ADR-019 M1–M6); then durable H06 evaluations and trajectory
   references, planned with their harness-execution prerequisites. No
   directory-indexed stop-gap.

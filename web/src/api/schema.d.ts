@@ -21,6 +21,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attempts/{attempt_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Attempt Metrics
+         * @description The attempt's recorded metric series, each downsampled to *max_points* at most.
+         *
+         *     *name* (repeatable) keeps only those series. A name nothing recorded is
+         *     simply absent: an attempt with no points has no series, never a zero.
+         */
+        get: operations["get_attempt_metrics_api_v1_attempts__attempt_id__metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/compare": {
         parameters: {
             query?: never;
@@ -398,6 +421,24 @@ export interface components {
              * @constant
              */
             schema: "xaytune.studio-api/v1";
+        };
+        /**
+         * AttemptMetrics
+         * @description A training attempt's recorded metric series (Track B, migration 020).
+         */
+        AttemptMetrics: {
+            /** Attempt Id */
+            attempt_id: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema
+             * @default xaytune.studio-api/v1
+             * @constant
+             */
+            schema: "xaytune.studio-api/v1";
+            /** Series */
+            series: components["schemas"]["MetricSeriesOut"][];
         };
         /** AttemptOut */
         AttemptOut: {
@@ -1042,6 +1083,52 @@ export interface components {
             slice: string | null;
         };
         /**
+         * MetricPointOut
+         * @description One recorded point. ``optimizer_step`` is ``null`` when the event had none -- never 0.
+         */
+        MetricPointOut: {
+            /** Emitted At */
+            emitted_at: string | null;
+            /** Event Id */
+            event_id: string;
+            /** Optimizer Step */
+            optimizer_step: number | null;
+            /** Sequence */
+            sequence: number;
+            /** Stream Generation */
+            stream_generation: number;
+            /** Value */
+            value: number;
+        };
+        /**
+         * MetricSeriesOut
+         * @description One series of one attempt: a name and unit, and the worker and rank that reported it.
+         *
+         *     One name reported in two units is two series: a value in ms is never
+         *     drawn on a line of seconds.
+         *
+         *     ``count`` is every point recorded; ``points`` may be fewer when
+         *     ``downsampled`` is true. Downsampling happens at read time and keeps
+         *     each bucket's lowest and highest value and the series' first and last
+         *     point, so a spike is never averaged away.
+         */
+        MetricSeriesOut: {
+            /** Count */
+            count: number;
+            /** Downsampled */
+            downsampled: boolean;
+            /** Name */
+            name: string;
+            /** Points */
+            points: components["schemas"]["MetricPointOut"][];
+            /** Rank */
+            rank: number | null;
+            /** Unit */
+            unit: string | null;
+            /** Worker */
+            worker: string | null;
+        };
+        /**
          * MetricSide
          * @description One candidate's measurement, with what it was measured under.
          */
@@ -1285,6 +1372,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AttemptDetail"];
+                };
+            };
+            /** @description No such record */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A parameter the API cannot use */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The state database cannot be read by this build */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_attempt_metrics_api_v1_attempts__attempt_id__metrics_get: {
+        parameters: {
+            query?: {
+                name?: string[] | null;
+                max_points?: number;
+            };
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttemptMetrics"];
                 };
             };
             /** @description No such record */

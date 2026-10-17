@@ -8,6 +8,7 @@ compile that spec byte for byte.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -93,10 +94,18 @@ def test_the_agent_trajectory_kind_changes_no_existing_serialization() -> None:
 
 
 def test_no_migration_or_table_is_added() -> None:
-    """019 is the last migration before H05; trajectories live in files, not the database."""
+    """Trajectories live in files, not the database: no migration creates a table for them.
+
+    Checked by what the migrations create, not by which one is last (H05 shipped
+    on 019), so a later migration for something else does not break it.
+    """
     migrations = Path(__file__).parents[2] / "xaytune" / "storage" / "migrations"
-    names = sorted(path.name for path in migrations.glob("*.sql"))
-    assert names[-1] == "019_agent_invocations.sql"
+    tables = {
+        name.lower()
+        for path in migrations.glob("*.sql")
+        for name in re.findall(r"CREATE TABLE\s+(\w+)", path.read_text(), re.IGNORECASE)
+    }
+    assert not {table for table in tables if "trajector" in table}
 
 
 # ---- the refused shapes (T9) -----------------------------------------------------------------

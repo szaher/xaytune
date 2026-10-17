@@ -309,6 +309,40 @@
         "title": "AttemptDetail",
         "type": "object"
       },
+      "AttemptMetrics": {
+        "additionalProperties": false,
+        "description": "A training attempt's recorded metric series (Track B, migration 020).",
+        "properties": {
+          "attempt_id": {
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema": {
+            "const": "xaytune.studio-api/v1",
+            "default": "xaytune.studio-api/v1",
+            "title": "Schema",
+            "type": "string"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/MetricSeriesOut"
+            },
+            "title": "Series",
+            "type": "array"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "run_id",
+          "series"
+        ],
+        "title": "AttemptMetrics",
+        "type": "object"
+      },
       "AttemptOut": {
         "additionalProperties": false,
         "properties": {
@@ -1982,6 +2016,129 @@
         "title": "MetricPair",
         "type": "object"
       },
+      "MetricPointOut": {
+        "additionalProperties": false,
+        "description": "One recorded point. ``optimizer_step`` is ``null`` when the event had none -- never 0.",
+        "properties": {
+          "emitted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Emitted At"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "optimizer_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimizer Step"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "stream_generation": {
+            "title": "Stream Generation",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "optimizer_step",
+          "value",
+          "stream_generation",
+          "sequence",
+          "event_id",
+          "emitted_at"
+        ],
+        "title": "MetricPointOut",
+        "type": "object"
+      },
+      "MetricSeriesOut": {
+        "additionalProperties": false,
+        "description": "One series of one attempt: a name and unit, and the worker and rank that reported it.\n\nOne name reported in two units is two series: a value in ms is never\ndrawn on a line of seconds.\n\n``count`` is every point recorded; ``points`` may be fewer when\n``downsampled`` is true. Downsampling happens at read time and keeps\neach bucket's lowest and highest value and the series' first and last\npoint, so a spike is never averaged away.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "downsampled": {
+            "title": "Downsampled",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/MetricPointOut"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker"
+          }
+        },
+        "required": [
+          "name",
+          "unit",
+          "worker",
+          "rank",
+          "count",
+          "downsampled",
+          "points"
+        ],
+        "title": "MetricSeriesOut",
+        "type": "object"
+      },
       "MetricSide": {
         "additionalProperties": false,
         "description": "One candidate's measurement, with what it was measured under.",
@@ -2638,6 +2795,98 @@
           }
         },
         "summary": "Get Attempt"
+      }
+    },
+    "/api/v1/attempts/{attempt_id}/metrics": {
+      "get": {
+        "description": "The attempt's recorded metric series, each downsampled to *max_points* at most.\n\n*name* (repeatable) keeps only those series. A name nothing recorded is\nsimply absent: an attempt with no points has no series, never a zero.",
+        "operationId": "get_attempt_metrics_api_v1_attempts__attempt_id__metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "title": "Attempt Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "minimum": 4,
+              "title": "Max Points",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptMetrics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such record"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A parameter the API cannot use"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The state database cannot be read by this build"
+          }
+        },
+        "summary": "Get Attempt Metrics"
       }
     },
     "/api/v1/compare": {

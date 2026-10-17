@@ -8,7 +8,7 @@ Studio shows it.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from enum import Enum
 from typing import Any, get_args
@@ -34,6 +34,7 @@ from xaytune.core.domain.recovery import RecoveryEpisode, RecoveryPlan
 from xaytune.core.domain.run import Run, RunAttempt
 from xaytune.core.refs import Actor
 from xaytune.storage.leases import ControllerLease
+from xaytune.storage.metrics import MetricSeriesSummary, StoredMetricPoint
 
 from . import models as m
 
@@ -505,3 +506,51 @@ def lease_out(lease: ControllerLease, now: datetime) -> m.LeaseOut:
 
 def _str(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+# ---- metric series (Track B, migration 020) ----------------------------------------------------
+
+
+def downsample(points: Sequence[StoredMetricPoint], limit: int) -> list[StoredMetricPoint]:
+    """At most *limit* of *points*, in stream order, keeping every extreme.
+
+    Splits the series into buckets and keeps each bucket's lowest and highest
+    value, plus the first and last point. Deterministic: the same series and
+    limit always give the same points. ``limit`` is at least 4.
+    """
+    if len(points) <= limit:
+        return list(points)
+    kept = {0, len(points) - 1}
+    inner = range(1, len(points) - 1)
+    buckets = max(1, (limit - 2) // 2)
+    size = -(-len(inner) // buckets)  # ceiling division
+    for start in range(1, len(points) - 1, size):
+        bucket = range(start, min(start + size, len(points) - 1))
+        kept.add(min(bucket, key=lambda index: (points[index].value, index)))
+        kept.add(max(bucket, key=lambda index: (points[index].value, -index)))
+    return [points[index] for index in sorted(kept)]
+
+
+def metric_series_out(
+    summary: MetricSeriesSummary, points: Sequence[StoredMetricPoint], limit: int
+) -> m.MetricSeriesOut:
+    kept = downsample(points, limit)
+    return m.MetricSeriesOut(
+        name=summary.name,
+        unit=summary.unit,
+        worker=summary.worker,
+        rank=summary.rank,
+        count=len(points),
+        downsampled=len(kept) < len(points),
+        points=[
+            m.MetricPointOut(
+                optimizer_step=point.optimizer_step,
+                value=point.value,
+                stream_generation=point.stream_generation,
+                sequence=point.sequence,
+                event_id=point.event_id,
+                emitted_at=point.emitted_at,
+            )
+            for point in kept
+        ],
+    )

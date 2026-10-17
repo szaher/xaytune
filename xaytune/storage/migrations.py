@@ -16,12 +16,20 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from xaytune.storage.errors import MigrationError
+from xaytune.storage.errors import MigrationError, SchemaTooNewError
 
-__all__ = ["Migration", "applied_versions", "available_migrations", "migrate", "recorded_versions"]
+__all__ = [
+    "Migration",
+    "applied_versions",
+    "available_migrations",
+    "migrate",
+    "recorded_versions",
+    "require_known_schema",
+]
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -104,17 +112,24 @@ def migrate(connection: sqlite3.Connection, directory: Path | None = None) -> tu
     rather than half-applied with no record of it.
 
     Raises:
+        SchemaTooNewError: If the database records a migration this build does
+            not ship: a newer Xaytune migrated it (ADR-019 M6, the downgrade
+            guard). Nothing is applied or written.
         MigrationError: If a migration on disk has a version lower than one
             already applied -- that means a file was inserted behind a database
             that has moved past it, and applying it now would run it out of
             order against a schema it was never written for.
     """
+    known = available_migrations(directory)
+    recorded = recorded_versions(connection)
+    if recorded is not None:
+        require_known_schema(recorded, known)
     _ensure_ledger(connection)
     already = set(applied_versions(connection))
     highest = max(already, default=0)
 
     applied: list[int] = []
-    for migration in available_migrations(directory):
+    for migration in known:
         if migration.version in already:
             continue
         if migration.version < highest:
@@ -130,6 +145,25 @@ def migrate(connection: sqlite3.Connection, directory: Path | None = None) -> tu
         highest = migration.version
 
     return tuple(applied)
+
+
+def require_known_schema(recorded: Sequence[int], known: Sequence[Migration]) -> None:
+    """Refuse a database whose ledger records a migration *known* does not ship.
+
+    The downgrade guard (ADR-019 M6). A newer Xaytune can migrate a database
+    into a shape this build cannot represent -- a widened ``CHECK``, a new
+    target kind -- and nothing would stop this build reading, or writing,
+    rows it does not understand. A guard protects only builds that contain
+    it, so it ships before any migration that needs it: the release that
+    first contains this function is the minimum compatible version of every
+    rebuilt database.
+
+    Raises:
+        SchemaTooNewError: Naming the versions this build does not know.
+    """
+    unknown = sorted(set(recorded) - {migration.version for migration in known})
+    if unknown:
+        raise SchemaTooNewError(unknown, max(m.version for m in known) if known else 0)
 
 
 def _apply(connection: sqlite3.Connection, migration: Migration) -> None:

@@ -29,6 +29,7 @@ from xaytune.storage.errors import (
     AggregateNotFoundError,
     IncompatiblePayloadError,
     MigrationError,
+    SchemaTooNewError,
     StorageError,
 )
 from xaytune.storage.graph import CandidateComparison, ExperimentGraph, LineageError
@@ -63,6 +64,7 @@ __all__ = [
     "NoLiveLeaseFence",
     "UnknownOperationTargetError",
     "MigrationError",
+    "SchemaTooNewError",
     "StorageError",
     "WriteFence",
     "applied_versions",

@@ -14,6 +14,7 @@ __all__ = [
     "AggregateNotFoundError",
     "IncompatiblePayloadError",
     "MigrationError",
+    "SchemaTooNewError",
     "StorageError",
 ]
 
@@ -24,6 +25,24 @@ class StorageError(XaytuneError):
 
 class MigrationError(StorageError):
     """The schema could not be migrated, or the migration set is inconsistent."""
+
+
+class SchemaTooNewError(MigrationError):
+    """A newer Xaytune migrated this database: this build refuses it (ADR-019 M6).
+
+    Reading or writing a schema this build does not know could misread rows
+    of a kind it cannot represent, or write rows a newer build cannot trust.
+    Upgrade Xaytune, or restore the backup taken before the newer one migrated.
+    """
+
+    def __init__(self, unknown: list[int], supported: int) -> None:
+        self.unknown = tuple(unknown)
+        self.supported = supported
+        super().__init__(
+            f"the state database records migration(s) {', '.join(map(str, self.unknown))}, "
+            f"which this build of Xaytune does not ship (it knows up to {supported}): a newer "
+            "Xaytune migrated it. Upgrade Xaytune, or restore a backup taken before the upgrade"
+        )
 
 
 class AggregateNotFoundError(StorageError):

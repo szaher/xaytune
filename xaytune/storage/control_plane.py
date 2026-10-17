@@ -83,6 +83,7 @@ from xaytune.core.domain.budget import (
     budget_status,
     limits,
 )
+from xaytune.core.domain.candidate_envelope import CandidateKind, NotATrainingCandidateError
 from xaytune.core.domain.controller_request import ControllerRequest, ControllerRequestState
 from xaytune.core.domain.decision import (
     Decision,
@@ -526,7 +527,7 @@ def _require_consistent_candidate(node: ExperimentNode) -> None:
     Raises:
         StorageError: If the fingerprint does not match the candidate.
     """
-    expected = node.candidate.candidate.candidate_fingerprint()
+    expected = node.candidate.scientific_fingerprint()
     if node.candidate_fingerprint != expected:
         raise StorageError(
             f"node {node.id} carries fingerprint {node.candidate_fingerprint!r} "
@@ -2696,7 +2697,7 @@ class ControlPlaneRepository:
                         ),
                     )
                 )
-            candidate = node.candidate.candidate
+            candidate = node.training_candidate()
             nodes.append(
                 NodeSummary(
                     node_id=node.id,
@@ -2787,7 +2788,7 @@ class ControlPlaneRepository:
                 )
             origin = CandidateBranchOrigin.of(proposal)
             for existing in aggregates.nodes_for_experiment(str(experiment.id)):
-                if existing.candidate.candidate.candidate_fingerprint() != identity:
+                if existing.candidate.scientific_fingerprint() != identity:
                     continue
                 recorded = existing.branch_origin
                 if recorded is not None and recorded.proposal_fingerprint == (
@@ -3554,7 +3555,7 @@ class ControlPlaneRepository:
                 intervention_id=latest.intervention_id,
             )
         node = self.aggregates.load_node(str(run.node_id))
-        declared = node.candidate.candidate.training.optimization.learning_rate
+        declared = node.training_candidate().training.optimization.learning_rate
         if declared is None or not math.isfinite(declared) or declared <= 0:
             raise ProvenanceError(f"run {run.id}'s candidate declares no learning rate")
         return EffectiveLearningRate(value=float(declared))
@@ -4063,7 +4064,7 @@ class ControlPlaneRepository:
             manifest = record.payload.state_manifest
             embodied = None if manifest is None else manifest.applied_intervention_application_ids
         node = self.aggregates.load_node(str(run.node_id))
-        declared = node.candidate.candidate.training.optimization.learning_rate
+        declared = node.training_candidate().training.optimization.learning_rate
         interventions = self.training_interventions.for_run(str(run.id))
         applications = self.intervention_applications.for_run(str(run.id))
         if declared is None:
@@ -6111,14 +6112,25 @@ class ControlPlaneRepository:
         the seed claimed. Which source is *allowed* is stricter, and the
         caller's: see :meth:`_require_first_realization`.
 
+        A ``Run`` realizes a *training* candidate. A harness node can be
+        recorded (ADR-018 D10) but not run: its attempts need their own target
+        kind and table (ADR-019 M6, steps 3-5), so it is refused here, before
+        anything is written, rather than routed into training execution.
+
         Raises:
             AggregateNotFoundError: If the node does not exist.
+            NotATrainingCandidateError: If the node holds a harness candidate.
             StorageError: If the node's experiment, fingerprint or seed
                 provenance disagrees.
         """
         node = self.aggregates.get_node(str(run.node_id))
         if node is None:
             raise AggregateNotFoundError("ExperimentNode", str(run.node_id))
+        if node.candidate_kind is not CandidateKind.TRAINING:
+            raise NotATrainingCandidateError(
+                f"node {node.id} holds a {node.candidate_kind.value} candidate: a run realizes a "
+                "training candidate, and harness execution is not durable yet (ADR-019 M6)"
+            )
 
         if node.experiment_id != run.experiment_id:
             raise StorageError(

@@ -1,5 +1,8 @@
 """The candidate envelope and the training compatibility boundary (H02, ADR-018 D1, D2, D10).
 
+D10's durable step is a node snapshot that can hold the envelope: version
+``"2"``. Training snapshots stay version ``"1"``, byte for byte.
+
 The training literals here are the ones ``test_candidate.py`` already pins --
 not new expectations -- so a regression in the envelope cannot hide behind a
 freshly computed value.
@@ -21,6 +24,7 @@ from xaytune.core.domain.candidate_envelope import (
     CandidateEnvelopeError,
     CandidateKind,
     ExperimentCandidate,
+    NotATrainingCandidateError,
     TrainingCandidate,
     candidate_of_snapshot,
     read_candidate,
@@ -72,16 +76,67 @@ def test_the_training_payload_serializes_exactly_as_candidate_spec_does() -> Non
     )
 
 
-def test_a_node_snapshot_reads_as_training_at_its_one_known_shape() -> None:
+def test_a_version_one_snapshot_reads_as_training_and_serializes_as_it_always_has() -> None:
     snapshot = CandidateSpecSnapshot.model_validate({"candidate": HISTORICAL, "spec_version": "1"})
     assert candidate_of_snapshot(snapshot).fingerprints_for_lookup() == (V2, V1)
-    with pytest.raises(CandidateEnvelopeError, match="snapshot version '2'"):
-        candidate_of_snapshot(snapshot.model_copy(update={"spec_version": "2"}))
+    assert snapshot.training_spec() == _plain_candidate()
+    dumped = snapshot.model_dump(mode="json")
+    assert set(dumped) == {"candidate", "spec_version", "metadata"}, "no envelope: null"
+    of = CandidateSpecSnapshot.of(ExperimentCandidate.training(_plain_candidate()))
+    assert of.spec_version == "1" and of.model_dump(mode="json") == dumped
 
 
-def test_the_durable_and_planning_seams_still_carry_candidate_spec_only() -> None:
-    """D10: H02 widens no record or API; H03/H07 do, behind their own reviews."""
-    assert CandidateSpecSnapshot.model_fields["candidate"].annotation is CandidateSpec
+def test_a_version_two_snapshot_holds_a_harness_and_refuses_training_only_work() -> None:
+    harness = _harness()
+    snapshot = CandidateSpecSnapshot.of(ExperimentCandidate.agent_harness(harness))
+    assert snapshot.spec_version == "2"
+    dumped = snapshot.model_dump(mode="json")
+    assert set(dumped) == {"envelope", "spec_version", "metadata"}
+    assert CandidateSpecSnapshot.model_validate(dumped) == snapshot
+    assert snapshot.candidate_kind is CandidateKind.AGENT_HARNESS
+    assert snapshot.scientific_fingerprint() == harness.harness_fingerprint()
+    assert candidate_of_snapshot(snapshot).payload == AgentHarnessCandidate(harness=harness)
+    with pytest.raises(NotATrainingCandidateError, match="agent-harness candidate"):
+        snapshot.training_spec()
+    with pytest.raises(NotATrainingCandidateError):
+        _ = snapshot.kind
+
+
+def test_a_version_two_snapshot_may_hold_training_too_and_reads_the_same() -> None:
+    envelope = ExperimentCandidate.training(_plain_candidate())
+    snapshot = CandidateSpecSnapshot(envelope=envelope, spec_version="2")
+    assert snapshot.training_spec() == _plain_candidate()
+    assert snapshot.scientific_fingerprint() == V2
+
+
+@pytest.mark.parametrize(
+    ("record", "error"),
+    [
+        ({"candidate": HISTORICAL, "spec_version": "3"}, CandidateEnvelopeError),
+        ({"spec_version": "1"}, ValidationError),
+        ({"spec_version": "2", "candidate": HISTORICAL}, ValidationError),
+        (
+            {
+                "spec_version": "1",
+                "candidate": HISTORICAL,
+                "envelope": ExperimentCandidate.agent_harness(_harness()).model_dump(mode="json"),
+            },
+            ValidationError,
+        ),
+    ],
+    ids=["unknown-version", "v1-empty", "v2-with-a-spec", "v1-with-an-envelope"],
+)
+def test_a_snapshot_of_an_unknown_or_mixed_shape_is_refused(
+    record: dict[str, Any], error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        CandidateSpecSnapshot.model_validate(record)
+
+
+def test_the_planning_and_submission_seams_still_carry_candidate_spec_only() -> None:
+    """D10 makes a node able to hold a harness; specs, proposals and planning stay training."""
+    assert CandidateSpecSnapshot.model_fields["candidate"].annotation == CandidateSpec | None
+    assert CandidateSpecSnapshot.model_fields["envelope"].annotation == ExperimentCandidate | None
     assert ExperimentSpec.model_fields["candidate"].annotation is CandidateSpec
     assert CandidateProposal.model_fields["candidate"].annotation is CandidateSpec
     assert "candidate" in ExperimentNode.model_fields

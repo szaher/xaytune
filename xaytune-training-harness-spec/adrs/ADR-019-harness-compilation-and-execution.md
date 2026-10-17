@@ -18,8 +18,17 @@ guard, is implemented: `migrate()` refuses a database whose ledger records a
 migration the build does not ship (`SchemaTooNewError`), from every entry
 point that migrates, before anything is written. The first release that
 contains it is the **minimum compatible version** of any database a later
-rebuild-mode migration (M2–M3) changes. Steps 2–5 remain proposed, each for
-its own review.
+rebuild-mode migration (M2–M3) changes.
+
+Step 2, the versioned candidate snapshot (ADR-018 D10), is implemented. A
+node's snapshot at version `"2"` holds an `ExperimentCandidate`, and
+migration 021 adds `experiment_nodes.candidate_kind`. The column is added,
+not rebuilt, so 021 needs no rebuild mode. It is also compatible with builds
+that predate it: they ignore the column, and nothing outside the repository
+can write a harness node yet. A harness node can be recorded and read, but
+a run for one is refused, so harness work fails closed (M1).
+
+Steps 3–5 remain proposed, each for its own review.
 
 Builds on [ADR-018](ADR-018-agent-harness-candidates.md), accepted on
 2026-10-11 as a separate decision.

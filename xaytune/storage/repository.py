@@ -345,6 +345,7 @@ class AggregateStore:
                 "experiment_id": str(node.experiment_id),
                 "status": node.status.value,
                 "candidate_fingerprint": node.candidate_fingerprint,
+                "candidate_kind": node.candidate_kind.value,
             },
         )
         for parent_id in node.parent_ids:

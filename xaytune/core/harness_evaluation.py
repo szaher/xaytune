@@ -73,6 +73,7 @@ __all__ = [
     "MetricObservation",
     "ReferenceEgressGrant",
     "RestrictedEvaluationReport",
+    "ProviderFeedback",
     "RunValue",
     "ScoreScale",
     "SuccessRule",
@@ -776,6 +777,11 @@ class JudgeExchange(_Closed):
     message: str
     reply: FrozenDict | None
     failure: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0, strict=True)
+    """What the judge's provider reported for the prompt; ``None`` when it did not (never
+    estimated). In the judge model's own token unit."""
+    output_tokens: int | None = Field(default=None, ge=0, strict=True)
+    """What the judge's provider reported for the reply; ``None`` when it did not."""
 
 
 class HarnessEvaluationReport(_Closed):
@@ -831,3 +837,23 @@ class RestrictedEvaluationReport(_Closed):
     """Every run value, before the disclosure policy."""
     tasks: tuple[TaskObservations, ...]
     judge: tuple[JudgeExchange, ...] = ()
+
+
+# ---- what a provider may receive (V5, G2c) -------------------------------------------------
+
+
+class ProviderFeedback(FrozenDomainModel):
+    """What a mutation or search provider may receive from one evaluation (G2c).
+
+    Run-level values after the provider's own filter, and per-task
+    **execution** measurements. Never restricted content, and never a
+    per-task reference-derived score, whatever the disclosure: H07's own
+    reviewed contract must grant that explicitly.
+    """
+
+    evaluation_fingerprint: str
+    evidence_digest: str
+    run_values: tuple[RunValue, ...]
+    withheld: tuple[str, ...] = ()
+    """Released run values the provider's filter kept back, as ``metric`` or ``metric/slice``."""
+    tasks: tuple[TaskObservations, ...]

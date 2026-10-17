@@ -93,6 +93,7 @@ from xaytune.core.harness_evaluation import (
     HarnessRunEvidence,
     JudgeExchange,
     MetricObservation,
+    ProviderFeedback,
     ReferenceEgressGrant,
     RestrictedEvaluationReport,
     RunValue,
@@ -801,6 +802,8 @@ def _judge(
         system=request.system,
         message=message,
         reply=response.content,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
     )
     return MetricObservation(metric="quality", value=float(response.content["score"])), exchange
 
@@ -994,23 +997,6 @@ def _write_reports(
 
 
 # ---- what a provider may receive (V5, G2c) -------------------------------------------------
-
-
-class ProviderFeedback(FrozenDomainModel):
-    """What a mutation or search provider may receive from one evaluation (G2c).
-
-    Run-level values after the provider's own filter, and per-task
-    **execution** measurements. Never restricted content, and never a
-    per-task reference-derived score, whatever the disclosure: H07's own
-    reviewed contract must grant that explicitly.
-    """
-
-    evaluation_fingerprint: str
-    evidence_digest: str
-    run_values: tuple[RunValue, ...]
-    withheld: tuple[str, ...] = ()
-    """Released run values the provider's filter kept back, as ``metric`` or ``metric/slice``."""
-    tasks: tuple[TaskObservations, ...]
 
 
 def _provider_values(

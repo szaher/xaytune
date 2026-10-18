@@ -28,6 +28,22 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: python scripts/check_release_version.py "$TAG"
 
+      # The Studio web client ships inside the wheel (ADR-023 S11) and is not
+      # tracked: xaytune/api/static/ exists only once it is built. Built here,
+      # exactly as the CI wheel job builds it, or the upload would carry a
+      # Studio that answers "web client not built" -- and an upload cannot be
+      # replaced.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the Studio web client
+        run: |
+          npm ci --prefix web
+          npm run --prefix web build
+
       # The wheel is built from the sdist, and the sdist must be the package
       # and nothing else from the working tree.
       - name: Build sdist and wheel
@@ -35,6 +51,9 @@ jobs:
 
       - name: Check the sdist holds the package and nothing else
         run: python scripts/check_sdist.py dist/*.tar.gz
+
+      - name: Check the wheel carries the Studio web client
+        run: unzip -l dist/*.whl | grep -q "xaytune/api/static/index.html"
 
       # The README is PyPI's long description: metadata or markup PyPI would
       # reject or render wrongly stops the release here.

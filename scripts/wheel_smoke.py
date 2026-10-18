@@ -10,6 +10,8 @@ that builds but ships without its migrations, or whose ``import xaytune``
 drags in torch. This runs the shipped boundaries a user reaches first:
 
     import xaytune              without torch, transformers or trl
+    Studio web client           installed with the package, every asset its
+                                index.html loads included
     control-plane store         created, and migrated through every migration
     EmbeddedControllerHost      opens a store and closes
     CandidateSpec, ExperimentSpec
@@ -35,6 +37,7 @@ import asyncio
 import contextlib
 import importlib.util
 import io
+import re
 import runpy
 import sys
 import tempfile
@@ -283,9 +286,32 @@ def run_the_examples() -> None:
         sys.path.remove(str(examples))
 
 
+_ASSET = re.compile(r'(?:src|href)="/(assets/[^"]+)"')
+
+
+def the_studio_client_is_installed() -> None:
+    """The built client is package data (ADR-023 S11): ``xaytune studio`` serves it as is.
+
+    Read as files, not through ``xaytune.api.web``: the web server is an
+    extra, and the bundle must be in the wheel whether or not it is
+    installed.
+    """
+    import xaytune
+
+    bundle = Path(xaytune.__file__).resolve().parent / "api" / "static"
+    index = bundle / "index.html"
+    _check(index.is_file(), f"the wheel has no Studio web client: {index} is missing")
+    assets = _ASSET.findall(index.read_text(encoding="utf-8"))
+    _check(bool(assets), "the Studio's index.html loads no bundled assets")
+    missing = [asset for asset in assets if not (bundle / asset).is_file()]
+    _check(not missing, f"the Studio's index.html loads assets the wheel lacks: {missing}")
+    _step(f"the Studio web client is installed ({len(assets)} assets)")
+
+
 def main() -> int:
     try:
         import_the_installed_package()
+        the_studio_client_is_installed()
         with tempfile.TemporaryDirectory(prefix="xaytune-smoke-") as tmp:
             directory = Path(tmp).resolve()
             migrate_a_new_store(directory)

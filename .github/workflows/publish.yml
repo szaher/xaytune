@@ -68,6 +68,13 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/smoke/bin/python" --torch-backend cpu dist/*.whl
           cd "$RUNNER_TEMP" && "$RUNNER_TEMP/smoke/bin/python" -I "$GITHUB_WORKSPACE/scripts/wheel_smoke.py"
 
+      # Printed, not added to dist/: everything in dist/ is uploaded to the
+      # index. Compare with the CI wheel job's SHA256SUMS for the same commit.
+      - name: Record checksums
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.whl) | tee "$RUNNER_TEMP/SHA256SUMS"
+          { echo '```'; cat "$RUNNER_TEMP/SHA256SUMS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4
         with:

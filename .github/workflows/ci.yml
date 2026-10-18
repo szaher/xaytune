@@ -234,6 +234,20 @@ jobs:
       - run: uv pip install --python "$RUNNER_TEMP/smoke/bin/python" --torch-backend cpu dist/*.whl
       - run: '"$RUNNER_TEMP/smoke/bin/python" -I "$GITHUB_WORKSPACE/scripts/wheel_smoke.py"'
         working-directory: ${{ runner.temp }}
+      # What this commit builds, kept for review: the exact sdist and wheel
+      # the checks above passed, with their SHA-256 sums, so a later upload
+      # can be compared with them byte for byte.
+      - name: Record checksums
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.whl) | tee SHA256SUMS
+          { echo '```'; cat SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xaytune-dist-${{ github.sha }}
+          path: |
+            dist/
+            SHA256SUMS
+          if-no-files-found: error
 
   type-check:
     runs-on: ubuntu-latest

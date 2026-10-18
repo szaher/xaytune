@@ -10,7 +10,12 @@ that builds but ships without its migrations, or whose ``import xaytune``
 drags in torch. This runs the shipped boundaries a user reaches first:
 
     import xaytune              without torch, transformers or trl
-    control-plane store         created, and migrated through every migration
+    Studio web client           installed with the package, every asset its
+                                index.html loads included
+    control-plane store         created, and migrated through every migration,
+                                which end at LAST_MIGRATION
+    downgrade guard             a store a newer build migrated is refused, byte
+                                for byte untouched; the daemon exits 6
     EmbeddedControllerHost      opens a store and closes
     CandidateSpec, ExperimentSpec
                                 constructed, validated, round-tripped
@@ -35,6 +40,7 @@ import asyncio
 import contextlib
 import importlib.util
 import io
+import re
 import runpy
 import sys
 import tempfile
@@ -54,6 +60,36 @@ HEAVY = (
     "lm_eval",
 )
 """Training stacks the control plane must not import as a side effect (ADR-010)."""
+
+LAST_MIGRATION = 20
+"""The last migration this release ships: 1.0.0a2 is migrations 001-020.
+
+Named here, not read from the tree, so a migration cannot reach a release
+build unnoticed: the change that adds one (021, ADR-018 D10) updates this
+line, after the guard-bearing release that must precede it (ADR-019 M6).
+"""
+
+DAEMON_CONFIG = """\
+from xaytune.compilation.native import NativeCompiler
+from xaytune.daemon import DaemonConfig
+from xaytune.decision import ThresholdDecisionEngine
+from xaytune.planning import PLANNERS
+from xaytune.policy import DenyAllPolicy
+
+
+def create_config():
+    return DaemonConfig(
+        compilers={"native": NativeCompiler},
+        runtimes={},
+        evaluators={},
+        planners=PLANNERS,
+        decision_engine=ThresholdDecisionEngine(),
+        policy=DenyAllPolicy(),
+        checkpoint_manager=None,
+        recovery_request_for_incident=None,
+    )
+"""
+"""A complete daemon configuration, from the installed package only."""
 
 
 class SmokeError(AssertionError):
@@ -140,7 +176,103 @@ def migrate_a_new_store(directory: Path) -> None:
         "checkpoint_receipts",
     ):
         _check(table in tables, f"the migrated store has no {table} table")
+    _check(
+        versions[-1] == LAST_MIGRATION,
+        f"the wheel's migrations end at {versions[-1]:03d}, this release ships through "
+        f"{LAST_MIGRATION:03d}",
+    )
     _step(f"new store migrated through {len(versions)} migrations: {', '.join(shipped)}")
+
+
+def _a_store_a_newer_build_migrated(path: Path) -> None:
+    from xaytune.storage import connect, migrate
+
+    connection = connect(path)
+    try:
+        migrate(connection)
+        with connection:
+            connection.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) "
+                "VALUES (999, 'from_a_newer_build', datetime('now'))"
+            )
+    finally:
+        connection.close()
+
+
+def _contents(path: Path) -> dict[str, bytes]:
+    """The database and the SQLite journals beside it, as bytes.
+
+    Not the daemon's ``.lock`` file: the daemon takes its single-instance
+    lock (an empty file, flock) before it opens the database at all.
+    """
+    names = (path.name, *(f"{path.name}{suffix}" for suffix in ("-wal", "-shm", "-journal")))
+    return {
+        name: (path.parent / name).read_bytes() for name in names if (path.parent / name).is_file()
+    }
+
+
+def the_downgrade_guard_refuses_a_newer_store(directory: Path) -> None:
+    """The guard this release exists to ship (ADR-019 M6): refuse, and touch nothing."""
+    import os
+    import subprocess
+
+    from xaytune.storage import SchemaTooNewError, connect, migrate
+
+    state = directory / "newer" / "state.db"
+    state.parent.mkdir()
+    _a_store_a_newer_build_migrated(state)
+    before = _contents(state)
+
+    connection = connect(state)
+    try:
+        try:
+            migrate(connection)
+        except SchemaTooNewError as refused:
+            _check(refused.unknown == (999,), f"the guard named {refused.unknown}, not (999,)")
+            _check(
+                refused.supported == LAST_MIGRATION,
+                f"the guard says this build supports {refused.supported}",
+            )
+        else:
+            raise SmokeError("migrate() accepted a store a newer build migrated")
+    finally:
+        connection.close()
+    _check(_contents(state) == before, "refusing a newer store modified it")
+    _step("the downgrade guard refuses a store a newer build migrated, and leaves it as it was")
+
+    config = directory / "newer" / "smoke_daemon_config.py"
+    config.write_text(DAEMON_CONFIG, encoding="utf-8")
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+    finished = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "xaytune.daemon",
+            "--state",
+            str(state),
+            "--config",
+            "smoke_daemon_config:create_config",
+        ],
+        cwd=config.parent,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    lines = finished.stderr.strip().splitlines()
+    _check(
+        finished.returncode == 6,
+        f"the daemon exited {finished.returncode} on a newer store, not 6: "
+        f"{lines[-1] if lines else 'no output'}",
+    )
+    _check(
+        bool(lines) and lines[-1].startswith("xaytune daemon: the state database records"),
+        "the daemon did not say why it refused the store",
+    )
+    _check("Traceback" not in finished.stderr, "the daemon refused with a traceback")
+    _check(_contents(state) == before, "the daemon modified a store it refused")
+    _step("python -m xaytune.daemon refuses it at startup with exit status 6")
 
 
 def open_and_close_a_host(directory: Path) -> None:
@@ -283,12 +415,36 @@ def run_the_examples() -> None:
         sys.path.remove(str(examples))
 
 
+_ASSET = re.compile(r'(?:src|href)="/(assets/[^"]+)"')
+
+
+def the_studio_client_is_installed() -> None:
+    """The built client is package data (ADR-023 S11): ``xaytune studio`` serves it as is.
+
+    Read as files, not through ``xaytune.api.web``: the web server is an
+    extra, and the bundle must be in the wheel whether or not it is
+    installed.
+    """
+    import xaytune
+
+    bundle = Path(xaytune.__file__).resolve().parent / "api" / "static"
+    index = bundle / "index.html"
+    _check(index.is_file(), f"the wheel has no Studio web client: {index} is missing")
+    assets = _ASSET.findall(index.read_text(encoding="utf-8"))
+    _check(bool(assets), "the Studio's index.html loads no bundled assets")
+    missing = [asset for asset in assets if not (bundle / asset).is_file()]
+    _check(not missing, f"the Studio's index.html loads assets the wheel lacks: {missing}")
+    _step(f"the Studio web client is installed ({len(assets)} assets)")
+
+
 def main() -> int:
     try:
         import_the_installed_package()
+        the_studio_client_is_installed()
         with tempfile.TemporaryDirectory(prefix="xaytune-smoke-") as tmp:
             directory = Path(tmp).resolve()
             migrate_a_new_store(directory)
+            the_downgrade_guard_refuses_a_newer_store(directory)
             open_and_close_a_host(directory)
             compile_a_candidate(directory)
         run_the_examples()

@@ -5,11 +5,11 @@
         --dataset /abs/path/to/train.jsonl \\
         --compiler native            # or: trl
 
-Install the control plane (``pip install "xaytune==1.0.0a1"``, or from a
+Install the control plane (``pip install "xaytune==1.0.0a2"``, or from a
 clone with ``uv sync --locked``). For ``--compiler trl``, include the TRL
 extra::
 
-    pip install "xaytune[trl]==1.0.0a1"   # or, from a clone: uv sync --locked --extra trl
+    pip install "xaytune[trl]==1.0.0a2"   # or, from a clone: uv sync --locked --extra trl
 
 The dataset is local JSONL with a ``text`` field per line, the one format both
 built-in trainers read with the same meaning. The model is a local Hugging

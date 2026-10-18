@@ -90,7 +90,7 @@ def test_the_current_version_releases_under_its_own_tag() -> None:
 
 @pytest.mark.parametrize(
     "tag",
-    ["v0.1.0", "v0.6.0", "1.0.0a1", "v1.0", "v1.0.0-alpha.1", "v1.0.0a2", "release-1.0.0a1", ""],
+    ["v0.1.0", "v1.0.0a1", "1.0.0a2", "v1.0", "v1.0.0-alpha.2", "v1.0.0a3", "release-1.0.0a2", ""],
     ids=["old-tag", "previous", "no-v", "short", "unnormalized", "future", "prefix", "empty"],
 )
 def test_any_other_tag_is_refused(tag: str) -> None:

@@ -6,7 +6,7 @@
         --held-out /abs/path/to/held-out.jsonl \\
         --target 2.5            # the held-out loss that counts as good enough
 
-Install the control plane first: ``pip install "xaytune==1.0.0a1"``, or from
+Install the control plane first: ``pip install "xaytune==1.0.0a2"``, or from
 a clone with ``uv sync --locked``.
 
 After training succeeds, the host evaluates the trained model with the

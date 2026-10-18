@@ -28,6 +28,22 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: python scripts/check_release_version.py "$TAG"
 
+      # The Studio web client ships inside the wheel (ADR-023 S11) and is not
+      # tracked: xaytune/api/static/ exists only once it is built. Built here,
+      # exactly as the CI wheel job builds it, or the upload would carry a
+      # Studio that answers "web client not built" -- and an upload cannot be
+      # replaced.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the Studio web client
+        run: |
+          npm ci --prefix web
+          npm run --prefix web build
+
       # The wheel is built from the sdist, and the sdist must be the package
       # and nothing else from the working tree.
       - name: Build sdist and wheel
@@ -35,6 +51,9 @@ jobs:
 
       - name: Check the sdist holds the package and nothing else
         run: python scripts/check_sdist.py dist/*.tar.gz
+
+      - name: Check the wheel carries the Studio web client
+        run: unzip -l dist/*.whl | grep -q "xaytune/api/static/index.html"
 
       # The README is PyPI's long description: metadata or markup PyPI would
       # reject or render wrongly stops the release here.
@@ -48,6 +67,13 @@ jobs:
           uv venv --python 3.10 "$RUNNER_TEMP/smoke"
           uv pip install --python "$RUNNER_TEMP/smoke/bin/python" --torch-backend cpu dist/*.whl
           cd "$RUNNER_TEMP" && "$RUNNER_TEMP/smoke/bin/python" -I "$GITHUB_WORKSPACE/scripts/wheel_smoke.py"
+
+      # Printed, not added to dist/: everything in dist/ is uploaded to the
+      # index. Compare with the CI wheel job's SHA256SUMS for the same commit.
+      - name: Record checksums
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.whl) | tee "$RUNNER_TEMP/SHA256SUMS"
+          { echo '```'; cat "$RUNNER_TEMP/SHA256SUMS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload distribution artifacts
         uses: actions/upload-artifact@v4

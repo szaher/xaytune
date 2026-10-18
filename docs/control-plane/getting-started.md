@@ -13,8 +13,8 @@ adopted by a second process, evaluated, and decided. Every step has a runnable s
 ## Install
 
 ```bash
-pip install "xaytune==1.0.0a1"           # or, unpinned: pip install --upgrade --pre xaytune
-pip install "xaytune[trl]==1.0.0a1"      # the TRL trainer as well
+pip install "xaytune==1.0.0a2"           # or, unpinned: pip install --upgrade --pre xaytune
+pip install "xaytune[trl]==1.0.0a2"      # the TRL trainer as well
 ```
 
 A plain `pip install xaytune` skips pre-releases and installs `0.6.0`, which

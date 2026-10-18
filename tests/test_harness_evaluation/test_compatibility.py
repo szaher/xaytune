@@ -13,7 +13,7 @@ import pytest
 
 from tests.test_harness.fixtures import compile_spec
 from tests.test_harness.test_compiler import PINNED_EXECUTION_V1
-from tests.test_trajectory.test_compatibility import PINNED_H03_REQUEST
+from tests.test_trajectory.test_compatibility import PINNED_H03_REQUEST, pinned_release
 from xaytune.core.agent_execution import agent_execution_fingerprint, agent_run_request_digest
 from xaytune.core.domain.decision import DecisionContext
 from xaytune.core.domain.evaluation import (
@@ -85,7 +85,8 @@ def test_the_evaluation_and_decision_records_are_unchanged() -> None:
     assert set(DecisionContext.model_fields) >= {"objective", "results"}
 
 
-def test_an_unbound_spec_keeps_its_h03_request_digest() -> None:
+def test_an_unbound_spec_keeps_its_h03_request_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    pinned_release(monkeypatch)
     spec = compile_spec("/runs/r1")
     assert agent_execution_fingerprint(spec) == PINNED_EXECUTION_V1
     assert agent_run_request_digest(spec) == PINNED_H03_REQUEST

@@ -12,9 +12,9 @@ answer: **what should this training experiment do next?**
 Runtime integrations execute it. Infrastructure schedules and runs the workloads.
 
 !!! info "Alpha"
-    `1.0.0a1` is the first release of the control plane: declare an experiment,
-    train, evaluate, and make a durable, deterministic decision. It is a
-    pre-release: install it with `pip install "xaytune==1.0.0a1"` (a plain
+    `1.0.0a2` is the second pre-release of the control plane: declare an
+    experiment, and it trains, evaluates, decides, plans and branches to the
+    next candidate on its own, on a durable record. It is a pre-release: install it with `pip install "xaytune==1.0.0a2"` (a plain
     `pip install xaytune` still installs `0.6.0`), and expect the API to change
     before `1.0.0`. The [legacy trainer API](getting-started.md) is still
     included.
@@ -48,7 +48,7 @@ topology, not GPU count**.
 
 ## Available today
 
-Status as of **2026-09-25**, after PR-015:
+Status as of **1.0.0a2**:
 
 - **A durable record**: SQLite persistence, versioned migrations, atomic
   state + event + outbox transactions, a `RuntimeOperation` journal that
@@ -73,16 +73,33 @@ Status as of **2026-09-25**, after PR-015:
   the decision is written with the transitions it causes, in one commit. A
   candidate that cannot be decided (no target, a missing metric) stays
   `DECIDING`, with the reason recorded.
+- **The adaptive loop**: a missed target can branch; a `RuleBasedPlanner`
+  proposes the next candidate, branching records it, and the controller
+  trains it, from one submission and after any restart.
+- **Budgets, policy and approval**: run, failure, parallelism and wall-time
+  limits on an append-only ledger; typed actions judged by a `PolicyEngine`,
+  with human approval.
+- **Incidents, checkpoints and recovery**: durable incidents, exact
+  checkpoints, governed CUDA OOM and numerical recovery.
+- **A local daemon and CLI** with a durable controller lease.
+- **Ray, KubeRay, Ray Tune and TorchFT** behind the runtime, search and
+  resilience boundaries (TorchFT as a checked request, not yet hosted).
+- **An audited LLM planner** whose action proposals are escalated, not
+  carried out.
+- **Studio**: a read-only HTTP API and a React client, with loss charts.
+- **Agent harness building blocks**, local and in-process only.
+- **Upgrade safety**: a build refuses a database a newer Xaytune migrated.
 
 ## Planned
 
-Policy, budgets on GPU-hours, tokens and cost, checkpoints and semantic recovery, a rule-based planner
-and branching (with decisions that compare candidates), daemon hosting, an LLM
-planner, and Ray / TorchFT / Training Hub integrations. None of these exist yet.
+Durable harness execution, evaluation and search; budgets on GPU-hours,
+tokens and cost; decisions that compare candidates; hosting TorchFT; and
+Training Hub. None of these exist yet.
 
 ## Architecture
 
-Solid green boxes are implemented; dashed boxes are planned. The runtime
+The diagram shows the status after PR-015: solid green boxes were implemented
+then, dashed boxes planned; *Available today* above is current. The runtime
 feedback path is separate from the path that submits work.
 
 ![Xaytune target architecture: experiment control plane, trainer compilation, capability resolution, runtime backends, and infrastructure, with implementation status after PR-015.](assets/architecture-overview.svg)
@@ -110,7 +127,7 @@ the order the remaining work lands in.
 ## Legacy trainer API
 
 Xaytune began as an opinionated PyTorch training library. That library is what
-PyPI's `0.6.0` contains, and `1.0.0a1` still includes it: SFT with LoRA/QLoRA, DPO and
+PyPI's `0.6.0` contains, and `1.0.0a2` still includes it: SFT with LoRA/QLoRA, DPO and
 GRPO alignment, evaluation, export, multi-stage pipelines, YAML configuration,
 callbacks and logging integrations. Its trainer is what `NativeCompiler` runs,
 behind the compile/execute boundary.

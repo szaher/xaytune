@@ -19,10 +19,11 @@ Runtime integrations execute it. Infrastructure schedules and runs the workloads
 
 **[Documentation](https://szaher.github.io/xaytune/)** | **[Control-plane getting started](https://szaher.github.io/xaytune/control-plane/getting-started/)** | **[Examples](https://github.com/szaher/xaytune/tree/main/examples/control_plane/)** | **[Architecture specification](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/README.md)**
 
-> **Alpha.** `1.0.0a1` is the first release of the control plane: declare an
-> experiment, train, evaluate, and make a durable, deterministic decision. It
-> is a pre-release, so `pip install xaytune` still installs `0.6.0`; see
-> [Install](#install). Expect the control-plane API to change before `1.0.0`.
+> **Alpha.** `1.0.0a2` is the second pre-release of the control plane: declare
+> an experiment, and it trains, evaluates, decides, plans and branches to the
+> next candidate on its own, on a durable record. It is a pre-release, so
+> `pip install xaytune` still installs `0.6.0`; see [Install](#install).
+> Expect the control-plane API to change before `1.0.0`.
 > The trainer library from `0.6.0` is still included, as the
 > [Legacy trainer API](#legacy-trainer-api).
 
@@ -51,7 +52,7 @@ distributed tensor execution and for recovering individual workers.
 
 ## Available today
 
-Status as of **2026-09-25**, after PR-015.
+Status as of **1.0.0a2**.
 
 - **A durable record.** SQLite persistence with versioned migrations and
   optimistic concurrency. Every state change commits in one transaction with
@@ -93,6 +94,37 @@ Status as of **2026-09-25**, after PR-015.
   another. The decision is recorded, with the evidence and a fingerprint of
   its inputs, in the same commit that applies it. A candidate it cannot decide (no target, a missing metric) stays
   `DECIDING`, with the reason recorded; nothing is guessed.
+- **The adaptive loop.** A missed target can branch instead of failing
+  (`AdaptiveThresholdDecisionEngine`). A `RuleBasedPlanner` proposes the next
+  candidate from the record, branching records it as a child node with its
+  proposal's provenance, and the controller trains it, all from one
+  submission and after any restart.
+- **Budgets, policy and approval.** Run, failure, parallelism and wall-time
+  limits on an append-only ledger. Typed, versioned actions are validated and
+  judged by a `PolicyEngine`, with human approval when it asks for one.
+- **Incidents, checkpoints and recovery.** Failures are classified into
+  durable incidents. A CUDA OOM is recovered by a governed micro-batch resize
+  that resumes from an exact checkpoint, and a numerical blow-up by a governed
+  learning-rate intervention on the same run.
+- **A local daemon and CLI.** `python -m xaytune.daemon` runs a controller
+  with a durable lease; `xaytune submit`, `attach`, `status`, `watch`,
+  `events`, `results`, `actions`, `cancel`, `approve` and `reject` talk to it.
+- **Ray, KubeRay, Ray Tune and TorchFT.** `RayJobsRuntime` and
+  `RayTrainRuntime` run on an existing Ray cluster or as KubeRay `RayJob`s.
+  `RayTuneSearchProvider` proposes candidates. TorchFT is a checked resilience
+  request on a training plan, which no built-in runtime hosts yet.
+- **An LLM planner, audited.** `LLMPlanner` proposes typed actions through
+  the `AgentModel` boundary, and every model call is a durable record. Its
+  proposals are recorded and escalated, never carried out.
+- **Studio.** `xaytune studio-web` serves a read-only HTTP API over the
+  record and a React client: the candidate graph, runs with their loss
+  charts, decisions, actions, budget, incidents and comparisons.
+- **Agent harness building blocks, local only.** Harness candidates and their
+  identity, a compiler and deterministic runner, pinned benchmarks,
+  trajectory artifacts, harness evaluation and a local harness search. A
+  harness cannot yet be submitted to a controller.
+- **Upgrade safety.** A build refuses a state database that a newer Xaytune
+  migrated, before reading or writing it.
 - **A reproducible environment.** `uv.lock` pins every dependency, and a CI job
   tests the locked environment. The TRL worker refuses any TRL or Transformers
   release it has not been classified against.
@@ -118,15 +150,14 @@ run next, if any. See
 In the order the [implementation plan](https://github.com/szaher/xaytune/blob/main/xaytune-training-harness-spec/15-implementation-plan.md)
 builds them:
 
-1. **Carrying out governed actions**, and budgets on what nothing measures yet
-   (GPU-hours, tokens, cost).
-2. **Checkpoints, semantic recovery and interventions.**
-3. **A rule-based planner and experiment branching**, and with it decisions
-   that compare candidates -- promotion, and noise-aware comparison across
-   replicates -- which one candidate cannot support.
-4. **Daemon hosting** and whole-controller restart.
-5. **An LLM planner** proposing candidates under policy.
-6. **Ray, TorchFT and Training Hub** integrations.
+1. **Durable harness execution:** harness candidates as experiment nodes,
+   their attempts and runtime execution, through the same controller.
+2. **Durable harness evaluation and search:** H06 evaluations and H07
+   proposals on the record, branched like training candidates.
+3. **Budgets on what nothing measures yet** (GPU-hours, tokens, cost).
+4. **Decisions that compare candidates:** promotion, and noise-aware
+   comparison across replicates.
+5. **Hosting TorchFT** in Ray Train, and **Training Hub**.
 
 None of these exist yet, and nothing in this repository should be read as
 claiming they do.
@@ -134,8 +165,9 @@ claiming they do.
 ## Architecture
 
 The target architecture keeps scientific intent, compilation, capability
-resolution and execution separate. Solid green boxes are implemented; dashed
-boxes are planned. The runtime feedback path is separate from the path that
+resolution and execution separate. The diagram shows the status after PR-015:
+solid green boxes were implemented then, dashed boxes planned; [Available
+today](#available-today) is current. The runtime feedback path is separate from the path that
 submits work.
 
 ![Xaytune target architecture: experiment control plane, CandidateSpec, trainer compilers, TrainingExecutionSpec, capability resolution, ResolvedExecutionPlan, runtime backends, and infrastructure, with implementation status after PR-015.](https://szaher.github.io/xaytune/assets/architecture-overview.svg)
@@ -173,22 +205,23 @@ Evaluation (band D): [durable evaluation lifecycle (#33)](https://github.com/sza
 | A — domain foundation | Complete |
 | B — persistence and control records | Complete |
 | C — compile/execute, local runtime, runtime reconciliation | Complete |
-| D — durable evaluation and decisioning | Complete: lifecycle, native evaluator, threshold decisions; lm-eval evaluator on `main` |
-| E — policy and budget over the Action substrate | Complete on `main`: budget ledger, typed actions, policy and approval; carrying actions out is band F |
-| F — checkpoints, semantic recovery, interventions | Planned |
-| G — rule-based planner and experiment branching | Planned |
-| H — daemon hosting and whole-controller restart | Planned |
-| I — LLM planner | Planned |
-| J — Ray / TorchFT / Training Hub integrations | Planned |
+| D — durable evaluation and decisioning | Complete: lifecycle, native and lm-eval evaluators, threshold and adaptive decisions |
+| E — policy and budget over the Action substrate | Complete: budget ledger, typed actions, policy and approval |
+| F — checkpoints, semantic recovery, interventions | Complete: incidents, checkpoints, CUDA OOM and numerical recovery |
+| G — rule-based planner and experiment branching | Complete: the adaptive loop |
+| H — daemon hosting and whole-controller restart | Complete: local daemon, durable lease, CLI |
+| I — LLM planner | Complete for proposals and audit; its actions are escalated, not carried out |
+| J — Ray / TorchFT / Training Hub integrations | Ray, KubeRay and Ray Tune complete; TorchFT as a request only; Training Hub planned |
+| Harness track (H02–H07) | Local building blocks complete; durable execution in progress (ADR-019 M1–M6) |
 
 ## Install
 
 ```bash
-pip install "xaytune==1.0.0a1"          # the control plane, and the legacy trainer API
-pip install "xaytune[trl]==1.0.0a1"     # adds the TRL trainer
+pip install "xaytune==1.0.0a2"          # the control plane, and the legacy trainer API
+pip install "xaytune[trl]==1.0.0a2"     # adds the TRL trainer
 ```
 
-`1.0.0a1` is a pre-release, so pip installs it only when asked: by version, as
+`1.0.0a2` is a pre-release, so pip installs it only when asked: by version, as
 above, or unpinned with `pip install --upgrade --pre xaytune` (`--upgrade`
 matters where `0.6.0` is already installed, which pip would otherwise keep). A
 plain `pip install xaytune` still installs **0.6.0, the legacy trainer API**
@@ -209,7 +242,7 @@ imports without them, and training runs in separate worker processes that do.
 
 Xaytune began as an opinionated PyTorch training library, and that library is
 still here: `finetune`, `pretrain`, `align`, `evaluate`, the `xaytune` CLI, and
-multi-stage pipelines. It is what PyPI's `0.6.0` contains, and `1.0.0a1` still
+multi-stage pipelines. It is what PyPI's `0.6.0` contains, and `1.0.0a2` still
 includes it. It stays available
 through the transition, and its trainer is what `NativeCompiler` runs, behind
 the new compile/execute boundary.
@@ -247,7 +280,7 @@ the control plane.
 
 ### Legacy quickstart
 
-`pip install xaytune` installs it (`0.6.0`), as does `1.0.0a1`; optional extras include
+`pip install xaytune` installs it (`0.6.0`), as does `1.0.0a2`; optional extras include
 `[wandb]`, `[mlflow]`, `[tensorboard]`, `[deepspeed]`, `[eval]` (lm-eval-harness),
 `[studio]` and `[all]`. The notebooks in [`examples/`](https://github.com/szaher/xaytune/tree/main/examples/) use this API.
 

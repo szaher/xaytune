@@ -61,12 +61,12 @@ HEAVY = (
 )
 """Training stacks the control plane must not import as a side effect (ADR-010)."""
 
-LAST_MIGRATION = 20
-"""The last migration this release ships: 1.0.0a2 is migrations 001-020.
+LAST_MIGRATION = 21
+"""The last migration this build ships: 021, the candidate kind (ADR-018 D10).
 
-Named here, not read from the tree, so a migration cannot reach a release
-build unnoticed: the change that adds one (021, ADR-018 D10) updates this
-line, after the guard-bearing release that must precede it (ADR-019 M6).
+1.0.0a2, the guard-bearing release, ends at 020; 021 comes after it, as
+ADR-019 M6 requires. Named here, not read from the tree, so a migration cannot
+reach a release build unnoticed: the change that adds one updates this line.
 """
 
 DAEMON_CONFIG = """\

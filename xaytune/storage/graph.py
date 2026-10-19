@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from xaytune.core.domain.experiment import ExperimentNode
 from xaytune.core.errors import DomainError
-from xaytune.storage.payloads import decode_node_payload
+from xaytune.storage.payloads import decode_node_row
 
 __all__ = ["CandidateComparison", "ExperimentGraph", "LineageError"]
 
@@ -96,7 +96,8 @@ class ExperimentGraph:
     def parents(self, node_id: str) -> tuple[ExperimentNode, ...]:
         """Return the node's immediate predecessors, in creation order."""
         return self._nodes(
-            "SELECT n.payload_json FROM experiment_nodes n "
+            "SELECT n.payload_json, n.candidate_kind, n.candidate_fingerprint "
+            "FROM experiment_nodes n "
             "JOIN experiment_edges e ON e.parent_id = n.id "
             "WHERE e.child_id = ? ORDER BY n.created_at, n.id",
             (node_id,),
@@ -105,7 +106,8 @@ class ExperimentGraph:
     def children(self, node_id: str) -> tuple[ExperimentNode, ...]:
         """Return the node's immediate successors, in creation order."""
         return self._nodes(
-            "SELECT n.payload_json FROM experiment_nodes n "
+            "SELECT n.payload_json, n.candidate_kind, n.candidate_fingerprint "
+            "FROM experiment_nodes n "
             "JOIN experiment_edges e ON e.child_id = n.id "
             "WHERE e.parent_id = ? ORDER BY n.created_at, n.id",
             (node_id,),
@@ -118,7 +120,8 @@ class ExperimentGraph:
         independent hypotheses rather than a single seed.
         """
         return self._nodes(
-            "SELECT n.payload_json FROM experiment_nodes n "
+            "SELECT n.payload_json, n.candidate_kind, n.candidate_fingerprint "
+            "FROM experiment_nodes n "
             "WHERE n.experiment_id = ? "
             "AND NOT EXISTS (SELECT 1 FROM experiment_edges e WHERE e.child_id = n.id) "
             "ORDER BY n.created_at, n.id",
@@ -128,7 +131,8 @@ class ExperimentGraph:
     def leaves(self, experiment_id: str) -> tuple[ExperimentNode, ...]:
         """Return the experiment's nodes with no successor — its frontier."""
         return self._nodes(
-            "SELECT n.payload_json FROM experiment_nodes n "
+            "SELECT n.payload_json, n.candidate_kind, n.candidate_fingerprint "
+            "FROM experiment_nodes n "
             "WHERE n.experiment_id = ? "
             "AND NOT EXISTS (SELECT 1 FROM experiment_edges e WHERE e.parent_id = n.id) "
             "ORDER BY n.created_at, n.id",
@@ -360,14 +364,15 @@ class ExperimentGraph:
                 SELECT e.{far}, walk.depth + 1
                 FROM experiment_edges e JOIN walk ON e.{near} = walk.id
             )
-            SELECT n.payload_json, MIN(walk.depth) AS depth
+            SELECT n.payload_json, n.candidate_kind, n.candidate_fingerprint,
+                MIN(walk.depth) AS depth
             FROM walk JOIN experiment_nodes n ON n.id = walk.id
             GROUP BY n.id
             ORDER BY depth, n.created_at, n.id
             """,  # noqa: S608 - both interpolations come from the literal pair above
             (node_id,),
         ).fetchall()
-        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)
+        return tuple(decode_node_row(row) for row in rows)
 
     def _closure(
         self, node_id: str
@@ -392,14 +397,12 @@ class ExperimentGraph:
             ")"
         )
         node_rows = self._connection.execute(
-            f"{walk} SELECT n.payload_json FROM experiment_nodes n "
+            f"{walk} SELECT n.payload_json, n.candidate_kind, n.candidate_fingerprint "
+            f"FROM experiment_nodes n "
             f"WHERE n.id IN (SELECT id FROM closure)",
             (node_id,),
         ).fetchall()
-        nodes = {
-            str(n.id): n
-            for n in (decode_node_payload(row["payload_json"], ExperimentNode) for row in node_rows)
-        }
+        nodes = {str(n.id): n for n in (decode_node_row(row) for row in node_rows)}
 
         edge_rows = self._connection.execute(
             f"{walk} SELECT e.parent_id, e.child_id FROM experiment_edges e "
@@ -426,10 +429,12 @@ class ExperimentGraph:
 
     def _node(self, node_id: str) -> ExperimentNode | None:
         row = self._connection.execute(
-            "SELECT payload_json FROM experiment_nodes WHERE id = ?", (node_id,)
+            "SELECT payload_json, candidate_kind, candidate_fingerprint FROM experiment_nodes "
+            "WHERE id = ?",
+            (node_id,),
         ).fetchone()
-        return None if row is None else decode_node_payload(row["payload_json"], ExperimentNode)
+        return None if row is None else decode_node_row(row)
 
     def _nodes(self, sql: str, params: tuple[str, ...]) -> tuple[ExperimentNode, ...]:
         rows = self._connection.execute(sql, params).fetchall()
-        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)
+        return tuple(decode_node_row(row) for row in rows)

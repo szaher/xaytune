@@ -51,7 +51,7 @@ from xaytune.core.errors import ConcurrentModificationError
 from xaytune.core.immutable import AggregateModel
 from xaytune.core.telemetry import EvaluationCompletedPayload
 from xaytune.storage.errors import AggregateNotFoundError
-from xaytune.storage.payloads import decode_node_payload, decode_payload
+from xaytune.storage.payloads import NODE_COLUMNS, decode_node_row, decode_payload
 
 __all__ = ["AggregateStore"]
 
@@ -81,8 +81,16 @@ class AggregateStore:
         return self._get("experiments", experiment_id, Experiment)
 
     def get_node(self, node_id: str) -> ExperimentNode | None:
-        """Return the node, or ``None`` if it does not exist."""
-        return self._get("experiment_nodes", node_id, ExperimentNode)
+        """Return the node, or ``None`` if it does not exist.
+
+        Raises:
+            NodeRecordMismatchError: If its columns and payload disagree.
+        """
+        row = self._connection.execute(
+            f"SELECT {NODE_COLUMNS} FROM experiment_nodes WHERE id = ?",  # noqa: S608 - literal
+            (node_id,),
+        ).fetchone()
+        return None if row is None else decode_node_row(row)
 
     def get_run(self, run_id: str) -> Run | None:
         """Return the run, or ``None`` if it does not exist."""
@@ -292,11 +300,11 @@ class AggregateStore:
     def nodes_for_experiment(self, experiment_id: str) -> tuple[ExperimentNode, ...]:
         """Return the experiment's nodes in creation order."""
         rows = self._connection.execute(
-            "SELECT payload_json FROM experiment_nodes "
+            f"SELECT {NODE_COLUMNS} FROM experiment_nodes "  # noqa: S608 - literal
             "WHERE experiment_id = ? ORDER BY created_at, id",
             (experiment_id,),
         ).fetchall()
-        return tuple(decode_node_payload(row["payload_json"], ExperimentNode) for row in rows)
+        return tuple(decode_node_row(row) for row in rows)
 
     def runs_for_node(self, node_id: str) -> tuple[Run, ...]:
         """Return the node's runs in creation order."""
@@ -345,6 +353,7 @@ class AggregateStore:
                 "experiment_id": str(node.experiment_id),
                 "status": node.status.value,
                 "candidate_fingerprint": node.candidate_fingerprint,
+                "candidate_kind": node.candidate_kind.value,
             },
         )
         for parent_id in node.parent_ids:

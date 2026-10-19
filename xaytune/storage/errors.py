@@ -14,6 +14,7 @@ __all__ = [
     "AggregateNotFoundError",
     "IncompatiblePayloadError",
     "MigrationError",
+    "NodeRecordMismatchError",
     "SchemaTooNewError",
     "StorageError",
 ]
@@ -43,6 +44,21 @@ class SchemaTooNewError(MigrationError):
             f"which this build of Xaytune does not ship (it knows up to {supported}): a newer "
             "Xaytune migrated it. Upgrade Xaytune, or restore a backup taken before the upgrade"
         )
+
+
+class NodeRecordMismatchError(StorageError):
+    """A node's indexed columns disagree with its payload: the record is not trustworthy.
+
+    ``candidate_kind`` and ``candidate_fingerprint`` are what training-only
+    work and lookups trust without parsing every payload (migration 021). A
+    row whose payload says otherwise was written around the repository, so
+    it is refused on read rather than believed either way.
+    """
+
+    def __init__(self, node_id: str, problems: list[str]) -> None:
+        self.node_id = node_id
+        self.problems = tuple(problems)
+        super().__init__(f"node {node_id}'s record is inconsistent: " + "; ".join(self.problems))
 
 
 class AggregateNotFoundError(StorageError):
